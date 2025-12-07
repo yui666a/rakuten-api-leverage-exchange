@@ -1,0 +1,39 @@
+{
+    "mcpServers": {
+        "_comment_essential": "======== 必須サーバー（このプロジェクトに重要） ========",
+        "github": {
+            "type": "http",
+            "url": "https://api.githubcopilot.com/mcp/"
+        },
+        "_comment_development": "======== 開発・テスト用サーバー（必要に応じて有効化） ========",
+        "playwright": {
+            "command": "npx",
+            "args": [
+                "@playwright/mcp@latest"
+            ]
+        },
+        "chrome-devtools": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "chrome-devtools-mcp@latest"
+            ]
+        },
+        "_comment_optional": "======== オプション（リソース消費が大きい可能性あり） ========",
+        "serena": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "--from",
+                "git+https://github.com/oraios/serena",
+                "serena",
+                "start-mcp-server",
+                "--context",
+                "ide-assistant",
+                "--project",
+                "/Users/h.aiso/Project/private/rakuten-api-leverage-exchange"
+            ],
+            "env": {}
+        }
+    }
+}
