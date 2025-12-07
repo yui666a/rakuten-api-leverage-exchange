@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/h.aiso/rakuten-api-leverage-exchange/backend/internal/domain"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain"
 )
 
 // UserRepositoryImpl implements domain.UserRepository

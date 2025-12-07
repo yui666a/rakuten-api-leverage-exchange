@@ -1,4 +1,4 @@
-module github.com/h.aiso/rakuten-api-leverage-exchange/backend
+module github.com/yui666a/rakuten-api-leverage-exchange/backend
 
 go 1.21
 

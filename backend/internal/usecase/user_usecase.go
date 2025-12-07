@@ -3,7 +3,7 @@ package usecase
 import (
 	"context"
 
-	"github.com/h.aiso/rakuten-api-leverage-exchange/backend/internal/domain"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain"
 )
 
 // UserUsecase handles business logic for users
