@@ -47,28 +47,8 @@ func (c *RakutenClient) GetMarket(ctx context.Context, symbol string) (*domain.M
 
 // GetAllMarkets implements MarketRepository interface
 func (c *RakutenClient) GetAllMarkets(ctx context.Context) ([]domain.Market, error) {
-	url := fmt.Sprintf("%s/markets", c.baseURL)
-	
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %s - %s", resp.Status, string(body))
-	}
-
 	// Mock response for demonstration
+	// In production, this would make actual API calls to Rakuten
 	markets := []domain.Market{
 		{
 			Symbol:    "BTC/JPY",
