@@ -110,7 +110,6 @@ func (rm *RiskManager) UpdateBalance(balance float64) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.balance = balance
-	rm.config.MaxPositionAmount = balance
 }
 
 func (rm *RiskManager) UpdateConfig(config entity.RiskConfig) {

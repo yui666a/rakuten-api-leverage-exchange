@@ -101,13 +101,23 @@ func TestRiskManager_RejectInsufficientBalance(t *testing.T) {
 }
 
 func TestRiskManager_UpdateBalance(t *testing.T) {
-	rm := NewRiskManager(defaultRiskConfig())
-	rm.UpdateBalance(20000)
+	cfg := defaultRiskConfig()
+	cfg.InitialCapital = 100 // 初期残高100円
+	rm := NewRiskManager(cfg)
+
+	// 残高不足で拒否されることを確認
 	proposal := entity.OrderProposal{
 		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
-		Amount: 0.001, Price: 15000000,
+		Amount: 0.001, Price: 4000000, // 4000円 > 100円
 	}
 	result := rm.CheckOrder(context.Background(), proposal)
+	if result.Approved {
+		t.Fatal("order should be rejected with insufficient initial balance")
+	}
+
+	// 残高を更新して承認されることを確認
+	rm.UpdateBalance(20000)
+	result = rm.CheckOrder(context.Background(), proposal)
 	if !result.Approved {
 		t.Fatalf("order should be approved with updated balance: %s", result.Reason)
 	}
