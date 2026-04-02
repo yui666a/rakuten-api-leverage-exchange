@@ -356,3 +356,18 @@ backend/
         └── mcp/
             └── server.go             #   MCPサーバー
 ```
+
+---
+
+## 実装進捗
+
+| Plan | 内容 | PR | 状態 | 主なファイル |
+|------|------|----|------|------------|
+| Plan 1 | 楽天APIクライアント (REST + WebSocket + 認証) | #5 | merged | `infrastructure/rakuten/` |
+| Plan 2 | Market Data Service + SQLite永続化 | #6 | merged | `infrastructure/database/`, `usecase/market_data.go` |
+| Plan 3 | テクニカル指標計算 (SMA, EMA, RSI, MACD) | #7 | merged | `infrastructure/indicator/`, `usecase/indicator.go` |
+| Plan 4 | リスク管理 (Risk Manager) | #8 | merged | `usecase/risk.go`, `entity/risk.go` |
+| Plan 5 | Strategy Engine + LLM連携 | - | 未着手 | `usecase/strategy.go`, `infrastructure/llm/` |
+| Plan 6 | Order Executor | - | 未着手 | `usecase/order.go` |
+| Plan 7 | REST API + MCP Server | - | 未着手 | `interfaces/api/`, `interfaces/mcp/` |
+| Plan 8 | Trading Engine 統合 | - | 未着手 | `cmd/main.go` |
