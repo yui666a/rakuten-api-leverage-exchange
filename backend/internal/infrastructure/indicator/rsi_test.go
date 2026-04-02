@@ -43,6 +43,17 @@ func TestRSI_Range(t *testing.T) {
 	}
 }
 
+func TestRSI_FlatPrices(t *testing.T) {
+	prices := make([]float64, 15)
+	for i := range prices {
+		prices[i] = 10
+	}
+	result := RSI(prices, 14)
+	if result != 50 {
+		t.Fatalf("expected RSI=50 for flat prices, got %f", result)
+	}
+}
+
 func TestRSI_MidRange(t *testing.T) {
 	prices := []float64{10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10}
 	result := RSI(prices, 14)
