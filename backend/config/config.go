@@ -2,46 +2,32 @@ package config
 
 import "os"
 
-// Config holds application configuration
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	External ExternalAPIConfig
+	Server  ServerConfig
+	Rakuten RakutenConfig
 }
 
 type ServerConfig struct {
 	Port string
 }
 
-type DatabaseConfig struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	DBName   string
+type RakutenConfig struct {
+	BaseURL   string
+	WSURL     string
+	APIKey    string
+	APISecret string
 }
 
-type ExternalAPIConfig struct {
-	BaseURL string
-	APIKey  string
-}
-
-// Load loads configuration from environment variables
 func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
 		},
-		Database: DatabaseConfig{
-			Host:     getEnv("DB_HOST", "localhost"),
-			Port:     getEnv("DB_PORT", "5432"),
-			User:     getEnv("DB_USER", "postgres"),
-			Password: getEnv("DB_PASSWORD", ""),
-			DBName:   getEnv("DB_NAME", "mydb"),
-		},
-		External: ExternalAPIConfig{
-			BaseURL: getEnv("EXTERNAL_API_URL", ""),
-			APIKey:  getEnv("EXTERNAL_API_KEY", ""),
+		Rakuten: RakutenConfig{
+			BaseURL:   getEnv("RAKUTEN_API_BASE_URL", "https://exchange.rakuten-wallet.co.jp"),
+			WSURL:     getEnv("RAKUTEN_WS_URL", "wss://exchange.rakuten-wallet.co.jp/ws"),
+			APIKey:    getEnv("RAKUTEN_API_KEY", ""),
+			APISecret: getEnv("RAKUTEN_API_SECRET", ""),
 		},
 	}
 }

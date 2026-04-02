@@ -4,9 +4,12 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 )
 
 func main() {
+	cfg := config.Load()
+
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) {
@@ -15,8 +18,8 @@ func main() {
 		})
 	})
 
-	log.Println("Server starting on :8080")
-	if err := r.Run(":8080"); err != nil {
+	log.Printf("Server starting on :%s", cfg.Server.Port)
+	if err := r.Run(":" + cfg.Server.Port); err != nil {
 		log.Fatal("Failed to start server:", err)
 	}
 }
