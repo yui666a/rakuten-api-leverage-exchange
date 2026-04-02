@@ -40,7 +40,9 @@ func (c *RESTClient) DoPrivate(ctx context.Context, method, path, query string, 
 }
 
 func (c *RESTClient) do(ctx context.Context, method, path, query string, body []byte, authenticated bool) ([]byte, error) {
-	c.waitForRateLimit()
+	if err := c.waitForRateLimit(ctx); err != nil {
+		return nil, err
+	}
 
 	url := c.baseURL + path
 	if query != "" {
@@ -87,13 +89,19 @@ func (c *RESTClient) do(ctx context.Context, method, path, query string, body []
 }
 
 // waitForRateLimit enforces the Rakuten API 200ms interval limit.
-func (c *RESTClient) waitForRateLimit() {
+// Returns an error if the context is cancelled during the wait.
+func (c *RESTClient) waitForRateLimit(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	elapsed := time.Since(c.lastCall)
-	if elapsed < 200*time.Millisecond {
-		time.Sleep(200*time.Millisecond - elapsed)
+	if wait := 200*time.Millisecond - elapsed; wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	c.lastCall = time.Now()
+	return nil
 }

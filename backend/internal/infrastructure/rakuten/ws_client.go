@@ -41,6 +41,7 @@ func (c *WSClient) Connect(ctx context.Context) (<-chan []byte, error) {
 	}
 	c.conn = conn
 
+	// callerのコンテキストと内部キャンセルの両方で停止できるようにする
 	readCtx, cancel := context.WithCancel(context.Background())
 	c.cancel = cancel
 
@@ -48,6 +49,14 @@ func (c *WSClient) Connect(ctx context.Context) (<-chan []byte, error) {
 
 	go func() {
 		defer close(msgCh)
+		// callerのctxがキャンセルされたら読み取りループも停止
+		go func() {
+			select {
+			case <-ctx.Done():
+				cancel()
+			case <-readCtx.Done():
+			}
+		}()
 		for {
 			_, data, err := conn.Read(readCtx)
 			if err != nil {
