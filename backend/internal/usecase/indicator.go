@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"math"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
@@ -19,6 +20,7 @@ func NewIndicatorCalculator(repo repository.MarketDataRepository) *IndicatorCalc
 
 // Calculate computes all technical indicators for the given symbol and interval.
 // Retrieves candles from the repository and calculates SMA, EMA, RSI, MACD.
+// Indicators that cannot be calculated due to insufficient data are nil.
 func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, interval string) (*entity.IndicatorSet, error) {
 	// EMA/RSI/MACDはパス依存型指標のため、十分なウォームアップ期間が必要。
 	// EMA26は約3倍(78本)、MACD Signal(9)の追加で約90本のウォームアップ。
@@ -41,18 +43,26 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 
 	result := &entity.IndicatorSet{
 		SymbolID:  symbolID,
-		SMA20:     indicator.SMA(prices, 20),
-		SMA50:     indicator.SMA(prices, 50),
-		EMA12:     indicator.EMA(prices, 12),
-		EMA26:     indicator.EMA(prices, 26),
-		RSI14:     indicator.RSI(prices, 14),
+		SMA20:     toPtr(indicator.SMA(prices, 20)),
+		SMA50:     toPtr(indicator.SMA(prices, 50)),
+		EMA12:     toPtr(indicator.EMA(prices, 12)),
+		EMA26:     toPtr(indicator.EMA(prices, 26)),
+		RSI14:     toPtr(indicator.RSI(prices, 14)),
 		Timestamp: timestamp,
 	}
 
 	macdLine, signalLine, histogram := indicator.MACD(prices, 12, 26, 9)
-	result.MACDLine = macdLine
-	result.SignalLine = signalLine
-	result.Histogram = histogram
+	result.MACDLine = toPtr(macdLine)
+	result.SignalLine = toPtr(signalLine)
+	result.Histogram = toPtr(histogram)
 
 	return result, nil
+}
+
+// toPtr converts a float64 to *float64. Returns nil if the value is NaN.
+func toPtr(v float64) *float64 {
+	if math.IsNaN(v) {
+		return nil
+	}
+	return &v
 }
