@@ -20,8 +20,10 @@ func NewIndicatorCalculator(repo repository.MarketDataRepository) *IndicatorCalc
 // Calculate computes all technical indicators for the given symbol and interval.
 // Retrieves candles from the repository and calculates SMA, EMA, RSI, MACD.
 func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, interval string) (*entity.IndicatorSet, error) {
-	// Need 50 for SMA50, 35 for MACD signal. Fetch 100 for safety.
-	candles, err := c.repo.GetCandles(ctx, symbolID, interval, 100)
+	// EMA/RSI/MACDはパス依存型指標のため、十分なウォームアップ期間が必要。
+	// EMA26は約3倍(78本)、MACD Signal(9)の追加で約90本のウォームアップ。
+	// 500本取得すれば実用上十分な精度に収束する。
+	candles, err := c.repo.GetCandles(ctx, symbolID, interval, 500)
 	if err != nil {
 		return nil, err
 	}
