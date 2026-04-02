@@ -1,45 +1,52 @@
-# Rakuten API Leverage Exchange - Learning Project
+# Rakuten Wallet 証拠金取引所 API アプリケーション
 
-## Tech Stack
+楽天ウォレットの証拠金取引所APIを活用したアプリケーションです。  
+技術研鑽を目的として開発しています。
 
-### Backend
-- **Framework**: Gin (Golang)
-- **Architecture**: Clean Architecture
-- **Features**: 外部API連携対応
+## 技術スタック
 
-### Frontend
-- **Framework**: TanStack Start (TypeScript)
-- **Package Manager**: pnpm
+| レイヤー | 技術 |
+|---------|------|
+| Backend | Go (Gin) / Clean Architecture |
+| Frontend | TanStack Start (TypeScript, React) |
+| パッケージ管理 | Go Modules / pnpm |
 
-## Project Structure
+## プロジェクト構成
 
 ```
 .
-├── backend/                    # Backend (Golang)
-│   ├── cmd/                   # Application entry points
-│   │   └── main.go           # Main server
-│   ├── internal/             # Internal packages
-│   │   ├── domain/          # Domain layer (entities, repositories)
-│   │   ├── usecase/         # Use case layer (business logic)
-│   │   ├── infrastructure/  # Infrastructure layer (DB, external APIs)
-│   │   └── interfaces/      # Interface layer (HTTP handlers)
-│   ├── config/              # Configuration
-│   └── go.mod               # Go module definition
+├── backend/                              # バックエンド (Go)
+│   ├── cmd/main.go                      #   エントリポイント
+│   ├── config/                          #   設定 (環境変数)
+│   └── internal/
+│       ├── domain/                      #   ドメイン層 (エンティティ, リポジトリIF)
+│       ├── usecase/                     #   ユースケース層 (ビジネスロジック)
+│       ├── infrastructure/             #   インフラ層 (外部API, DB)
+│       └── interfaces/                 #   インターフェース層 (HTTPハンドラー)
 │
-└── frontend/                  # Frontend (TypeScript)
-    ├── app/                  # Application source
-    │   ├── routes/          # Route components
-    │   ├── router.tsx       # Router configuration
-    │   ├── client.tsx       # Client entry
-    │   └── ssr.tsx          # SSR entry
-    ├── package.json         # Dependencies
-    ├── tsconfig.json        # TypeScript config
-    └── app.config.ts        # TanStack Start config
+├── frontend/                             # フロントエンド (TypeScript)
+│   ├── app/
+│   │   ├── routes/                     #   ルートコンポーネント
+│   │   ├── router.tsx                  #   ルーター設定
+│   │   ├── client.tsx                  #   クライアントエントリ
+│   │   └── ssr.tsx                     #   SSRエントリ
+│   ├── app.config.ts                    #   TanStack Start 設定
+│   └── package.json
+│
+└── .agent/                               # MCP サーバー設定
+    ├── mcp.json
+    └── MCP_SETUP.md
 ```
 
-## Getting Started
+## セットアップ
 
-### Backend
+### 前提条件
+
+- Go 1.21+
+- Node.js 18+
+- pnpm
+
+### バックエンド
 
 ```bash
 cd backend
@@ -47,9 +54,9 @@ go mod download
 go run cmd/main.go
 ```
 
-The server will start on `http://localhost:8080`
+サーバーが `http://localhost:8080` で起動します。
 
-### Frontend
+### フロントエンド
 
 ```bash
 cd frontend
@@ -57,24 +64,16 @@ pnpm install
 pnpm dev
 ```
 
-The frontend will start on `http://localhost:3000`
+`http://localhost:3000` で起動します。
 
-## Clean Architecture Layers
+## 参考
 
-### Domain Layer (`internal/domain`)
-- エンティティ（ビジネスロジックの核心）
-- リポジトリインターフェース
+- [楽天ウォレット 証拠金取引所API ドキュメント](https://www.rakuten-wallet.co.jp/service/api-leverage-exchange/)
 
-### Use Case Layer (`internal/usecase`)
-- ビジネスロジックの実装
-- ドメイン層に依存
+## ドキュメント
 
-### Infrastructure Layer (`internal/infrastructure`)
-- リポジトリの実装
-- 外部APIクライアント
-- データベース接続
+- [Clean Architecture](docs/clean-architecture.md) - バックエンドのアーキテクチャ設計
 
-### Interface Layer (`internal/interfaces`)
-- HTTPハンドラー
-- リクエスト/レスポンスの処理
+## ライセンス
 
+MIT
