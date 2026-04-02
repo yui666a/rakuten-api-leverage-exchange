@@ -3,12 +3,17 @@ package config
 import "os"
 
 type Config struct {
-	Server  ServerConfig
-	Rakuten RakutenConfig
+	Server   ServerConfig
+	Rakuten  RakutenConfig
+	Database DatabaseConfig
 }
 
 type ServerConfig struct {
 	Port string
+}
+
+type DatabaseConfig struct {
+	Path string
 }
 
 type RakutenConfig struct {
@@ -22,6 +27,9 @@ func Load() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
+		},
+		Database: DatabaseConfig{
+			Path: getEnv("DATABASE_PATH", "data/trading.db"),
 		},
 		Rakuten: RakutenConfig{
 			BaseURL:   getEnv("RAKUTEN_API_BASE_URL", "https://exchange.rakuten-wallet.co.jp"),
