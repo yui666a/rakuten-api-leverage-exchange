@@ -44,5 +44,9 @@ pnpm-lock.yaml
 yarn.lock
 package-lock.json
 
+# Database
+data/
+*.db
+
 # Backend
 go.sum
