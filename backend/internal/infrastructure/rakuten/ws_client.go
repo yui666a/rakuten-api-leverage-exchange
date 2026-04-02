@@ -24,9 +24,10 @@ type wsMessage struct {
 }
 
 type WSClient struct {
-	url  string
-	conn *websocket.Conn
-	mu   sync.Mutex
+	url    string
+	conn   *websocket.Conn
+	cancel context.CancelFunc
+	mu     sync.Mutex
 }
 
 func NewWSClient(url string) *WSClient {
@@ -40,18 +41,21 @@ func (c *WSClient) Connect(ctx context.Context) (<-chan []byte, error) {
 	}
 	c.conn = conn
 
+	readCtx, cancel := context.WithCancel(context.Background())
+	c.cancel = cancel
+
 	msgCh := make(chan []byte, 100)
 
 	go func() {
 		defer close(msgCh)
 		for {
-			_, data, err := conn.Read(ctx)
+			_, data, err := conn.Read(readCtx)
 			if err != nil {
 				return
 			}
 			select {
 			case msgCh <- data:
-			case <-ctx.Done():
+			case <-readCtx.Done():
 				return
 			}
 		}
@@ -72,6 +76,9 @@ func (c *WSClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.cancel != nil {
+		c.cancel()
+	}
 	if c.conn == nil {
 		return nil
 	}
