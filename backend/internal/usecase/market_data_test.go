@@ -41,7 +41,12 @@ func (m *mockMarketDataRepo) GetCandles(_ context.Context, _ int64, _ string, li
 	if limit > len(m.candles) {
 		limit = len(m.candles)
 	}
-	return m.candles[:limit], nil
+	// リポジトリ契約通り新しい順で返す
+	result := make([]entity.Candle, limit)
+	for i := 0; i < limit; i++ {
+		result[i] = m.candles[len(m.candles)-1-i]
+	}
+	return result, nil
 }
 
 func (m *mockMarketDataRepo) SaveTicker(_ context.Context, t entity.Ticker) error {
