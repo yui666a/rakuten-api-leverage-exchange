@@ -1,8 +1,6 @@
 module github.com/yui666a/rakuten-api-leverage-exchange/backend
 
-go 1.23.0
-
-toolchain go1.24.0
+go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.10.0

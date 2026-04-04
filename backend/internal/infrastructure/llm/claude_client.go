@@ -63,11 +63,16 @@ func (c *ClaudeClient) AnalyzeMarket(ctx context.Context, marketCtx entity.Marke
 		return nil, fmt.Errorf("claude API error: %w", err)
 	}
 
-	if len(message.Content) == 0 {
-		return nil, fmt.Errorf("claude returned empty content")
+	// 全contentブロックからテキストを結合（thinking blockや複数text blockに対応）
+	var responseText string
+	for _, block := range message.Content {
+		if block.Type == "text" {
+			responseText += block.Text
+		}
 	}
-
-	responseText := message.Content[0].Text
+	if responseText == "" {
+		return nil, fmt.Errorf("claude returned no text content")
+	}
 
 	var parsed struct {
 		Stance    string `json:"stance"`
