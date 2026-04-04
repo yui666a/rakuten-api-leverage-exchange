@@ -183,3 +183,57 @@ func TestLLMService_GetAdvice_UseStaleCacheOnError(t *testing.T) {
 		t.Fatalf("expected stale cache TREND_FOLLOW, got %s", advice.Stance)
 	}
 }
+
+func TestLLMService_GetAdvice_StaleCacheBackoffOnError(t *testing.T) {
+	mock := &mockLLMClient{
+		response: &entity.StrategyAdvice{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	// TTL 15分でキャッシュ
+	svc := NewLLMService(mock, 15*time.Minute)
+
+	marketCtx := entity.MarketContext{SymbolID: 7, LastPrice: 5000000}
+	_, err := svc.GetAdvice(context.Background(), marketCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.callCount != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", mock.callCount)
+	}
+
+	// キャッシュを強制期限切れにする
+	svc.mu.Lock()
+	svc.cache[7].cachedAt = time.Now().Add(-20 * time.Minute)
+	svc.mu.Unlock()
+
+	// LLMがエラーを返すようにする
+	mock.err = context.DeadlineExceeded
+	mock.response = nil
+
+	// 1回目のエラー: staleキャッシュを返し、cachedAtを更新
+	advice, err := svc.GetAdvice(context.Background(), marketCtx)
+	if err != nil {
+		t.Fatalf("should not return error: %v", err)
+	}
+	if advice.Stance != entity.MarketStanceTrendFollow {
+		t.Fatalf("expected stale TREND_FOLLOW, got %s", advice.Stance)
+	}
+	if mock.callCount != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", mock.callCount)
+	}
+
+	// 2回目: cachedAtが更新されたのでTTL内 → LLMは呼ばれない
+	advice2, err := svc.GetAdvice(context.Background(), marketCtx)
+	if err != nil {
+		t.Fatalf("should not return error: %v", err)
+	}
+	if advice2.Stance != entity.MarketStanceTrendFollow {
+		t.Fatalf("expected cached TREND_FOLLOW, got %s", advice2.Stance)
+	}
+	if mock.callCount != 2 {
+		t.Fatalf("expected still 2 LLM calls (backoff), got %d", mock.callCount)
+	}
+}

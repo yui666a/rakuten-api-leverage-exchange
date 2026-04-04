@@ -58,6 +58,12 @@ func (s *LLMService) GetAdvice(ctx context.Context, marketCtx entity.MarketConte
 	if err != nil {
 		log.Printf("LLM error (symbol %d), using fallback: %v", symbolID, err)
 		if stale != nil {
+			// cachedAtを更新してTTLの間は再リクエストを抑制する
+			s.mu.Lock()
+			if e := s.cache[symbolID]; e != nil {
+				e.cachedAt = time.Now()
+			}
+			s.mu.Unlock()
 			return stale, nil
 		}
 		return &entity.StrategyAdvice{
