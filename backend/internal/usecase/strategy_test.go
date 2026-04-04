@@ -215,3 +215,27 @@ func TestStrategyEngine_InsufficientIndicators_Hold(t *testing.T) {
 		t.Fatalf("expected HOLD for insufficient indicators, got %s", signal.Action)
 	}
 }
+
+func TestStrategyEngine_InsufficientIndicators_SkipsLLMCall(t *testing.T) {
+	mock := &mockLLMClient{
+		response: &entity.StrategyAdvice{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	llmSvc := NewLLMService(mock, 15*time.Minute)
+	engine := NewStrategyEngine(llmSvc)
+
+	// 指標不足の場合、LLMは呼ばれないべき
+	indicators := entity.IndicatorSet{
+		SymbolID: 7,
+	}
+	_, err := engine.Evaluate(context.Background(), indicators, 5000000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mock.callCount != 0 {
+		t.Fatalf("expected 0 LLM calls for insufficient indicators, got %d", mock.callCount)
+	}
+}

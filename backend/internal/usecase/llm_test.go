@@ -10,11 +10,13 @@ import (
 
 // mockLLMClient はテスト用のLLMクライアント。
 type mockLLMClient struct {
-	response *entity.StrategyAdvice
-	err      error
+	response  *entity.StrategyAdvice
+	err       error
+	callCount int
 }
 
 func (m *mockLLMClient) AnalyzeMarket(ctx context.Context, marketCtx entity.MarketContext) (*entity.StrategyAdvice, error) {
+	m.callCount++
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -57,6 +59,53 @@ func TestLLMService_GetAdvice_ReturnsCachedAdvice(t *testing.T) {
 	}
 	if advice2.Stance != entity.MarketStanceTrendFollow {
 		t.Fatalf("expected cached TREND_FOLLOW, got %s", advice2.Stance)
+	}
+}
+
+func TestLLMService_GetAdvice_CacheIsolatedBySymbol(t *testing.T) {
+	mock := &mockLLMClient{
+		response: &entity.StrategyAdvice{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "BTC uptrend",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	svc := NewLLMService(mock, 15*time.Minute)
+
+	// Symbol 7 (BTC) のアドバイスを取得してキャッシュ
+	btcCtx := entity.MarketContext{SymbolID: 7, LastPrice: 5000000}
+	advice1, err := svc.GetAdvice(context.Background(), btcCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if advice1.Stance != entity.MarketStanceTrendFollow {
+		t.Fatalf("expected TREND_FOLLOW for BTC, got %s", advice1.Stance)
+	}
+
+	// mockを変更: Symbol 8 (ETH) は別の方針
+	mock.response = &entity.StrategyAdvice{
+		Stance:    entity.MarketStanceContrarian,
+		Reasoning: "ETH oversold",
+		UpdatedAt: time.Now().Unix(),
+	}
+
+	// Symbol 8 (ETH) は別のキャッシュエントリを使うべき
+	ethCtx := entity.MarketContext{SymbolID: 8, LastPrice: 300000}
+	advice2, err := svc.GetAdvice(context.Background(), ethCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if advice2.Stance != entity.MarketStanceContrarian {
+		t.Fatalf("expected CONTRARIAN for ETH, got %s (BTC cache leaked)", advice2.Stance)
+	}
+
+	// BTCのキャッシュが影響を受けていないことを確認
+	advice3, err := svc.GetAdvice(context.Background(), btcCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if advice3.Stance != entity.MarketStanceTrendFollow {
+		t.Fatalf("expected cached TREND_FOLLOW for BTC, got %s", advice3.Stance)
 	}
 }
 

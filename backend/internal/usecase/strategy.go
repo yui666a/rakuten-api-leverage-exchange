@@ -19,7 +19,18 @@ func NewStrategyEngine(llmService *LLMService) *StrategyEngine {
 }
 
 // Evaluate はテクニカル指標と現在価格から売買シグナルを生成する。
+// 指標データが不足している場合はLLMを呼ばずにHOLDを返す。
 func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
+	// 指標チェックをLLM呼び出し前に行い、不要なAPI呼び出しとキャッシュ汚染を防ぐ
+	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
+		return &entity.Signal{
+			SymbolID:  indicators.SymbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    "insufficient indicator data",
+			Timestamp: time.Now().Unix(),
+		}, nil
+	}
+
 	marketCtx := entity.MarketContext{
 		SymbolID:   indicators.SymbolID,
 		LastPrice:  lastPrice,
@@ -31,15 +42,6 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 			SymbolID:  indicators.SymbolID,
 			Action:    entity.SignalActionHold,
 			Reason:    "LLM error, defaulting to HOLD",
-			Timestamp: time.Now().Unix(),
-		}, nil
-	}
-
-	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
-		return &entity.Signal{
-			SymbolID:  indicators.SymbolID,
-			Action:    entity.SignalActionHold,
-			Reason:    "insufficient indicator data",
 			Timestamp: time.Now().Unix(),
 		}, nil
 	}

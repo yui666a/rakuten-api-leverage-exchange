@@ -14,39 +14,49 @@ type LLMClient interface {
 	AnalyzeMarket(ctx context.Context, marketCtx entity.MarketContext) (*entity.StrategyAdvice, error)
 }
 
-// LLMService はLLM呼び出しをキャッシュ付きで管理する。
+type cacheEntry struct {
+	advice   *entity.StrategyAdvice
+	cachedAt time.Time
+}
+
+// LLMService はLLM呼び出しをシンボルごとのキャッシュ付きで管理する。
 type LLMService struct {
 	client   LLMClient
 	cacheTTL time.Duration
 
-	mu       sync.RWMutex
-	cached   *entity.StrategyAdvice
-	cachedAt time.Time
+	mu    sync.RWMutex
+	cache map[int64]*cacheEntry // key: SymbolID
 }
 
 func NewLLMService(client LLMClient, cacheTTL time.Duration) *LLMService {
 	return &LLMService{
 		client:   client,
 		cacheTTL: cacheTTL,
+		cache:    make(map[int64]*cacheEntry),
 	}
 }
 
-// GetAdvice はキャッシュされた戦略アドバイスを返す。
+// GetAdvice はシンボルIDごとにキャッシュされた戦略アドバイスを返す。
 // キャッシュが期限切れの場合はLLMに問い合わせて更新する。
 // LLMエラー時は古いキャッシュを返すか、キャッシュがなければHOLDを返す。
 func (s *LLMService) GetAdvice(ctx context.Context, marketCtx entity.MarketContext) (*entity.StrategyAdvice, error) {
+	symbolID := marketCtx.SymbolID
+
 	s.mu.RLock()
-	if s.cached != nil && time.Since(s.cachedAt) < s.cacheTTL {
-		cached := s.cached
+	entry := s.cache[symbolID]
+	if entry != nil && time.Since(entry.cachedAt) < s.cacheTTL {
 		s.mu.RUnlock()
-		return cached, nil
+		return entry.advice, nil
 	}
-	stale := s.cached
+	var stale *entity.StrategyAdvice
+	if entry != nil {
+		stale = entry.advice
+	}
 	s.mu.RUnlock()
 
 	advice, err := s.client.AnalyzeMarket(ctx, marketCtx)
 	if err != nil {
-		log.Printf("LLM error, using fallback: %v", err)
+		log.Printf("LLM error (symbol %d), using fallback: %v", symbolID, err)
 		if stale != nil {
 			return stale, nil
 		}
@@ -58,17 +68,19 @@ func (s *LLMService) GetAdvice(ctx context.Context, marketCtx entity.MarketConte
 	}
 
 	s.mu.Lock()
-	s.cached = advice
-	s.cachedAt = time.Now()
+	s.cache[symbolID] = &cacheEntry{advice: advice, cachedAt: time.Now()}
 	s.mu.Unlock()
 
 	return advice, nil
 }
 
-// GetCachedAdvice はキャッシュされたアドバイスを直接返す（LLM呼び出しなし）。
+// GetCachedAdvice はシンボルIDごとのキャッシュされたアドバイスを直接返す（LLM呼び出しなし）。
 // キャッシュがなければnilを返す。
-func (s *LLMService) GetCachedAdvice() *entity.StrategyAdvice {
+func (s *LLMService) GetCachedAdvice(symbolID int64) *entity.StrategyAdvice {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cached
+	if entry := s.cache[symbolID]; entry != nil {
+		return entry.advice
+	}
+	return nil
 }
