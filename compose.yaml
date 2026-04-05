@@ -1,0 +1,42 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      SERVER_PORT: "8080"
+      DATABASE_PATH: /app/backend/data/trading.db
+      RAKUTEN_API_BASE_URL: ${RAKUTEN_API_BASE_URL:-https://exchange.rakuten-wallet.co.jp}
+      RAKUTEN_WS_URL: ${RAKUTEN_WS_URL:-wss://exchange.rakuten-wallet.co.jp/ws}
+      RAKUTEN_API_KEY: ${RAKUTEN_API_KEY:-}
+      RAKUTEN_API_SECRET: ${RAKUTEN_API_SECRET:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-haiku-3-5-latest}
+      LLM_CACHE_TTL_MIN: ${LLM_CACHE_TTL_MIN:-15}
+    ports:
+      - "38080:8080"
+    volumes:
+      - backend-data:/app/backend/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/api/v1/status"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_HOST: localhost:38080
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "33000:3000"
+    restart: unless-stopped
+
+volumes:
+  backend-data:

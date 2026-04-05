@@ -40,7 +40,6 @@ dist/
 .netlify/
 .vercel/
 *.log
-pnpm-lock.yaml
 yarn.lock
 package-lock.json
 
@@ -50,3 +49,5 @@ data/
 
 # Backend
 go.sum
+
+.gocache
