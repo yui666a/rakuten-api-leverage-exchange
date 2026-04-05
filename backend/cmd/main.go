@@ -165,13 +165,61 @@ func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDat
 	}
 }
 
+// Raw structures for decoding Rakuten WebSocket messages where numeric values
+// are delivered as JSON strings (e.g. "12345.67").
+type rawTicker struct {
+	SymbolID  int64                `json:"symbolId"`
+	BestAsk   entity.StringFloat64 `json:"bestAsk"`
+	BestBid   entity.StringFloat64 `json:"bestBid"`
+	Open      entity.StringFloat64 `json:"open"`
+	High      entity.StringFloat64 `json:"high"`
+	Low       entity.StringFloat64 `json:"low"`
+	Last      entity.StringFloat64 `json:"last"`
+	Volume    entity.StringFloat64 `json:"volume"`
+	Timestamp int64                `json:"timestamp"`
+}
+
+type rawOrderbookEntry struct {
+	Price  entity.StringFloat64 `json:"price"`
+	Amount entity.StringFloat64 `json:"amount"`
+}
+
+type rawOrderbook struct {
+	SymbolID  int64               `json:"symbolId"`
+	Asks      []rawOrderbookEntry `json:"asks"`
+	Bids      []rawOrderbookEntry `json:"bids"`
+	BestAsk   entity.StringFloat64 `json:"bestAsk"`
+	BestBid   entity.StringFloat64 `json:"bestBid"`
+	MidPrice  entity.StringFloat64 `json:"midPrice"`
+	Spread    entity.StringFloat64 `json:"spread"`
+	Timestamp int64                `json:"timestamp"`
+}
+
 func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub) {
 	switch {
 	case bytes.Contains(raw, []byte(`"asks"`)):
-		var orderbook entity.Orderbook
-		if err := json.Unmarshal(raw, &orderbook); err != nil {
+		var r rawOrderbook
+		if err := json.Unmarshal(raw, &r); err != nil {
 			log.Printf("market websocket orderbook decode failed: %v", err)
 			return
+		}
+		asks := make([]entity.OrderbookEntry, len(r.Asks))
+		for i, a := range r.Asks {
+			asks[i] = entity.OrderbookEntry{Price: a.Price.Float64(), Amount: a.Amount.Float64()}
+		}
+		bids := make([]entity.OrderbookEntry, len(r.Bids))
+		for i, b := range r.Bids {
+			bids[i] = entity.OrderbookEntry{Price: b.Price.Float64(), Amount: b.Amount.Float64()}
+		}
+		orderbook := entity.Orderbook{
+			SymbolID:  r.SymbolID,
+			Asks:      asks,
+			Bids:      bids,
+			BestAsk:   r.BestAsk.Float64(),
+			BestBid:   r.BestBid.Float64(),
+			MidPrice:  r.MidPrice.Float64(),
+			Spread:    r.Spread.Float64(),
+			Timestamp: r.Timestamp,
 		}
 		if realtimeHub != nil {
 			_ = realtimeHub.PublishData("orderbook", orderbook.SymbolID, orderbook)
@@ -186,10 +234,21 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 			_ = realtimeHub.PublishData("market_trades", trades.SymbolID, trades)
 		}
 	default:
-		var ticker entity.Ticker
-		if err := json.Unmarshal(raw, &ticker); err != nil {
+		var r rawTicker
+		if err := json.Unmarshal(raw, &r); err != nil {
 			log.Printf("market websocket ticker decode failed: %v", err)
 			return
+		}
+		ticker := entity.Ticker{
+			SymbolID:  r.SymbolID,
+			BestAsk:   r.BestAsk.Float64(),
+			BestBid:   r.BestBid.Float64(),
+			Open:      r.Open.Float64(),
+			High:      r.High.Float64(),
+			Low:       r.Low.Float64(),
+			Last:      r.Last.Float64(),
+			Volume:    r.Volume.Float64(),
+			Timestamp: r.Timestamp,
 		}
 		marketDataSvc.HandleTicker(ctx, ticker)
 	}
