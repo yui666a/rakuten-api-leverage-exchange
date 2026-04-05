@@ -1,5 +1,10 @@
-export const API_BASE = 'http://localhost:8080/api/v1'
-export const WS_BASE = 'ws://localhost:8080/api/v1'
+const API_HOST =
+  import.meta.env.VITE_API_HOST != null && import.meta.env.VITE_API_HOST !== ''
+    ? import.meta.env.VITE_API_HOST
+    : 'localhost:8080'
+
+export const API_BASE = `http://${API_HOST}/api/v1`
+export const WS_BASE = `ws://${API_HOST}/api/v1`
 
 export type StatusResponse = {
   status: 'running' | 'stopped'
@@ -93,10 +98,36 @@ export type LiveTicker = {
   timestamp: number
 }
 
-export type MarketStreamMessage = {
-  type: 'ticker'
-  data: LiveTicker
+export type RealtimeMarketTrades = {
+  symbolId: number
+  trades: Array<{
+    id: number
+    orderSide: 'BUY' | 'SELL'
+    price: number
+    amount: number
+    assetAmount: number
+    tradedAt: number
+  }>
+  timestamp: number
 }
+
+export type RealtimeOrderbook = {
+  symbolId: number
+  asks: Array<{ price: number; amount: number }>
+  bids: Array<{ price: number; amount: number }>
+  bestAsk: number
+  bestBid: number
+  midPrice: number
+  spread: number
+  timestamp: number
+}
+
+export type RealtimeEventMessage =
+  | { type: 'ticker'; symbolId: number; data: LiveTicker }
+  | { type: 'status'; symbolId?: number; data: StatusResponse }
+  | { type: 'config'; symbolId?: number; data: RiskConfig }
+  | { type: 'orderbook'; symbolId: number; data: RealtimeOrderbook }
+  | { type: 'market_trades'; symbolId: number; data: RealtimeMarketTrades }
 
 export async function fetchApi<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`)
@@ -124,12 +155,12 @@ export async function sendApi<TResponse, TBody = undefined>(
   return res.json()
 }
 
-export function buildMarketWebSocketUrl(symbolId: number): string {
+export function buildRealtimeWebSocketUrl(symbolId: number): string {
   if (typeof window === 'undefined') {
-    return `${WS_BASE}/ws/market?symbolId=${symbolId}`
+    return `${WS_BASE}/ws?symbolId=${symbolId}`
   }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.hostname === 'localhost' ? 'localhost:8080' : window.location.host
-  return `${protocol}//${host}/api/v1/ws/market?symbolId=${symbolId}`
+  const host = window.location.hostname === 'localhost' ? API_HOST : window.location.host
+  return `${protocol}//${host}/api/v1/ws?symbolId=${symbolId}`
 }

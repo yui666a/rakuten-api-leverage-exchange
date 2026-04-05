@@ -13,6 +13,7 @@ type Dependencies struct {
 	LLMService          *usecase.LLMService
 	IndicatorCalculator *usecase.IndicatorCalculator
 	MarketDataService   *usecase.MarketDataService
+	RealtimeHub         *usecase.RealtimeHub
 	OrderClient         repository.OrderClient
 }
 
@@ -20,7 +21,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000"},
+		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:33000"},
 		AllowMethods:     []string{"GET", "PUT", "POST", "DELETE"},
 		AllowHeaders:     []string{"Content-Type"},
 		AllowCredentials: true,
@@ -30,11 +31,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	statusHandler := handler.NewStatusHandler(deps.RiskManager)
 	v1.GET("/status", statusHandler.GetStatus)
-	botHandler := handler.NewBotHandler(deps.RiskManager)
+	botHandler := handler.NewBotHandler(deps.RiskManager, deps.RealtimeHub)
 	v1.POST("/start", botHandler.Start)
 	v1.POST("/stop", botHandler.Stop)
 
-	riskHandler := handler.NewRiskHandler(deps.RiskManager)
+	riskHandler := handler.NewRiskHandler(deps.RiskManager, deps.RealtimeHub)
 	v1.GET("/config", riskHandler.GetConfig)
 	v1.PUT("/config", riskHandler.UpdateConfig)
 	v1.GET("/pnl", riskHandler.GetPnL)
@@ -49,8 +50,8 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		candleHandler := handler.NewCandleHandler(deps.MarketDataService)
 		v1.GET("/candles/:symbol", candleHandler.GetCandles)
 
-		realtimeHandler := handler.NewRealtimeHandler(deps.MarketDataService)
-		v1.GET("/ws/market", realtimeHandler.StreamTicker)
+		realtimeHandler := handler.NewRealtimeHandler(deps.MarketDataService, deps.RiskManager, deps.RealtimeHub)
+		v1.GET("/ws", realtimeHandler.Stream)
 	}
 
 	if deps.OrderClient != nil {

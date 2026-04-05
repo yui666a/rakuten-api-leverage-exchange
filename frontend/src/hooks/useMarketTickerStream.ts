@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { buildMarketWebSocketUrl, type LiveTicker, type MarketStreamMessage } from '../lib/api'
+import { buildRealtimeWebSocketUrl, type LiveTicker, type RealtimeEventMessage } from '../lib/api'
 
 type ConnectionState = 'connecting' | 'connected' | 'disconnected'
 
@@ -8,7 +8,7 @@ export function useMarketTickerStream(symbolId: number) {
   const queryClient = useQueryClient()
   const [ticker, setTicker] = useState<LiveTicker | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
-  const lastInvalidateRef = useRef(0)
+  const lastIndicatorInvalidateRef = useRef(0)
 
   useEffect(() => {
     let active = true
@@ -17,7 +17,7 @@ export function useMarketTickerStream(symbolId: number) {
 
     const connect = () => {
       setConnectionState('connecting')
-      socket = new WebSocket(buildMarketWebSocketUrl(symbolId))
+      socket = new WebSocket(buildRealtimeWebSocketUrl(symbolId))
 
       socket.addEventListener('open', () => {
         if (!active) return
@@ -27,21 +27,39 @@ export function useMarketTickerStream(symbolId: number) {
       socket.addEventListener('message', (event) => {
         if (!active) return
 
-        let payload: MarketStreamMessage
+        let payload: RealtimeEventMessage
         try {
-          payload = JSON.parse(event.data) as MarketStreamMessage
+          payload = JSON.parse(event.data) as RealtimeEventMessage
         } catch {
           return
         }
-        if (payload.type !== 'ticker') return
 
-        setTicker(payload.data)
+        switch (payload.type) {
+          case 'ticker': {
+            setTicker(payload.data)
 
-        const now = Date.now()
-        if (now - lastInvalidateRef.current >= 30_000) {
-          lastInvalidateRef.current = now
-          void queryClient.invalidateQueries({ queryKey: ['indicators', symbolId] })
-          void queryClient.invalidateQueries({ queryKey: ['candles', symbolId] })
+            const now = Date.now()
+            if (now - lastIndicatorInvalidateRef.current >= 30_000) {
+              lastIndicatorInvalidateRef.current = now
+              void queryClient.invalidateQueries({ queryKey: ['indicators', symbolId] })
+              void queryClient.invalidateQueries({ queryKey: ['candles', symbolId] })
+            }
+            return
+          }
+          case 'status':
+            void queryClient.invalidateQueries({ queryKey: ['status'] })
+            void queryClient.invalidateQueries({ queryKey: ['pnl'] })
+            return
+          case 'config':
+            void queryClient.invalidateQueries({ queryKey: ['config'] })
+            void queryClient.invalidateQueries({ queryKey: ['status'] })
+            void queryClient.invalidateQueries({ queryKey: ['pnl'] })
+            return
+          case 'market_trades':
+            void queryClient.invalidateQueries({ queryKey: ['trades', symbolId] })
+            return
+          case 'orderbook':
+            return
         }
       })
 

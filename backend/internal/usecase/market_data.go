@@ -15,12 +15,19 @@ type MarketDataService struct {
 
 	mu         sync.RWMutex
 	tickerSubs []chan entity.Ticker
+	realtimeHub *RealtimeHub
 }
 
 func NewMarketDataService(repo repository.MarketDataRepository) *MarketDataService {
 	return &MarketDataService{
 		repo: repo,
 	}
+}
+
+func (s *MarketDataService) SetRealtimeHub(hub *RealtimeHub) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.realtimeHub = hub
 }
 
 // SubscribeTicker starts a ticker subscription and returns a receive channel.
@@ -60,6 +67,12 @@ func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Tick
 		case ch <- ticker:
 		default:
 			// Drop if channel full (don't block slow consumers)
+		}
+	}
+
+	if s.realtimeHub != nil {
+		if err := s.realtimeHub.PublishData("ticker", ticker.SymbolID, ticker); err != nil {
+			log.Printf("failed to publish ticker event: %v", err)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import { BotControlCard } from '../components/BotControlCard'
 import { useConfig, useUpdateConfig } from '../hooks/useConfig'
 import { useStatus } from '../hooks/useStatus'
 import { useStartBot, useStopBot } from '../hooks/useBotControl'
+import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
 import type { RiskConfig } from '../lib/api'
 
 export const Route = createFileRoute('/settings')({ component: SettingsPage })
@@ -15,6 +16,7 @@ function SettingsPage() {
   const updateConfig = useUpdateConfig()
   const startBot = useStartBot()
   const stopBot = useStopBot()
+  useMarketTickerStream(7)
   const [form, setForm] = useState<RiskConfig>({
     maxPositionAmount: 0,
     maxDailyLoss: 0,

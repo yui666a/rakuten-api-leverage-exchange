@@ -9,11 +9,12 @@ import (
 )
 
 type RiskHandler struct {
-	riskMgr *usecase.RiskManager
+	riskMgr     *usecase.RiskManager
+	realtimeHub *usecase.RealtimeHub
 }
 
-func NewRiskHandler(riskMgr *usecase.RiskManager) *RiskHandler {
-	return &RiskHandler{riskMgr: riskMgr}
+func NewRiskHandler(riskMgr *usecase.RiskManager, realtimeHub *usecase.RealtimeHub) *RiskHandler {
+	return &RiskHandler{riskMgr: riskMgr, realtimeHub: realtimeHub}
 }
 
 func (h *RiskHandler) GetConfig(c *gin.Context) {
@@ -28,6 +29,18 @@ func (h *RiskHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	h.riskMgr.UpdateConfig(req)
+	if h.realtimeHub != nil {
+		_ = h.realtimeHub.PublishData("config", 0, req)
+		status := h.riskMgr.GetStatus()
+		_ = h.realtimeHub.PublishData("status", 0, gin.H{
+			"status":          statusLabel(status),
+			"tradingHalted":   status.TradingHalted,
+			"manuallyStopped": status.ManuallyStopped,
+			"balance":         status.Balance,
+			"dailyLoss":       status.DailyLoss,
+			"totalPosition":   status.TotalPosition,
+		})
+	}
 	c.JSON(http.StatusOK, req)
 }
 

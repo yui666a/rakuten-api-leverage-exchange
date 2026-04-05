@@ -9,25 +9,34 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"nhooyr.io/websocket"
 )
 
 type RealtimeHandler struct {
 	marketDataSvc *usecase.MarketDataService
+	riskMgr       *usecase.RiskManager
+	realtimeHub   *usecase.RealtimeHub
 }
 
-type realtimeMessage struct {
-	Type string        `json:"type"`
-	Data entity.Ticker `json:"data"`
+func NewRealtimeHandler(
+	marketDataSvc *usecase.MarketDataService,
+	riskMgr *usecase.RiskManager,
+	realtimeHub *usecase.RealtimeHub,
+) *RealtimeHandler {
+	return &RealtimeHandler{
+		marketDataSvc: marketDataSvc,
+		riskMgr:       riskMgr,
+		realtimeHub:   realtimeHub,
+	}
 }
 
-func NewRealtimeHandler(marketDataSvc *usecase.MarketDataService) *RealtimeHandler {
-	return &RealtimeHandler{marketDataSvc: marketDataSvc}
-}
+func (h *RealtimeHandler) Stream(c *gin.Context) {
+	if h.realtimeHub == nil {
+		c.JSON(503, gin.H{"error": "realtime hub unavailable"})
+		return
+	}
 
-func (h *RealtimeHandler) StreamTicker(c *gin.Context) {
 	symbolStr := c.DefaultQuery("symbolId", "7")
 	symbolID, err := strconv.ParseInt(symbolStr, 10, 64)
 	if err != nil {
@@ -44,29 +53,27 @@ func (h *RealtimeHandler) StreamTicker(c *gin.Context) {
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	ctx := c.Request.Context()
-	if latest, err := h.marketDataSvc.GetLatestTicker(ctx, symbolID); err == nil && latest != nil {
-		if err := conn.Write(ctx, websocket.MessageText, mustMarshalRealtimeMessage(*latest)); err != nil {
-			return
-		}
+	if err := h.writeInitialSnapshot(ctx, conn, symbolID); err != nil {
+		return
 	}
 
-	sub := h.marketDataSvc.SubscribeTicker()
-	defer h.marketDataSvc.UnsubscribeTicker(sub)
+	sub := h.realtimeHub.Subscribe()
+	defer h.realtimeHub.Unsubscribe(sub)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ticker, ok := <-sub:
+		case event, ok := <-sub:
 			if !ok {
 				return
 			}
-			if ticker.SymbolID != symbolID {
+			if event.SymbolID != 0 && event.SymbolID != symbolID {
 				continue
 			}
 
 			writeCtx, cancel := context.WithTimeout(ctx, websocketWriteTimeout)
-			err := conn.Write(writeCtx, websocket.MessageText, mustMarshalRealtimeMessage(ticker))
+			err := conn.Write(writeCtx, websocket.MessageText, mustMarshalEvent(event))
 			cancel()
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
@@ -78,19 +85,54 @@ func (h *RealtimeHandler) StreamTicker(c *gin.Context) {
 	}
 }
 
+func (h *RealtimeHandler) writeInitialSnapshot(ctx context.Context, conn *websocket.Conn, symbolID int64) error {
+	status := h.riskMgr.GetStatus()
+	initialEvents := []usecase.RealtimeEvent{
+		mustRealtimeEvent("status", 0, gin.H{
+			"status":          statusLabel(status),
+			"tradingHalted":   status.TradingHalted,
+			"manuallyStopped": status.ManuallyStopped,
+			"balance":         status.Balance,
+			"dailyLoss":       status.DailyLoss,
+			"totalPosition":   status.TotalPosition,
+		}),
+		mustRealtimeEvent("config", 0, status.Config),
+	}
+
+	if latest, err := h.marketDataSvc.GetLatestTicker(ctx, symbolID); err == nil && latest != nil {
+		initialEvents = append(initialEvents, mustRealtimeEvent("ticker", latest.SymbolID, latest))
+	}
+
+	for _, event := range initialEvents {
+		writeCtx, cancel := context.WithTimeout(ctx, websocketWriteTimeout)
+		err := conn.Write(writeCtx, websocket.MessageText, mustMarshalEvent(event))
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 const websocketWriteTimeout = 5 * time.Second
 
-func mustMarshalRealtimeMessage(ticker entity.Ticker) []byte {
-	payload, err := jsonMarshal(realtimeMessage{
-		Type: "ticker",
-		Data: ticker,
-	})
+func mustRealtimeEvent(eventType string, symbolID int64, payload any) usecase.RealtimeEvent {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		panic(err)
+	}
+	return usecase.RealtimeEvent{
+		Type:     eventType,
+		SymbolID: symbolID,
+		Data:     data,
+	}
+}
+
+func mustMarshalEvent(event usecase.RealtimeEvent) []byte {
+	payload, err := json.Marshal(event)
 	if err != nil {
 		panic(err)
 	}
 	return payload
-}
-
-var jsonMarshal = func(v any) ([]byte, error) {
-	return json.Marshal(v)
 }
