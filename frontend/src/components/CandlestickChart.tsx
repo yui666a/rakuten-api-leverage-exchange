@@ -1,13 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createChart, CandlestickSeries, type IChartApi, type ISeriesApi, type CandlestickData, type Time } from 'lightweight-charts'
-
-type Candle = {
-  open: number
-  high: number
-  low: number
-  close: number
-  time: number
-}
+import type { Candle } from '../lib/api'
 
 type CandlestickChartProps = {
   candles: Candle[]
@@ -80,7 +73,7 @@ export function CandlestickChart({ candles }: CandlestickChartProps) {
 
   return (
     <div className="bg-bg-card rounded-lg p-4">
-      <div className="text-text-secondary text-xs mb-2">BTC/JPY</div>
+      <div className="mb-2 text-text-secondary text-xs">BTC/JPY</div>
       <div ref={containerRef} />
     </div>
   )

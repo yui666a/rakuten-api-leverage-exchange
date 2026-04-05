@@ -50,6 +50,10 @@ func (m *mockOrderClient) GetPositions(ctx context.Context, symbolID int64) ([]e
 	return m.positions, nil
 }
 
+func (m *mockOrderClient) GetMyTrades(ctx context.Context, symbolID int64) ([]entity.MyTrade, error) {
+	return nil, nil
+}
+
 func TestOrderExecutor_ExecuteSignal_Buy(t *testing.T) {
 	orderClient := &mockOrderClient{
 		createdOrders: []entity.Order{

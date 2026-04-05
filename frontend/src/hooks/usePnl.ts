@@ -1,17 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchApi } from '../lib/api'
-
-type PnL = {
-  balance: number
-  dailyLoss: number
-  totalPosition: number
-  tradingHalted: boolean
-}
+import { fetchApi, type PnlResponse } from '../lib/api'
 
 export function usePnl() {
   return useQuery({
     queryKey: ['pnl'],
-    queryFn: () => fetchApi<PnL>('/pnl'),
+    queryFn: () => fetchApi<PnlResponse>('/pnl'),
     refetchInterval: 10_000,
   })
 }

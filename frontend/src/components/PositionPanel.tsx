@@ -1,11 +1,4 @@
-type Position = {
-  id: number
-  symbolId: number
-  orderSide: string
-  price: number
-  remainingAmount: number
-  floatingProfit: number
-}
+import type { Position } from '../lib/api'
 
 type PositionPanelProps = {
   positions: Position[] | undefined
@@ -20,13 +13,18 @@ export function PositionPanel({ positions }: PositionPanelProps) {
       ) : (
         <div className="space-y-2">
           {positions.map((pos) => (
-            <div key={pos.id} className="flex justify-between text-sm">
-              <span className={pos.orderSide === 'BUY' ? 'text-accent-green' : 'text-accent-red'}>
-                {pos.orderSide === 'BUY' ? 'LONG' : 'SHORT'} {pos.remainingAmount}
-              </span>
-              <span className="text-text-secondary">
+            <div key={pos.id} className="rounded-2xl border border-white/6 bg-white/3 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className={pos.orderSide === 'BUY' ? 'text-accent-green' : 'text-accent-red'}>
+                  {pos.orderSide === 'BUY' ? 'LONG' : 'SHORT'} {pos.remainingAmount}
+                </span>
+                <span className={pos.floatingProfit >= 0 ? 'text-accent-green' : 'text-accent-red'}>
+                  {pos.floatingProfit >= 0 ? '+' : ''}¥{pos.floatingProfit.toLocaleString()}
+                </span>
+              </div>
+              <div className="mt-1 text-text-secondary">
                 @ ¥{pos.price.toLocaleString()}
-              </span>
+              </div>
             </div>
           ))}
         </div>

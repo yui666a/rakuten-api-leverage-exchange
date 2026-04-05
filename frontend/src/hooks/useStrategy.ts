@@ -1,15 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchApi } from '../lib/api'
-
-type Strategy = {
-  stance: string
-  reasoning: string
-}
+import { fetchApi, type StrategyResponse } from '../lib/api'
 
 export function useStrategy() {
   return useQuery({
     queryKey: ['strategy'],
-    queryFn: () => fetchApi<Strategy>('/strategy'),
+    queryFn: () => fetchApi<StrategyResponse>('/strategy'),
     refetchInterval: 30_000,
   })
 }

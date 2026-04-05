@@ -1,14 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchApi } from '../lib/api'
-
-type Candle = {
-  open: number
-  high: number
-  low: number
-  close: number
-  volume: number
-  time: number
-}
+import { fetchApi, type Candle } from '../lib/api'
 
 export function useCandles(symbolId: number) {
   return useQuery({

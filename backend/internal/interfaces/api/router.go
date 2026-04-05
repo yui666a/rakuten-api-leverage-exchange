@@ -30,6 +30,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	statusHandler := handler.NewStatusHandler(deps.RiskManager)
 	v1.GET("/status", statusHandler.GetStatus)
+	botHandler := handler.NewBotHandler(deps.RiskManager)
+	v1.POST("/start", botHandler.Start)
+	v1.POST("/stop", botHandler.Stop)
 
 	riskHandler := handler.NewRiskHandler(deps.RiskManager)
 	v1.GET("/config", riskHandler.GetConfig)
@@ -50,6 +53,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.OrderClient != nil {
 		positionHandler := handler.NewPositionHandler(deps.OrderClient)
 		v1.GET("/positions", positionHandler.GetPositions)
+
+		tradeHandler := handler.NewTradeHandler(deps.OrderClient)
+		v1.GET("/trades", tradeHandler.GetTrades)
 	}
 
 	return r

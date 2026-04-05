@@ -1,13 +1,4 @@
-type IndicatorSet = {
-  sma20: number | null
-  sma50: number | null
-  ema12: number | null
-  ema26: number | null
-  rsi14: number | null
-  macdLine: number | null
-  signalLine: number | null
-  histogram: number | null
-}
+import type { IndicatorSet } from '../lib/api'
 
 type IndicatorPanelProps = {
   indicators: IndicatorSet | undefined

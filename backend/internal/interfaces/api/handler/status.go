@@ -17,11 +17,17 @@ func NewStatusHandler(riskMgr *usecase.RiskManager) *StatusHandler {
 
 func (h *StatusHandler) GetStatus(c *gin.Context) {
 	status := h.riskMgr.GetStatus()
+	engineStatus := "running"
+	if status.ManuallyStopped {
+		engineStatus = "stopped"
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"status":        "running",
-		"tradingHalted": status.TradingHalted,
-		"balance":       status.Balance,
-		"dailyLoss":     status.DailyLoss,
-		"totalPosition": status.TotalPosition,
+		"status":          engineStatus,
+		"tradingHalted":   status.TradingHalted,
+		"manuallyStopped": status.ManuallyStopped,
+		"balance":         status.Balance,
+		"dailyLoss":       status.DailyLoss,
+		"totalPosition":   status.TotalPosition,
 	})
 }
