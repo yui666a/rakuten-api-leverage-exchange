@@ -13,6 +13,7 @@ type RiskStatus struct {
 	DailyLoss     float64           `json:"dailyLoss"`
 	TotalPosition float64           `json:"totalPosition"`
 	TradingHalted bool              `json:"tradingHalted"`
+	ManuallyStopped bool            `json:"manuallyStopped"`
 	Config        entity.RiskConfig `json:"config"`
 }
 
@@ -22,6 +23,7 @@ type RiskManager struct {
 	balance   float64
 	dailyLoss float64
 	positions []entity.Position
+	manualStop bool
 }
 
 func NewRiskManager(config entity.RiskConfig) *RiskManager {
@@ -40,6 +42,13 @@ func (rm *RiskManager) CheckOrder(ctx context.Context, proposal entity.OrderProp
 	defer rm.mu.RUnlock()
 
 	orderValue := proposal.Amount * proposal.Price
+
+	if rm.manualStop {
+		return entity.RiskCheckResult{
+			Approved: false,
+			Reason:   "trading is manually stopped",
+		}
+	}
 
 	if rm.dailyLoss >= rm.config.MaxDailyLoss {
 		return entity.RiskCheckResult{
@@ -118,15 +127,28 @@ func (rm *RiskManager) UpdateConfig(config entity.RiskConfig) {
 	rm.config = config
 }
 
+func (rm *RiskManager) StartTrading() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.manualStop = false
+}
+
+func (rm *RiskManager) StopTrading() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.manualStop = true
+}
+
 func (rm *RiskManager) GetStatus() RiskStatus {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 	return RiskStatus{
-		Balance:       rm.balance,
-		DailyLoss:     rm.dailyLoss,
-		TotalPosition: rm.calcTotalPositionValue(),
-		TradingHalted: rm.dailyLoss >= rm.config.MaxDailyLoss,
-		Config:        rm.config,
+		Balance:         rm.balance,
+		DailyLoss:       rm.dailyLoss,
+		TotalPosition:   rm.calcTotalPositionValue(),
+		TradingHalted:   rm.dailyLoss >= rm.config.MaxDailyLoss,
+		ManuallyStopped: rm.manualStop,
+		Config:          rm.config,
 	}
 }
 
