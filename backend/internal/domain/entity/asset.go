@@ -1,6 +1,6 @@
 package entity
 
 type Asset struct {
-	Currency     string  `json:"currency"`
-	OnhandAmount float64 `json:"onhandAmount"`
+	Currency     string `json:"currency"`
+	OnhandAmount string `json:"onhandAmount"`
 }
