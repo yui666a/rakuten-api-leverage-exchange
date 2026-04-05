@@ -158,3 +158,24 @@ func TestMarketDataService_GetLatestTicker(t *testing.T) {
 		t.Fatalf("expected latest last 200, got %f", ticker.Last)
 	}
 }
+
+func TestMarketDataService_PublishesRealtimeTicker(t *testing.T) {
+	repo := newMockRepo()
+	svc := NewMarketDataService(repo)
+	hub := NewRealtimeHub()
+	svc.SetRealtimeHub(hub)
+
+	ch := hub.Subscribe()
+	defer hub.Unsubscribe(ch)
+
+	svc.HandleTicker(context.Background(), entity.Ticker{SymbolID: 7, Last: 123, Timestamp: 1000})
+
+	select {
+	case event := <-ch:
+		if event.Type != "ticker" {
+			t.Fatalf("expected ticker event, got %s", event.Type)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for realtime event")
+	}
+}

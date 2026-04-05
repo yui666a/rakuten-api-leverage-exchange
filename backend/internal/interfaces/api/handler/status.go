@@ -17,10 +17,7 @@ func NewStatusHandler(riskMgr *usecase.RiskManager) *StatusHandler {
 
 func (h *StatusHandler) GetStatus(c *gin.Context) {
 	status := h.riskMgr.GetStatus()
-	engineStatus := "running"
-	if status.ManuallyStopped {
-		engineStatus = "stopped"
-	}
+	engineStatus := statusLabel(status)
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":          engineStatus,
@@ -30,4 +27,11 @@ func (h *StatusHandler) GetStatus(c *gin.Context) {
 		"dailyLoss":       status.DailyLoss,
 		"totalPosition":   status.TotalPosition,
 	})
+}
+
+func statusLabel(status usecase.RiskStatus) string {
+	if status.ManuallyStopped {
+		return "stopped"
+	}
+	return "running"
 }

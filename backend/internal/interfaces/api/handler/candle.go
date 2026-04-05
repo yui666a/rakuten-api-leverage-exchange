@@ -38,5 +38,10 @@ func (h *CandleHandler) GetCandles(c *gin.Context) {
 		return
 	}
 
+	// Lightweight Charts expects oldest -> newest ordering.
+	for i, j := 0, len(candles)-1; i < j; i, j = i+1, j-1 {
+		candles[i], candles[j] = candles[j], candles[i]
+	}
+
 	c.JSON(http.StatusOK, candles)
 }

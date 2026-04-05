@@ -8,29 +8,38 @@ import (
 )
 
 type BotHandler struct {
-	riskMgr *usecase.RiskManager
+	riskMgr     *usecase.RiskManager
+	realtimeHub *usecase.RealtimeHub
 }
 
-func NewBotHandler(riskMgr *usecase.RiskManager) *BotHandler {
-	return &BotHandler{riskMgr: riskMgr}
+func NewBotHandler(riskMgr *usecase.RiskManager, realtimeHub *usecase.RealtimeHub) *BotHandler {
+	return &BotHandler{riskMgr: riskMgr, realtimeHub: realtimeHub}
 }
 
 func (h *BotHandler) Start(c *gin.Context) {
 	h.riskMgr.StartTrading()
 	status := h.riskMgr.GetStatus()
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"status":          "running",
 		"tradingHalted":   status.TradingHalted,
 		"manuallyStopped": status.ManuallyStopped,
-	})
+	}
+	if h.realtimeHub != nil {
+		_ = h.realtimeHub.PublishData("status", 0, resp)
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *BotHandler) Stop(c *gin.Context) {
 	h.riskMgr.StopTrading()
 	status := h.riskMgr.GetStatus()
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"status":          "stopped",
 		"tradingHalted":   status.TradingHalted,
 		"manuallyStopped": status.ManuallyStopped,
-	})
+	}
+	if h.realtimeHub != nil {
+		_ = h.realtimeHub.PublishData("status", 0, resp)
+	}
+	c.JSON(http.StatusOK, resp)
 }
