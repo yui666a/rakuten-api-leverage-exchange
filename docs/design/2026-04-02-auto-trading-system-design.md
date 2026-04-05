@@ -371,3 +371,35 @@ backend/
 | Plan 6 | Order Executor | #10 | merged | `usecase/order.go`, `repository/order.go` |
 | Plan 7 | REST API | #11 | merged | `interfaces/api/` |
 | Plan 8 | Trading Engine 統合 | #12 | merged | `cmd/main.go` |
+
+---
+
+## 残課題（Next Steps）
+
+Plan 1〜8で全コンポーネントの実装とDI統合が完了した。以下は本番稼働に向けて必要な残課題。
+
+### 高優先度
+
+| 課題 | 内容 | 備考 |
+|------|------|------|
+| リアルタイム自動売買パイプライン | WebSocket接続→Ticker受信→指標計算→戦略判定→注文実行の自動ループ | `main.go`にTODOとして残置。goroutine + channelで接続する |
+| 損切り自動発動 | 価格tick受信ごとに`CheckStopLoss`を実行し、該当ポジションを即時決済 | `CheckStopLoss`は実装済み、監視goroutineが未実装 |
+| 起動時ポジション同期 | 起動時に楽天APIから現在のポジション・残高を取得しRisk Managerに反映 | `GetPositions`, `GetAssets`は実装済み |
+| 日次損失リセット | 毎日0時(JST)に`ResetDailyLoss`を呼ぶスケジューラー | `ResetDailyLoss`は実装済み、タイマーが未実装 |
+
+### 中優先度
+
+| 課題 | 内容 | 備考 |
+|------|------|------|
+| 取引履歴・損益の永続化 | 注文結果・約定情報をSQLiteに保存し、再起動後も状態復元可能にする | 現状は再起動でPnL・ポジション状態がリセットされる |
+| MCP Server | REST APIと同じユースケース層をMCPツールとして公開 | Claude Codeや他AIエージェントからの直接操作用 |
+| ボット起動/停止API | `POST /start`, `POST /stop`でTradingパイプラインの動的制御 | REST APIの`/status`は実装済み、起動/停止は未実装 |
+
+### 低優先度
+
+| 課題 | 内容 | 備考 |
+|------|------|------|
+| LLMフェーズ2 (アドバイザー) | 個別シグナルにもLLMが介入し「実行/保留/反転」を判断 | 現在はフェーズ1（戦略方針のみ） |
+| LLMフェーズ3 (最終判断者) | LLMが具体的な注文指示（銘柄/方向/数量）を決定 | Risk Managerが常にゲートキーパーとして機能 |
+| WebSocket再接続 | 切断時の自動再接続・バックオフ | 最長2時間の接続制限への対応 |
+| 監視ダッシュボード | リアルタイムのPnL・ポジション・戦略方針の可視化 | REST APIのデータを使ってフロントエンドを構築 |
