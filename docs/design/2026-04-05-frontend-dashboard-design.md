@@ -8,11 +8,52 @@ AI自動売買ボットの監視・操作用ダッシュボードを構築する
 
 | 項目 | 技術 |
 |------|------|
-| フレームワーク | TanStack Start (Vite + React + TypeScript) |
+| ツールチェーン | Vite+ (`vp` CLI) |
+| フレームワーク | TanStack Start (React + TypeScript) |
 | スタイリング | TailwindCSS v4 |
 | データ取得 | TanStack Query (ポーリング、将来WebSocket移行) |
 | チャート | Lightweight Charts (TradingView製) |
 | ルーティング | TanStack Router (file-based) |
+
+## セットアップ手順
+
+```bash
+# Vite+ グローバルCLI（未インストールの場合）
+npm i -g vite-plus
+
+# TanStack Startテンプレートでプロジェクト作成
+cd /path/to/rakuten-api-leverage-exchange
+vp create @tanstack/start frontend
+
+# 依存パッケージ追加
+cd frontend
+vp add @tanstack/react-query lightweight-charts
+vp add -D tailwindcss @tailwindcss/vite
+```
+
+## パッケージ一覧
+
+### dependencies
+
+| パッケージ | バージョン | 用途 |
+|-----------|----------|------|
+| `@tanstack/react-start` | latest | フルスタックReactフレームワーク |
+| `@tanstack/react-router` | latest | ファイルベースルーティング |
+| `@tanstack/react-query` | latest | データ取得・キャッシュ・ポーリング |
+| `react` | ^19 | UIライブラリ |
+| `react-dom` | ^19 | React DOMレンダラー |
+| `lightweight-charts` | ^4 | TradingView製ローソク足チャート |
+
+### devDependencies
+
+| パッケージ | バージョン | 用途 |
+|-----------|----------|------|
+| `vite-plus` | latest | 統合ツールチェーン (Vite + Vitest + Oxlint + Oxfmt) |
+| `tailwindcss` | ^4 | ユーティリティファーストCSS |
+| `@tailwindcss/vite` | ^4 | TailwindCSS Viteプラグイン |
+| `typescript` | ^5 | 型チェック |
+| `@types/react` | ^19 | React型定義 |
+| `@types/react-dom` | ^19 | React DOM型定義 |
 
 ## レイアウト
 
