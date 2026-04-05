@@ -10,6 +10,14 @@ type Config struct {
 	Rakuten  RakutenConfig
 	Database DatabaseConfig
 	Risk     RiskConfig
+	LLM      LLMConfig
+}
+
+type LLMConfig struct {
+	APIKey      string
+	Model       string
+	MaxTokens   int64
+	CacheTTLMin int
 }
 
 type ServerConfig struct {
@@ -54,6 +62,12 @@ func Load() *Config {
 			APIKey:    getEnv("RAKUTEN_API_KEY", ""),
 			APISecret: getEnv("RAKUTEN_API_SECRET", ""),
 		},
+		LLM: LLMConfig{
+			APIKey:      getEnv("ANTHROPIC_API_KEY", ""),
+			Model:       getEnv("LLM_MODEL", "claude-haiku-3-5-latest"),
+			MaxTokens:   int64(getEnvInt("LLM_MAX_TOKENS", 1024)),
+			CacheTTLMin: getEnvInt("LLM_CACHE_TTL_MIN", 15),
+		},
 	}
 }
 
@@ -68,6 +82,15 @@ func getEnvFloat(key string, defaultValue float64) float64 {
 	if value := os.Getenv(key); value != "" {
 		if f, err := strconv.ParseFloat(value, 64); err == nil {
 			return f
+		}
+	}
+	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if i, err := strconv.Atoi(value); err == nil {
+			return i
 		}
 	}
 	return defaultValue
