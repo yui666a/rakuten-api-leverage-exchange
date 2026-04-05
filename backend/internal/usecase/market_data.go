@@ -69,6 +69,11 @@ func (s *MarketDataService) GetCandles(ctx context.Context, symbolID int64, inte
 	return s.repo.GetCandles(ctx, symbolID, interval, limit)
 }
 
+// GetLatestTicker returns the most recently persisted ticker for a symbol.
+func (s *MarketDataService) GetLatestTicker(ctx context.Context, symbolID int64) (*entity.Ticker, error) {
+	return s.repo.GetLatestTicker(ctx, symbolID)
+}
+
 // SaveCandles persists candlestick data.
 func (s *MarketDataService) SaveCandles(ctx context.Context, symbolID int64, interval string, candles []entity.Candle) error {
 	return s.repo.SaveCandles(ctx, symbolID, interval, candles)

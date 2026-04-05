@@ -5,6 +5,7 @@ import { CandlestickChart } from '../components/CandlestickChart'
 import { IndicatorPanel } from '../components/IndicatorPanel'
 import { PositionPanel } from '../components/PositionPanel'
 import { BotControlCard } from '../components/BotControlCard'
+import { LiveTickerCard } from '../components/LiveTickerCard'
 import { useStatus } from '../hooks/useStatus'
 import { usePnl } from '../hooks/usePnl'
 import { useStrategy } from '../hooks/useStrategy'
@@ -12,6 +13,7 @@ import { useIndicators } from '../hooks/useIndicators'
 import { useCandles } from '../hooks/useCandles'
 import { usePositions } from '../hooks/usePositions'
 import { useStartBot, useStopBot } from '../hooks/useBotControl'
+import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
 
 export const Route = createFileRoute('/')({ component: Dashboard })
 
@@ -24,6 +26,7 @@ function Dashboard() {
   const { data: positions } = usePositions(7)
   const startBot = useStartBot()
   const stopBot = useStopBot()
+  const { ticker, connectionState } = useMarketTickerStream(7)
 
   const statusLabel = status?.tradingHalted
     ? 'リスク停止'
@@ -63,6 +66,7 @@ function Dashboard() {
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <section className="space-y-4">
+          <LiveTickerCard ticker={ticker} connectionState={connectionState} />
           <CandlestickChart candles={candles ?? []} />
           <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
             <div className="flex items-center justify-between">

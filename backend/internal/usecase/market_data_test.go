@@ -141,3 +141,20 @@ func TestMarketDataService_UnsubscribeTicker(t *testing.T) {
 		// Expected: timeout = no data
 	}
 }
+
+func TestMarketDataService_GetLatestTicker(t *testing.T) {
+	repo := newMockRepo()
+	svc := NewMarketDataService(repo)
+
+	ctx := context.Background()
+	svc.HandleTicker(ctx, entity.Ticker{SymbolID: 7, Last: 100, Timestamp: 1000})
+	svc.HandleTicker(ctx, entity.Ticker{SymbolID: 7, Last: 200, Timestamp: 2000})
+
+	ticker, err := svc.GetLatestTicker(ctx, 7)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ticker.Last != 200 {
+		t.Fatalf("expected latest last 200, got %f", ticker.Last)
+	}
+}
