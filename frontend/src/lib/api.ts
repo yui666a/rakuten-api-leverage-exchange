@@ -1,4 +1,5 @@
 export const API_BASE = 'http://localhost:8080/api/v1'
+export const WS_BASE = 'ws://localhost:8080/api/v1'
 
 export type StatusResponse = {
   status: 'running' | 'stopped'
@@ -80,6 +81,23 @@ export type TradeHistoryItem = {
   createdAt: number
 }
 
+export type LiveTicker = {
+  symbolId: number
+  bestAsk: number
+  bestBid: number
+  open: number
+  high: number
+  low: number
+  last: number
+  volume: number
+  timestamp: number
+}
+
+export type MarketStreamMessage = {
+  type: 'ticker'
+  data: LiveTicker
+}
+
 export async function fetchApi<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`)
   if (!res.ok) {
@@ -104,4 +122,14 @@ export async function sendApi<TResponse, TBody = undefined>(
   }
 
   return res.json()
+}
+
+export function buildMarketWebSocketUrl(symbolId: number): string {
+  if (typeof window === 'undefined') {
+    return `${WS_BASE}/ws/market?symbolId=${symbolId}`
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  const host = window.location.hostname === 'localhost' ? 'localhost:8080' : window.location.host
+  return `${protocol}//${host}/api/v1/ws/market?symbolId=${symbolId}`
 }

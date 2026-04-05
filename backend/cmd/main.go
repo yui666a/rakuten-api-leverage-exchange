@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -83,12 +84,11 @@ func main() {
 	log.Printf("Config: maxPosition=%.0f, maxDailyLoss=%.0f, stopLoss=%.1f%%, capital=%.0f",
 		cfg.Risk.MaxPositionAmount, cfg.Risk.MaxDailyLoss, cfg.Risk.StopLossPercent, cfg.Risk.InitialCapital)
 
+	go startTickerRelay(ctx, wsClient, marketDataSvc, 7)
+
 	// コンポーネントの参照を保持（Trading Pipeline実装時に使用）
-	_ = marketDataSvc
 	_ = strategyEngine
 	_ = orderExecutor
-	_ = wsClient
-	_ = ctx
 
 	// TODO: WebSocket接続 → Ticker受信ループ → 指標計算 → 戦略判定 → 注文実行
 	// 現時点ではREST APIサーバーとして稼働し、Trading Pipelineは次のイテレーションで実装
@@ -102,4 +102,68 @@ func main() {
 	}
 
 	log.Println("Trading Engine stopped")
+}
+
+func startTickerRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDataSvc *usecase.MarketDataService, symbolID int64) {
+	if wsClient == nil || marketDataSvc == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			_ = wsClient.Close()
+			return
+		default:
+		}
+
+		msgCh, err := wsClient.Connect(ctx)
+		if err != nil {
+			log.Printf("market websocket connect failed: %v", err)
+			waitForReconnect(ctx)
+			continue
+		}
+
+		if err := wsClient.Subscribe(ctx, symbolID, rakuten.DataTypeTicker); err != nil {
+			log.Printf("market websocket subscribe failed: %v", err)
+			_ = wsClient.Close()
+			waitForReconnect(ctx)
+			continue
+		}
+
+		log.Printf("market websocket subscribed: symbol=%d", symbolID)
+
+		reconnect := false
+		for !reconnect {
+			select {
+			case <-ctx.Done():
+				_ = wsClient.Close()
+				return
+			case raw, ok := <-msgCh:
+				if !ok {
+					reconnect = true
+					break
+				}
+
+				var ticker entity.Ticker
+				if err := json.Unmarshal(raw, &ticker); err != nil {
+					log.Printf("market websocket decode failed: %v", err)
+					continue
+				}
+
+				marketDataSvc.HandleTicker(ctx, ticker)
+			}
+		}
+
+		log.Println("market websocket disconnected, reconnecting")
+		_ = wsClient.Close()
+		waitForReconnect(ctx)
+	}
+}
+
+func waitForReconnect(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+	case <-time.After(3 * time.Second):
+	}
 }
