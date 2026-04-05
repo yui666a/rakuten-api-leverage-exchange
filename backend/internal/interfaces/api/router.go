@@ -8,6 +8,13 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
 
+// PipelineController はTrading Pipelineの開始/停止を制御するインターフェース。
+type PipelineController interface {
+	Start()
+	Stop()
+	Running() bool
+}
+
 type Dependencies struct {
 	RiskManager         *usecase.RiskManager
 	LLMService          *usecase.LLMService
@@ -15,6 +22,7 @@ type Dependencies struct {
 	MarketDataService   *usecase.MarketDataService
 	RealtimeHub         *usecase.RealtimeHub
 	OrderClient         repository.OrderClient
+	Pipeline            PipelineController
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -31,7 +39,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	statusHandler := handler.NewStatusHandler(deps.RiskManager)
 	v1.GET("/status", statusHandler.GetStatus)
-	botHandler := handler.NewBotHandler(deps.RiskManager, deps.RealtimeHub)
+	botHandler := handler.NewBotHandler(deps.RiskManager, deps.RealtimeHub, deps.Pipeline)
 	v1.POST("/start", botHandler.Start)
 	v1.POST("/stop", botHandler.Stop)
 
