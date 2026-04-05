@@ -15,14 +15,14 @@ func TestGetAssets(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertAuthHeaders(t, r)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"currency":"JPY","onhandAmount":10000}]`))
+		w.Write([]byte(`[{"currency":"JPY","onhandAmount":"10000"}]`))
 	}))
 	defer server.Close()
 	client := NewRESTClient(server.URL, "key", "secret")
 	assets, err := client.GetAssets(context.Background())
 	if err != nil { t.Fatalf("unexpected error: %v", err) }
 	if len(assets) != 1 { t.Fatalf("expected 1 asset, got %d", len(assets)) }
-	if assets[0].OnhandAmount != 10000 { t.Fatalf("expected 10000, got %f", assets[0].OnhandAmount) }
+	if assets[0].OnhandAmount != "10000" { t.Fatalf("expected 10000, got %s", assets[0].OnhandAmount) }
 }
 
 func TestGetPositions(t *testing.T) {
