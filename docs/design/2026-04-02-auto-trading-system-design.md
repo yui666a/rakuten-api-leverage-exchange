@@ -370,4 +370,4 @@ backend/
 | Plan 5 | Strategy Engine + LLM連携 | #9 | merged | `usecase/strategy.go`, `usecase/llm.go`, `infrastructure/llm/` |
 | Plan 6 | Order Executor | #10 | merged | `usecase/order.go`, `repository/order.go` |
 | Plan 7 | REST API | #11 | merged | `interfaces/api/` |
-| Plan 8 | Trading Engine 統合 | - | 未着手 | `cmd/main.go` |
+| Plan 8 | Trading Engine 統合 | #12 | merged | `cmd/main.go` |

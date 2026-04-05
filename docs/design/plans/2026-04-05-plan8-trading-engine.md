@@ -1,3 +1,33 @@
+# Plan 8: Trading Engine 統合 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 全コンポーネント（Market Data, Indicator Calculator, Strategy Engine, LLM Service, Risk Manager, Order Executor, REST API）を統合し、リアルタイムで売買判断を行うTrading Engineを構築する。
+
+**Architecture:** `cmd/main.go`でDI（依存性注入）を行い、全コンポーネントを接続。goroutineベースのイベントループで、WebSocket経由の価格データ受信→指標計算→戦略判定→注文実行のパイプラインを実行する。graceful shutdownをsignal handlerで実装。REST APIは別goroutineで並行稼働。
+
+**Tech Stack:** Go 1.25, goroutine, context, os/signal
+
+---
+
+## ファイル構成
+
+```
+backend/
+├── cmd/
+│   └── main.go                                      # エントリポイント（全面書き換え）
+```
+
+---
+
+### Task 1: main.go 全面書き換え
+
+**Files:**
+- Modify: `backend/cmd/main.go`
+
+- [ ] **Step 1: main.go を書き換え**
+
+```go
 package main
 
 import (
@@ -35,7 +65,7 @@ func main() {
 	restClient := rakuten.NewRESTClient(cfg.Rakuten.BaseURL, cfg.Rakuten.APIKey, cfg.Rakuten.APISecret)
 	wsClient := rakuten.NewWSClient(cfg.Rakuten.WSURL)
 	claudeClient := llm.NewClaudeClient(cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.MaxTokens)
-	marketDataRepo := database.NewMarketDataRepo(db)
+	marketDataRepo := database.NewMarketDataRepository(db)
 
 	// --- Usecase ---
 	marketDataSvc := usecase.NewMarketDataService(marketDataRepo)
@@ -76,14 +106,13 @@ func main() {
 	log.Printf("Config: maxPosition=%.0f, maxDailyLoss=%.0f, stopLoss=%.1f%%, capital=%.0f",
 		cfg.Risk.MaxPositionAmount, cfg.Risk.MaxDailyLoss, cfg.Risk.StopLossPercent, cfg.Risk.InitialCapital)
 
-	// コンポーネントの参照を保持（Trading Pipeline実装時に使用）
+	// パイプラインで使用するコンポーネントをログに記録
 	_ = marketDataSvc
 	_ = strategyEngine
 	_ = orderExecutor
 	_ = wsClient
-	_ = ctx
 
-	// TODO: WebSocket接続 → Ticker受信ループ → 指標計算 → 戦略判定 → 注文実行
+	// TODO: Plan 8拡張 — WebSocket接続 → Ticker受信ループ → 指標計算 → 戦略判定 → 注文実行
 	// 現時点ではREST APIサーバーとして稼働し、Trading Pipelineは次のイテレーションで実装
 
 	// シグナル待機
@@ -96,3 +125,33 @@ func main() {
 
 	log.Println("Trading Engine stopped")
 }
+```
+
+- [ ] **Step 2: ビルド確認**
+
+```bash
+cd backend && go build ./...
+```
+
+- [ ] **Step 3: 全テスト実行**
+
+```bash
+cd backend && go test ./...
+```
+
+- [ ] **Step 4: コミット**
+
+```bash
+git add backend/cmd/main.go
+git commit -m "feat: integrate Trading Engine with all components in main.go"
+```
+
+---
+
+### Task 2: 設計書更新
+
+- [ ] **Step 1: 設計書の実装進捗を更新**
+
+Plan 8の行を更新。
+
+- [ ] **Step 2: コミット**
