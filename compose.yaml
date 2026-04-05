@@ -31,6 +31,9 @@ services:
         condition: service_healthy
     ports:
       - "33000:3000"
+    volumes:
+      - ./frontend:/app/frontend
+      - /app/frontend/node_modules
     restart: unless-stopped
 
 volumes:

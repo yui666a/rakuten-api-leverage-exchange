@@ -60,7 +60,7 @@ export function CandlestickChart({ candles }: CandlestickChartProps) {
     if (!seriesRef.current || candles.length === 0) return
 
     const data: CandlestickData<Time>[] = candles.map((c) => ({
-      time: c.time as Time,
+      time: (Math.floor(c.time / 1000)) as Time,
       open: c.open,
       high: c.high,
       low: c.low,
