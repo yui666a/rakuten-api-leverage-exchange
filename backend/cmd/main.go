@@ -60,6 +60,8 @@ func main() {
 		RiskManager:         riskMgr,
 		LLMService:          llmSvc,
 		IndicatorCalculator: indicatorCalc,
+		MarketDataService:   marketDataSvc,
+		OrderClient:         restClient,
 	})
 
 	// --- Graceful Shutdown ---
