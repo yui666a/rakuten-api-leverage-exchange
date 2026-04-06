@@ -10,6 +10,7 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
 
@@ -23,12 +24,14 @@ type TradingPipeline struct {
 	interval    time.Duration
 	tradeAmount float64
 
-	restClient      repository.OrderClient
-	marketDataSvc   *usecase.MarketDataService
-	indicatorCalc   *usecase.IndicatorCalculator
-	strategyEngine  *usecase.StrategyEngine
-	orderExecutor   *usecase.OrderExecutor
-	riskMgr         *usecase.RiskManager
+	restClient       repository.OrderClient
+	marketDataSvc    *usecase.MarketDataService
+	indicatorCalc    *usecase.IndicatorCalculator
+	strategyEngine   *usecase.StrategyEngine
+	orderExecutor    *usecase.OrderExecutor
+	riskMgr          *usecase.RiskManager
+	tradeHistoryRepo *database.TradeHistoryRepo
+	riskStateRepo    *database.RiskStateRepo
 }
 
 // TradingPipelineConfig はパイプラインの設定。
@@ -46,17 +49,21 @@ func NewTradingPipeline(
 	strategyEngine *usecase.StrategyEngine,
 	orderExecutor *usecase.OrderExecutor,
 	riskMgr *usecase.RiskManager,
+	tradeHistoryRepo *database.TradeHistoryRepo,
+	riskStateRepo *database.RiskStateRepo,
 ) *TradingPipeline {
 	return &TradingPipeline{
-		symbolID:       cfg.SymbolID,
-		interval:       cfg.Interval,
-		tradeAmount:    cfg.TradeAmount,
-		restClient:     restClient,
-		marketDataSvc:  marketDataSvc,
-		indicatorCalc:  indicatorCalc,
-		strategyEngine: strategyEngine,
-		orderExecutor:  orderExecutor,
-		riskMgr:        riskMgr,
+		symbolID:         cfg.SymbolID,
+		interval:         cfg.Interval,
+		tradeAmount:      cfg.TradeAmount,
+		restClient:       restClient,
+		marketDataSvc:    marketDataSvc,
+		indicatorCalc:    indicatorCalc,
+		strategyEngine:   strategyEngine,
+		orderExecutor:    orderExecutor,
+		riskMgr:          riskMgr,
+		tradeHistoryRepo: tradeHistoryRepo,
+		riskStateRepo:    riskStateRepo,
 	}
 }
 
@@ -192,8 +199,9 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 
 	if result.Executed {
 		log.Printf("pipeline: order executed: orderId=%d side=%s amount=%.4f price=%.2f", result.OrderID, side, amount, price)
-		// ポジション・残高を同期
+		p.recordTrade(ctx, p.symbolID, result.OrderID, string(side), "open", price, amount, signal.Reason, false)
 		p.syncState(ctx)
+		p.persistRiskState(ctx)
 	} else {
 		log.Printf("pipeline: order not executed: %s", result.Reason)
 	}
@@ -228,12 +236,48 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 				}
 				if result.Executed {
 					log.Printf("pipeline: stop-loss closed: orderId=%d", result.OrderID)
-					// 損失を記録
 					loss := math.Abs(pos.FloatingProfit)
 					p.riskMgr.RecordLoss(loss)
+					closeSide := string(entity.OrderSideSell)
+					if pos.OrderSide == entity.OrderSideSell {
+						closeSide = string(entity.OrderSideBuy)
+					}
+					p.recordTrade(ctx, pos.SymbolID, result.OrderID, closeSide, "close", t.Last, pos.RemainingAmount, "stop-loss", true)
+					p.persistRiskState(ctx)
 				}
 			}
 		}
+	}
+}
+
+func (p *TradingPipeline) recordTrade(ctx context.Context, symbolID, orderID int64, side, action string, price, amount float64, reason string, isStopLoss bool) {
+	if p.tradeHistoryRepo == nil {
+		return
+	}
+	if err := p.tradeHistoryRepo.Save(ctx, database.TradeRecord{
+		SymbolID:   symbolID,
+		OrderID:    orderID,
+		Side:       side,
+		Action:     action,
+		Price:      price,
+		Amount:     amount,
+		Reason:     reason,
+		IsStopLoss: isStopLoss,
+	}); err != nil {
+		log.Printf("pipeline: failed to save trade history: %v", err)
+	}
+}
+
+func (p *TradingPipeline) persistRiskState(ctx context.Context) {
+	if p.riskStateRepo == nil {
+		return
+	}
+	status := p.riskMgr.GetStatus()
+	if err := p.riskStateRepo.Save(ctx, database.RiskState{
+		DailyLoss: status.DailyLoss,
+		Balance:   status.Balance,
+	}); err != nil {
+		log.Printf("pipeline: failed to persist risk state: %v", err)
 	}
 }
 
@@ -267,6 +311,38 @@ func (p *TradingPipeline) syncState(ctx context.Context) {
 func (p *TradingPipeline) syncStateInitial(ctx context.Context) {
 	p.syncState(ctx)
 	log.Println("initial state sync completed")
+}
+
+// restoreRiskState は保存されたリスク状態をRiskManagerに復元する。
+// 日付が変わっている場合、dailyLoss はリセットする。
+func restoreRiskState(ctx context.Context, repo *database.RiskStateRepo, riskMgr *usecase.RiskManager) {
+	if repo == nil {
+		return
+	}
+	state, err := repo.Load(ctx)
+	if err != nil {
+		log.Printf("failed to load risk state: %v", err)
+		return
+	}
+	if state == nil {
+		log.Println("no saved risk state found")
+		return
+	}
+
+	jst := time.FixedZone("JST", 9*60*60)
+	savedDate := time.Unix(state.UpdatedAt, 0).In(jst).Truncate(24 * time.Hour)
+	today := time.Now().In(jst).Truncate(24 * time.Hour)
+
+	if savedDate.Before(today) {
+		log.Printf("risk state from previous day (%s), resetting daily loss", savedDate.Format("2006-01-02"))
+		state.DailyLoss = 0
+	}
+
+	riskMgr.UpdateBalance(state.Balance)
+	if state.DailyLoss > 0 {
+		riskMgr.RecordLoss(state.DailyLoss)
+	}
+	log.Printf("risk state restored: balance=%.0f dailyLoss=%.0f", state.Balance, state.DailyLoss)
 }
 
 // startDailyLossReset は毎日0時(JST)に日次損失をリセットするgoroutineを起動する。
