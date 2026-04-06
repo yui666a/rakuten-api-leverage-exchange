@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,7 +22,7 @@ import (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("no .env file found, using environment variables")
+		slog.Info("no .env file found, using environment variables")
 	}
 
 	cfg := config.Load()
@@ -30,12 +30,14 @@ func main() {
 	// --- Database ---
 	db, err := database.NewDB(cfg.Database.Path)
 	if err != nil {
-		log.Fatal("failed to open database:", err)
+		slog.Error("failed to open database", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	if err := database.RunMigrations(db); err != nil {
-		log.Fatal("failed to run migrations:", err)
+		slog.Error("failed to run migrations", "error", err)
+		os.Exit(1)
 	}
 
 	// --- Infrastructure ---
@@ -62,7 +64,7 @@ func main() {
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
 
 	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, 7, "15min", "PT15M", 500); err != nil {
-		log.Printf("initial candle bootstrap failed: %v", err)
+		slog.Warn("initial candle bootstrap failed", "error", err)
 	}
 
 	// --- Risk State Restore ---
@@ -108,38 +110,51 @@ func main() {
 
 	// REST API server
 	go func() {
-		log.Printf("REST API starting on :%s", cfg.Server.Port)
+		slog.Info("REST API starting", "port", cfg.Server.Port)
 		if err := router.Run(":" + cfg.Server.Port); err != nil {
-			log.Printf("REST API server error: %v", err)
+			slog.Error("REST API server error", "error", err)
 		}
 	}()
 
-	log.Println("Trading Engine started")
-	log.Printf("Config: maxPosition=%.0f, maxDailyLoss=%.0f, stopLoss=%.1f%%, capital=%.0f",
-		cfg.Risk.MaxPositionAmount, cfg.Risk.MaxDailyLoss, cfg.Risk.StopLossPercent, cfg.Risk.InitialCapital)
+	slog.Info("Trading Engine started",
+		"maxPosition", cfg.Risk.MaxPositionAmount,
+		"maxDailyLoss", cfg.Risk.MaxDailyLoss,
+		"stopLoss", cfg.Risk.StopLossPercent,
+		"capital", cfg.Risk.InitialCapital,
+	)
 
 	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, 7)
 	go startDailyLossReset(ctx, riskMgr)
 
-	log.Printf("Trading config: tradeAmount=%.0f, pipelineInterval=%ds",
-		cfg.Trading.TradeAmount, cfg.Trading.PipelineIntervalSec)
-	log.Println("Trading pipeline ready. Use POST /api/v1/start to begin auto-trading.")
+	slog.Info("Trading pipeline ready",
+		"tradeAmount", cfg.Trading.TradeAmount,
+		"intervalSec", cfg.Trading.PipelineIntervalSec,
+	)
+	slog.Info("Trading pipeline ready. Use POST /api/v1/start to begin auto-trading.")
 
 	// シグナル待機
 	select {
 	case sig := <-sigCh:
-		log.Printf("received signal %s, shutting down...", sig)
+		slog.Info("received signal, shutting down", "signal", sig)
 		cancel()
 	case <-ctx.Done():
 	}
 
-	log.Println("Trading Engine stopped")
+	slog.Info("Trading Engine stopped")
 }
+
+const (
+	wsMaxSessionDuration = 110 * time.Minute // 2時間制限の10分前に事前再接続
+	wsInitialBackoff     = 1 * time.Second
+	wsMaxBackoff         = 60 * time.Second
+)
 
 func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub, symbolID int64) {
 	if wsClient == nil || marketDataSvc == nil {
 		return
 	}
+
+	backoff := wsInitialBackoff
 
 	for {
 		select {
@@ -151,41 +166,51 @@ func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDat
 
 		msgCh, err := wsClient.Connect(ctx)
 		if err != nil {
-			log.Printf("market websocket connect failed: %v", err)
-			waitForReconnect(ctx)
+			slog.Warn("market websocket connect failed", "error", err, "retryIn", backoff)
+			waitFor(ctx, backoff)
+			backoff = nextBackoff(backoff)
 			continue
 		}
 
 		for _, dataType := range []rakuten.DataType{rakuten.DataTypeTicker, rakuten.DataTypeOrderbook, rakuten.DataTypeTrades} {
 			if err := wsClient.Subscribe(ctx, symbolID, dataType); err != nil {
-				log.Printf("market websocket subscribe failed: %v", err)
+				slog.Warn("market websocket subscribe failed", "error", err)
 				_ = wsClient.Close()
-				waitForReconnect(ctx)
+				waitFor(ctx, backoff)
+				backoff = nextBackoff(backoff)
 				continue
 			}
 		}
 
-		log.Printf("market websocket subscribed: symbol=%d", symbolID)
+		slog.Info("market websocket subscribed", "symbolID", symbolID)
+		backoff = wsInitialBackoff // 接続成功でバックオフリセット
+
+		// 2時間制限の事前再接続タイマー
+		sessionTimer := time.NewTimer(wsMaxSessionDuration)
 
 		reconnect := false
 		for !reconnect {
 			select {
 			case <-ctx.Done():
+				sessionTimer.Stop()
 				_ = wsClient.Close()
 				return
+			case <-sessionTimer.C:
+				slog.Info("market websocket session approaching 2h limit, reconnecting proactively")
+				reconnect = true
 			case raw, ok := <-msgCh:
 				if !ok {
 					reconnect = true
 					break
 				}
-
 				handleMarketMessage(ctx, raw, marketDataSvc, realtimeHub)
 			}
 		}
 
-		log.Println("market websocket disconnected, reconnecting")
+		sessionTimer.Stop()
+		slog.Info("market websocket disconnected, reconnecting")
 		_ = wsClient.Close()
-		waitForReconnect(ctx)
+		waitFor(ctx, wsInitialBackoff)
 	}
 }
 
@@ -224,7 +249,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 	case bytes.Contains(raw, []byte(`"asks"`)):
 		var r rawOrderbook
 		if err := json.Unmarshal(raw, &r); err != nil {
-			log.Printf("market websocket orderbook decode failed: %v", err)
+			slog.Warn("market websocket orderbook decode failed", "error", err)
 			return
 		}
 		asks := make([]entity.OrderbookEntry, len(r.Asks))
@@ -251,7 +276,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 	case bytes.Contains(raw, []byte(`"trades"`)):
 		var trades entity.MarketTradesResponse
 		if err := json.Unmarshal(raw, &trades); err != nil {
-			log.Printf("market websocket trades decode failed: %v", err)
+			slog.Warn("market websocket trades decode failed", "error", err)
 			return
 		}
 		if realtimeHub != nil {
@@ -260,7 +285,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 	default:
 		var r rawTicker
 		if err := json.Unmarshal(raw, &r); err != nil {
-			log.Printf("market websocket ticker decode failed: %v", err)
+			slog.Warn("market websocket ticker decode failed", "error", err)
 			return
 		}
 		ticker := entity.Ticker{
@@ -278,11 +303,19 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 	}
 }
 
-func waitForReconnect(ctx context.Context) {
+func waitFor(ctx context.Context, d time.Duration) {
 	select {
 	case <-ctx.Done():
-	case <-time.After(3 * time.Second):
+	case <-time.After(d):
 	}
+}
+
+func nextBackoff(current time.Duration) time.Duration {
+	next := current * 2
+	if next > wsMaxBackoff {
+		return wsMaxBackoff
+	}
+	return next
 }
 
 func bootstrapCandles(
@@ -309,7 +342,7 @@ func bootstrapCandles(
 	}
 
 	if len(candles) == 0 {
-		log.Printf("candle bootstrap returned no candles: symbol=%d interval=%s", symbolID, internalInterval)
+		slog.Warn("candle bootstrap returned no candles", "symbolID", symbolID, "interval", internalInterval)
 		return nil
 	}
 
@@ -318,6 +351,6 @@ func bootstrapCandles(
 		return err
 	}
 
-	log.Printf("bootstrapped %d candles: symbol=%d interval=%s", len(candles), symbolID, internalInterval)
+	slog.Info("bootstrapped candles", "count", len(candles), "symbolID", symbolID, "interval", internalInterval)
 	return nil
 }
