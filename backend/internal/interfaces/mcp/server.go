@@ -174,21 +174,33 @@ func addUpdateConfigTool(s *server.MCPServer, deps Dependencies) {
 			args := req.GetArguments()
 			if v, ok := args["maxPositionAmount"]; ok {
 				if f, ok := v.(float64); ok {
+					if f <= 0 {
+						return gomcp.NewToolResultError("maxPositionAmount must be positive"), nil
+					}
 					cfg.MaxPositionAmount = f
 				}
 			}
 			if v, ok := args["maxDailyLoss"]; ok {
 				if f, ok := v.(float64); ok {
+					if f <= 0 {
+						return gomcp.NewToolResultError("maxDailyLoss must be positive"), nil
+					}
 					cfg.MaxDailyLoss = f
 				}
 			}
 			if v, ok := args["stopLossPercent"]; ok {
 				if f, ok := v.(float64); ok {
+					if f <= 0 {
+						return gomcp.NewToolResultError("stopLossPercent must be positive"), nil
+					}
 					cfg.StopLossPercent = f
 				}
 			}
 			if v, ok := args["initialCapital"]; ok {
 				if f, ok := v.(float64); ok {
+					if f <= 0 {
+						return gomcp.NewToolResultError("initialCapital must be positive"), nil
+					}
 					cfg.InitialCapital = f
 				}
 			}
