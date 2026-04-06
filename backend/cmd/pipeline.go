@@ -10,7 +10,6 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
-	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
 
@@ -30,8 +29,8 @@ type TradingPipeline struct {
 	strategyEngine   *usecase.StrategyEngine
 	orderExecutor    *usecase.OrderExecutor
 	riskMgr          *usecase.RiskManager
-	tradeHistoryRepo *database.TradeHistoryRepo
-	riskStateRepo    *database.RiskStateRepo
+	tradeHistoryRepo repository.TradeHistoryRepository
+	riskStateRepo    repository.RiskStateRepository
 }
 
 // TradingPipelineConfig はパイプラインの設定。
@@ -49,8 +48,8 @@ func NewTradingPipeline(
 	strategyEngine *usecase.StrategyEngine,
 	orderExecutor *usecase.OrderExecutor,
 	riskMgr *usecase.RiskManager,
-	tradeHistoryRepo *database.TradeHistoryRepo,
-	riskStateRepo *database.RiskStateRepo,
+	tradeHistoryRepo repository.TradeHistoryRepository,
+	riskStateRepo repository.RiskStateRepository,
 ) *TradingPipeline {
 	return &TradingPipeline{
 		symbolID:         cfg.SymbolID,
@@ -254,7 +253,7 @@ func (p *TradingPipeline) recordTrade(ctx context.Context, symbolID, orderID int
 	if p.tradeHistoryRepo == nil {
 		return
 	}
-	if err := p.tradeHistoryRepo.Save(ctx, database.TradeRecord{
+	if err := p.tradeHistoryRepo.Save(ctx, repository.TradeRecord{
 		SymbolID:   symbolID,
 		OrderID:    orderID,
 		Side:       side,
@@ -273,7 +272,7 @@ func (p *TradingPipeline) persistRiskState(ctx context.Context) {
 		return
 	}
 	status := p.riskMgr.GetStatus()
-	if err := p.riskStateRepo.Save(ctx, database.RiskState{
+	if err := p.riskStateRepo.Save(ctx, repository.RiskState{
 		DailyLoss: status.DailyLoss,
 		Balance:   status.Balance,
 	}); err != nil {
@@ -312,7 +311,7 @@ func (p *TradingPipeline) syncStateInitial(ctx context.Context) {
 
 // restoreRiskState は保存されたリスク状態をRiskManagerに復元する。
 // 日付が変わっている場合、dailyLoss はリセットする。
-func restoreRiskState(ctx context.Context, repo *database.RiskStateRepo, riskMgr *usecase.RiskManager) {
+func restoreRiskState(ctx context.Context, repo repository.RiskStateRepository, riskMgr *usecase.RiskManager) {
 	if repo == nil {
 		return
 	}

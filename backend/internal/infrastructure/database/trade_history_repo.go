@@ -5,21 +5,9 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
-)
 
-// TradeRecord は取引履歴の1レコード。
-type TradeRecord struct {
-	ID         int64   `json:"id"`
-	SymbolID   int64   `json:"symbolId"`
-	OrderID    int64   `json:"orderId"`
-	Side       string  `json:"side"`
-	Action     string  `json:"action"` // "open" or "close"
-	Price      float64 `json:"price"`
-	Amount     float64 `json:"amount"`
-	Reason     string  `json:"reason"`
-	IsStopLoss bool    `json:"isStopLoss"`
-	CreatedAt  int64   `json:"createdAt"`
-}
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+)
 
 // TradeHistoryRepo は取引履歴の永続化を行う。
 type TradeHistoryRepo struct {
@@ -30,7 +18,7 @@ func NewTradeHistoryRepo(db *sql.DB) *TradeHistoryRepo {
 	return &TradeHistoryRepo{db: db}
 }
 
-func (r *TradeHistoryRepo) Save(ctx context.Context, record TradeRecord) error {
+func (r *TradeHistoryRepo) Save(ctx context.Context, record repository.TradeRecord) error {
 	if record.CreatedAt == 0 {
 		record.CreatedAt = time.Now().Unix()
 	}
@@ -50,7 +38,7 @@ func (r *TradeHistoryRepo) Save(ctx context.Context, record TradeRecord) error {
 	return nil
 }
 
-func (r *TradeHistoryRepo) GetRecent(ctx context.Context, symbolID int64, limit int) ([]TradeRecord, error) {
+func (r *TradeHistoryRepo) GetRecent(ctx context.Context, symbolID int64, limit int) ([]repository.TradeRecord, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, symbol_id, order_id, side, action, price, amount, reason, is_stop_loss, created_at
 		 FROM trade_history
@@ -63,9 +51,9 @@ func (r *TradeHistoryRepo) GetRecent(ctx context.Context, symbolID int64, limit 
 	}
 	defer rows.Close()
 
-	var records []TradeRecord
+	var records []repository.TradeRecord
 	for rows.Next() {
-		var rec TradeRecord
+		var rec repository.TradeRecord
 		var isStopLoss int
 		if err := rows.Scan(&rec.ID, &rec.SymbolID, &rec.OrderID, &rec.Side, &rec.Action,
 			&rec.Price, &rec.Amount, &rec.Reason, &isStopLoss, &rec.CreatedAt); err != nil {
