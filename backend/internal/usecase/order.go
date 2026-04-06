@@ -3,7 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
@@ -54,7 +54,7 @@ func (e *OrderExecutor) ExecuteSignal(ctx context.Context, signal entity.Signal,
 
 	check := e.riskMgr.CheckOrder(ctx, proposal)
 	if !check.Approved {
-		log.Printf("order rejected by risk manager: %s", check.Reason)
+		slog.Info("order rejected by risk manager", "reason", check.Reason)
 		return &ExecutionResult{
 			Executed: false,
 			Reason:   fmt.Sprintf("risk rejected: %s", check.Reason),
@@ -81,8 +81,7 @@ func (e *OrderExecutor) ExecuteSignal(ctx context.Context, signal entity.Signal,
 		return nil, fmt.Errorf("API returned no orders")
 	}
 
-	log.Printf("order created: id=%d symbol=%d side=%s amount=%.6f",
-		orders[0].ID, signal.SymbolID, side, amount)
+	slog.Info("order created", "orderID", orders[0].ID, "symbolID", signal.SymbolID, "side", side, "amount", amount)
 
 	return &ExecutionResult{
 		Executed: true,
@@ -137,8 +136,7 @@ func (e *OrderExecutor) ClosePosition(ctx context.Context, pos entity.Position, 
 		return nil, fmt.Errorf("API returned no orders for close")
 	}
 
-	log.Printf("position closed: positionId=%d orderId=%d side=%s",
-		pos.ID, orders[0].ID, closeSide)
+	slog.Info("position closed", "positionID", pos.ID, "orderID", orders[0].ID, "side", closeSide)
 
 	return &ExecutionResult{
 		Executed: true,
