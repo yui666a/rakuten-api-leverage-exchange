@@ -63,7 +63,9 @@ func main() {
 	})
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
 
-	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, 7, "15min", "PT15M", 500); err != nil {
+	symbolID := cfg.Trading.SymbolID
+
+	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "15min", "PT15M", 500); err != nil {
 		slog.Warn("initial candle bootstrap failed", "error", err)
 	}
 
@@ -73,7 +75,7 @@ func main() {
 	// --- Trading Pipeline ---
 	pipeline := NewTradingPipeline(
 		TradingPipelineConfig{
-			SymbolID:    7,
+			SymbolID:    symbolID,
 			Interval:    time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
 			TradeAmount: cfg.Trading.TradeAmount,
 		},
@@ -123,7 +125,7 @@ func main() {
 		"capital", cfg.Risk.InitialCapital,
 	)
 
-	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, 7)
+	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID)
 	go startDailyLossReset(ctx, riskMgr)
 
 	slog.Info("Trading pipeline ready",
