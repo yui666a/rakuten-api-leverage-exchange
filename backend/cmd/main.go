@@ -43,6 +43,8 @@ func main() {
 	wsClient := rakuten.NewWSClient(cfg.Rakuten.WSURL)
 	claudeClient := llm.NewClaudeClient(cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.MaxTokens)
 	marketDataRepo := database.NewMarketDataRepo(db)
+	tradeHistoryRepo := database.NewTradeHistoryRepo(db)
+	riskStateRepo := database.NewRiskStateRepo(db)
 
 	// --- Usecase ---
 	marketDataSvc := usecase.NewMarketDataService(marketDataRepo)
@@ -63,6 +65,9 @@ func main() {
 		log.Printf("initial candle bootstrap failed: %v", err)
 	}
 
+	// --- Risk State Restore ---
+	restoreRiskState(context.Background(), riskStateRepo, riskMgr)
+
 	// --- Trading Pipeline ---
 	pipeline := NewTradingPipeline(
 		TradingPipelineConfig{
@@ -76,6 +81,8 @@ func main() {
 		strategyEngine,
 		orderExecutor,
 		riskMgr,
+		tradeHistoryRepo,
+		riskStateRepo,
 	)
 
 	// 起動時にポジション・残高を同期
@@ -291,12 +298,6 @@ func bootstrapCandles(
 		return nil
 	}
 
-	existing, err := marketDataSvc.GetCandles(ctx, symbolID, internalInterval, 1)
-	if err == nil && len(existing) > 0 {
-		log.Printf("skip candle bootstrap: symbol=%d interval=%s already has data", symbolID, internalInterval)
-		return nil
-	}
-
 	resp, err := restClient.GetCandlestick(ctx, symbolID, rakutenCandlestickType, nil, nil)
 	if err != nil {
 		return err
@@ -312,6 +313,7 @@ func bootstrapCandles(
 		return nil
 	}
 
+	// INSERT OR IGNORE により既存データと重複しないため、毎回全件渡して差分のみ保存される
 	if err := marketDataSvc.SaveCandles(ctx, symbolID, internalInterval, candles); err != nil {
 		return err
 	}
