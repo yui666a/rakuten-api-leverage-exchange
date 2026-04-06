@@ -290,9 +290,7 @@ func (p *TradingPipeline) syncState(ctx context.Context) {
 		p.riskMgr.UpdatePositions(positions)
 	}
 
-	assets, err := p.restClient.(interface {
-		GetAssets(ctx context.Context) ([]entity.Asset, error)
-	}).GetAssets(ctx)
+	assets, err := p.restClient.GetAssets(ctx)
 	if err != nil {
 		slog.Warn("pipeline: failed to sync assets", "error", err)
 	} else {
