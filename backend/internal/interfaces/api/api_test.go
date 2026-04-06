@@ -40,6 +40,12 @@ func (m *mockOrderClient) GetMyTrades(_ context.Context, _ int64) ([]entity.MyTr
 	}, nil
 }
 
+func (m *mockOrderClient) GetAssets(_ context.Context) ([]entity.Asset, error) {
+	return []entity.Asset{
+		{Currency: "JPY", OnhandAmount: "10000"},
+	}, nil
+}
+
 func init() {
 	gin.SetMode(gin.TestMode)
 }

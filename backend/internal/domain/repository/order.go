@@ -13,4 +13,5 @@ type OrderClient interface {
 	GetOrders(ctx context.Context, symbolID int64) ([]entity.Order, error)
 	GetPositions(ctx context.Context, symbolID int64) ([]entity.Position, error)
 	GetMyTrades(ctx context.Context, symbolID int64) ([]entity.MyTrade, error)
+	GetAssets(ctx context.Context) ([]entity.Asset, error)
 }
