@@ -131,7 +131,10 @@ func TestUpdateConfig(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	resp2, _ := http.Get(ts.URL + "/api/v1/config")
+	resp2, err := http.Get(ts.URL + "/api/v1/config")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
 	defer resp2.Body.Close()
 
 	var updated entity.RiskConfig
