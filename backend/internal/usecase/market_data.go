@@ -2,7 +2,7 @@ package usecase
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -56,7 +56,7 @@ func (s *MarketDataService) UnsubscribeTicker(ch <-chan entity.Ticker) {
 // HandleTicker persists a received ticker and distributes it to all subscribers.
 func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Ticker) {
 	if err := s.repo.SaveTicker(ctx, ticker); err != nil {
-		log.Printf("failed to save ticker: %v", err)
+		slog.Warn("failed to save ticker", "error", err)
 	}
 
 	s.mu.RLock()
@@ -72,7 +72,7 @@ func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Tick
 
 	if s.realtimeHub != nil {
 		if err := s.realtimeHub.PublishData("ticker", ticker.SymbolID, ticker); err != nil {
-			log.Printf("failed to publish ticker event: %v", err)
+			slog.Warn("failed to publish ticker event", "error", err)
 		}
 	}
 }

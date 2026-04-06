@@ -2,7 +2,7 @@ package usecase
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -56,7 +56,7 @@ func (s *LLMService) GetAdvice(ctx context.Context, marketCtx entity.MarketConte
 
 	advice, err := s.client.AnalyzeMarket(ctx, marketCtx)
 	if err != nil {
-		log.Printf("LLM error (symbol %d), using fallback: %v", symbolID, err)
+		slog.Warn("LLM error, using fallback", "symbolID", symbolID, "error", err)
 		if stale != nil {
 			// cachedAtを更新してTTLの間は再リクエストを抑制する
 			s.mu.Lock()

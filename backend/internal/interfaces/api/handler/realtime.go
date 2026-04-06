@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -77,7 +77,7 @@ func (h *RealtimeHandler) Stream(c *gin.Context) {
 			cancel()
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
-					log.Printf("frontend websocket write failed: %v", err)
+					slog.Warn("frontend websocket write failed", "error", err)
 				}
 				return
 			}
