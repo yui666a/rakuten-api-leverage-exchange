@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -246,9 +245,24 @@ type rawOrderbook struct {
 	Timestamp int64                `json:"timestamp"`
 }
 
+// detectMessageType はJSONのトップレベルキーを軽量パースしてメッセージ種別を判定する。
+func detectMessageType(raw []byte) string {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return "unknown"
+	}
+	if _, ok := probe["asks"]; ok {
+		return "orderbook"
+	}
+	if _, ok := probe["trades"]; ok {
+		return "trades"
+	}
+	return "ticker"
+}
+
 func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub) {
-	switch {
-	case bytes.Contains(raw, []byte(`"asks"`)):
+	switch detectMessageType(raw) {
+	case "orderbook":
 		var r rawOrderbook
 		if err := json.Unmarshal(raw, &r); err != nil {
 			slog.Warn("market websocket orderbook decode failed", "error", err)
@@ -275,7 +289,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 		if realtimeHub != nil {
 			_ = realtimeHub.PublishData("orderbook", orderbook.SymbolID, orderbook)
 		}
-	case bytes.Contains(raw, []byte(`"trades"`)):
+	case "trades":
 		var trades entity.MarketTradesResponse
 		if err := json.Unmarshal(raw, &trades); err != nil {
 			slog.Warn("market websocket trades decode failed", "error", err)
