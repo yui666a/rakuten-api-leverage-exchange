@@ -11,6 +11,12 @@ type Config struct {
 	Database DatabaseConfig
 	Risk     RiskConfig
 	LLM      LLMConfig
+	Trading  TradingConfig
+}
+
+type TradingConfig struct {
+	TradeAmount         float64 // 1回の注文金額（円）
+	PipelineIntervalSec int     // パイプライン評価間隔（秒）
 }
 
 type LLMConfig struct {
@@ -67,6 +73,10 @@ func Load() *Config {
 			Model:       getEnv("LLM_MODEL", "claude-haiku-3-5-latest"),
 			MaxTokens:   int64(getEnvInt("LLM_MAX_TOKENS", 1024)),
 			CacheTTLMin: getEnvInt("LLM_CACHE_TTL_MIN", 15),
+		},
+		Trading: TradingConfig{
+			TradeAmount:         getEnvFloat("TRADE_AMOUNT", 1000),
+			PipelineIntervalSec: getEnvInt("PIPELINE_INTERVAL_SEC", 60),
 		},
 	}
 }

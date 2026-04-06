@@ -63,6 +63,24 @@ func main() {
 		log.Printf("initial candle bootstrap failed: %v", err)
 	}
 
+	// --- Trading Pipeline ---
+	pipeline := NewTradingPipeline(
+		TradingPipelineConfig{
+			SymbolID:    7,
+			Interval:    time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
+			TradeAmount: cfg.Trading.TradeAmount,
+		},
+		restClient,
+		marketDataSvc,
+		indicatorCalc,
+		strategyEngine,
+		orderExecutor,
+		riskMgr,
+	)
+
+	// 起動時にポジション・残高を同期
+	pipeline.syncStateInitial(context.Background())
+
 	// --- REST API ---
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
@@ -71,6 +89,7 @@ func main() {
 		MarketDataService:   marketDataSvc,
 		RealtimeHub:         realtimeHub,
 		OrderClient:         restClient,
+		Pipeline:            pipeline,
 	})
 
 	// --- Graceful Shutdown ---
@@ -93,13 +112,11 @@ func main() {
 		cfg.Risk.MaxPositionAmount, cfg.Risk.MaxDailyLoss, cfg.Risk.StopLossPercent, cfg.Risk.InitialCapital)
 
 	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, 7)
+	go startDailyLossReset(ctx, riskMgr)
 
-	// コンポーネントの参照を保持（Trading Pipeline実装時に使用）
-	_ = strategyEngine
-	_ = orderExecutor
-
-	// TODO: WebSocket接続 → Ticker受信ループ → 指標計算 → 戦略判定 → 注文実行
-	// 現時点ではREST APIサーバーとして稼働し、Trading Pipelineは次のイテレーションで実装
+	log.Printf("Trading config: tradeAmount=%.0f, pipelineInterval=%ds",
+		cfg.Trading.TradeAmount, cfg.Trading.PipelineIntervalSec)
+	log.Println("Trading pipeline ready. Use POST /api/v1/start to begin auto-trading.")
 
 	// シグナル待機
 	select {
