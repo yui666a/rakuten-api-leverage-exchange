@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
@@ -39,7 +40,11 @@ func (m *mockOrderClient) GetMyTrades(_ context.Context, _ int64) ([]entity.MyTr
 	}, nil
 }
 
-func setupRouter() *httptest.Server {
+func init() {
+	gin.SetMode(gin.TestMode)
+}
+
+func setupRouter() *gin.Engine {
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount: 5000,
 		MaxDailyLoss:      5000,
@@ -56,26 +61,32 @@ func setupRouter() *httptest.Server {
 		OrderClient:         &mockOrderClient{},
 	}
 
-	router := NewRouter(deps)
-	return httptest.NewServer(router)
+	return NewRouter(deps)
+}
+
+func doRequest(router *gin.Engine, method, path string, body []byte) *httptest.ResponseRecorder {
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest(method, path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest(method, path, nil)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
 }
 
 func TestGetStatus(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/status", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/status")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
 	var body map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 	if body["status"] != "running" {
@@ -84,21 +95,15 @@ func TestGetStatus(t *testing.T) {
 }
 
 func TestGetConfig(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/config", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/config")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
 	var config entity.RiskConfig
-	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &config); err != nil {
 		t.Fatalf("failed to decode: %v", err)
 	}
 	if config.MaxPositionAmount != 5000 {
@@ -107,8 +112,7 @@ func TestGetConfig(t *testing.T) {
 }
 
 func TestUpdateConfig(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
 
 	newConfig := entity.RiskConfig{
 		MaxPositionAmount: 8000,
@@ -118,107 +122,71 @@ func TestUpdateConfig(t *testing.T) {
 	}
 	body, _ := json.Marshal(newConfig)
 
-	req, _ := http.NewRequest("PUT", ts.URL+"/api/v1/config", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	w := doRequest(router, "PUT", "/api/v1/config", body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	resp2, _ := http.Get(ts.URL + "/api/v1/config")
-	defer resp2.Body.Close()
+	w2 := doRequest(router, "GET", "/api/v1/config", nil)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w2.Code)
+	}
 
 	var updated entity.RiskConfig
-	json.NewDecoder(resp2.Body).Decode(&updated)
+	json.Unmarshal(w2.Body.Bytes(), &updated)
 	if updated.MaxPositionAmount != 8000 {
 		t.Fatalf("expected updated maxPositionAmount 8000, got %f", updated.MaxPositionAmount)
 	}
 }
 
 func TestGetPnL(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/pnl", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/pnl")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
 	var body map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&body)
+	json.Unmarshal(w.Body.Bytes(), &body)
 	if body["balance"] != float64(10000) {
 		t.Fatalf("expected balance 10000, got %v", body["balance"])
 	}
 }
 
 func TestBotStartStop(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
 
-	stopReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/stop", nil)
-	stopResp, err := http.DefaultClient.Do(stopReq)
-	if err != nil {
-		t.Fatalf("stop request failed: %v", err)
-	}
-	defer stopResp.Body.Close()
-
-	if stopResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from stop, got %d", stopResp.StatusCode)
+	w := doRequest(router, "POST", "/api/v1/stop", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from stop, got %d", w.Code)
 	}
 
-	statusResp, err := http.Get(ts.URL + "/api/v1/status")
-	if err != nil {
-		t.Fatalf("status request failed: %v", err)
-	}
-	defer statusResp.Body.Close()
-
+	w2 := doRequest(router, "GET", "/api/v1/status", nil)
 	var statusBody map[string]interface{}
-	if err := json.NewDecoder(statusResp.Body).Decode(&statusBody); err != nil {
+	if err := json.Unmarshal(w2.Body.Bytes(), &statusBody); err != nil {
 		t.Fatalf("failed to decode status: %v", err)
 	}
 	if statusBody["status"] != "stopped" {
 		t.Fatalf("expected stopped status, got %v", statusBody["status"])
 	}
 
-	startReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v1/start", nil)
-	startResp, err := http.DefaultClient.Do(startReq)
-	if err != nil {
-		t.Fatalf("start request failed: %v", err)
-	}
-	defer startResp.Body.Close()
-
-	if startResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 from start, got %d", startResp.StatusCode)
+	w3 := doRequest(router, "POST", "/api/v1/start", nil)
+	if w3.Code != http.StatusOK {
+		t.Fatalf("expected 200 from start, got %d", w3.Code)
 	}
 }
 
 func TestGetTrades(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/trades?symbolId=7", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/trades?symbolId=7")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
 	var trades []entity.MyTrade
-	if err := json.NewDecoder(resp.Body).Decode(&trades); err != nil {
+	if err := json.Unmarshal(w.Body.Bytes(), &trades); err != nil {
 		t.Fatalf("failed to decode trades: %v", err)
 	}
 	if len(trades) != 1 {
@@ -227,37 +195,25 @@ func TestGetTrades(t *testing.T) {
 }
 
 func TestGetStrategy_NoCached(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/strategy", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/strategy")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
 	var body map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&body)
+	json.Unmarshal(w.Body.Bytes(), &body)
 	if body["stance"] != "NONE" {
 		t.Fatalf("expected stance NONE, got %v", body["stance"])
 	}
 }
 
 func TestGetIndicators_InvalidSymbol(t *testing.T) {
-	ts := setupRouter()
-	defer ts.Close()
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/indicators/abc", nil)
 
-	resp, err := http.Get(ts.URL + "/api/v1/indicators/abc")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
