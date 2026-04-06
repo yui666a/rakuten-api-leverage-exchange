@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -22,9 +23,29 @@ func (h *RiskHandler) GetConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, status.Config)
 }
 
+func validateRiskConfig(cfg entity.RiskConfig) error {
+	if cfg.MaxPositionAmount <= 0 {
+		return fmt.Errorf("maxPositionAmount must be positive")
+	}
+	if cfg.MaxDailyLoss <= 0 {
+		return fmt.Errorf("maxDailyLoss must be positive")
+	}
+	if cfg.StopLossPercent <= 0 {
+		return fmt.Errorf("stopLossPercent must be positive")
+	}
+	if cfg.InitialCapital <= 0 {
+		return fmt.Errorf("initialCapital must be positive")
+	}
+	return nil
+}
+
 func (h *RiskHandler) UpdateConfig(c *gin.Context) {
 	var req entity.RiskConfig
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := validateRiskConfig(req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
