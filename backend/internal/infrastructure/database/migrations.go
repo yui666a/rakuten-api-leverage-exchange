@@ -48,6 +48,28 @@ func RunMigrations(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trades_symbol_time
 			ON trades(symbol_id, traded_at DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS trade_history (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol_id INTEGER NOT NULL,
+			order_id INTEGER NOT NULL,
+			side TEXT NOT NULL,
+			action TEXT NOT NULL,
+			price REAL NOT NULL,
+			amount REAL NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			is_stop_loss INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_trade_history_symbol_time
+			ON trade_history(symbol_id, created_at DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS risk_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			daily_loss REAL NOT NULL DEFAULT 0,
+			balance REAL NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
 	}
 
 	for _, m := range migrations {
