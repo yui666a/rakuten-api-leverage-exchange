@@ -78,6 +78,15 @@ func RunMigrations(db *sql.DB) error {
 			set_at INTEGER NOT NULL,
 			ttl_sec INTEGER NOT NULL
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS client_orders (
+			client_order_id TEXT PRIMARY KEY,
+			executed INTEGER NOT NULL,
+			order_id INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_client_orders_created
+			ON client_orders(created_at)`,
 	}
 
 	for _, m := range migrations {
