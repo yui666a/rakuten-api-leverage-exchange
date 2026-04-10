@@ -4,6 +4,7 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api/handler"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
@@ -17,12 +18,15 @@ type PipelineController interface {
 
 type Dependencies struct {
 	RiskManager         *usecase.RiskManager
-	LLMService          *usecase.LLMService
+	StanceResolver      *usecase.RuleBasedStanceResolver
 	IndicatorCalculator *usecase.IndicatorCalculator
 	MarketDataService   *usecase.MarketDataService
 	RealtimeHub         *usecase.RealtimeHub
 	OrderClient         repository.OrderClient
+	OrderExecutor       *usecase.OrderExecutor
 	Pipeline            PipelineController
+	RESTClient          *rakuten.RESTClient
+	ClientOrderRepo     repository.ClientOrderRepository
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -48,8 +52,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.PUT("/config", riskHandler.UpdateConfig)
 	v1.GET("/pnl", riskHandler.GetPnL)
 
-	strategyHandler := handler.NewStrategyHandler(deps.LLMService)
+	strategyHandler := handler.NewStrategyHandler(deps.StanceResolver)
 	v1.GET("/strategy", strategyHandler.GetStrategy)
+	v1.PUT("/strategy", strategyHandler.SetStrategy)
+	v1.DELETE("/strategy/override", strategyHandler.DeleteOverride)
 
 	indicatorHandler := handler.NewIndicatorHandler(deps.IndicatorCalculator)
 	v1.GET("/indicators/:symbol", indicatorHandler.GetIndicators)
@@ -68,6 +74,21 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 		tradeHandler := handler.NewTradeHandler(deps.OrderClient)
 		v1.GET("/trades", tradeHandler.GetTrades)
+	}
+
+	if deps.MarketDataService != nil {
+		tickerHandler := handler.NewTickerHandler(deps.MarketDataService)
+		v1.GET("/ticker", tickerHandler.GetTicker)
+	}
+
+	if deps.RESTClient != nil {
+		orderbookHandler := handler.NewOrderbookHandler(deps.RESTClient)
+		v1.GET("/orderbook", orderbookHandler.GetOrderbook)
+	}
+
+	if deps.OrderExecutor != nil && deps.ClientOrderRepo != nil {
+		orderHandler := handler.NewOrderHandler(deps.OrderExecutor, deps.ClientOrderRepo)
+		v1.POST("/orders", orderHandler.CreateOrder)
 	}
 
 	return r

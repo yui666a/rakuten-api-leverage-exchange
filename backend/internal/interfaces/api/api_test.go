@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -58,11 +57,11 @@ func setupRouter() *gin.Engine {
 		InitialCapital:    10000,
 	})
 
-	llmSvc := usecase.NewLLMService(nil, 15*time.Minute)
+	stanceResolver := usecase.NewRuleBasedStanceResolver(nil)
 
 	deps := Dependencies{
 		RiskManager:         riskMgr,
-		LLMService:          llmSvc,
+		StanceResolver:      stanceResolver,
 		IndicatorCalculator: nil,
 		OrderClient:         &mockOrderClient{},
 	}
@@ -200,7 +199,7 @@ func TestGetTrades(t *testing.T) {
 	}
 }
 
-func TestGetStrategy_NoCached(t *testing.T) {
+func TestGetStrategy_RuleBased(t *testing.T) {
 	router := setupRouter()
 	w := doRequest(router, "GET", "/api/v1/strategy", nil)
 
@@ -210,8 +209,11 @@ func TestGetStrategy_NoCached(t *testing.T) {
 
 	var body map[string]interface{}
 	json.Unmarshal(w.Body.Bytes(), &body)
-	if body["stance"] != "NONE" {
-		t.Fatalf("expected stance NONE, got %v", body["stance"])
+	if body["stance"] != "HOLD" {
+		t.Fatalf("expected stance HOLD (insufficient indicators), got %v", body["stance"])
+	}
+	if body["source"] != "rule-based" {
+		t.Fatalf("expected source 'rule-based', got %v", body["source"])
 	}
 }
 

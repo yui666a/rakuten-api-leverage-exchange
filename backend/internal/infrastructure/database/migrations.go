@@ -70,6 +70,23 @@ func RunMigrations(db *sql.DB) error {
 			balance REAL NOT NULL DEFAULT 0,
 			updated_at INTEGER NOT NULL DEFAULT 0
 		)`,
+
+		`CREATE TABLE IF NOT EXISTS stance_overrides (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			stance TEXT NOT NULL,
+			reasoning TEXT NOT NULL DEFAULT '',
+			set_at INTEGER NOT NULL,
+			ttl_sec INTEGER NOT NULL
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS client_orders (
+			client_order_id TEXT PRIMARY KEY,
+			executed INTEGER NOT NULL,
+			order_id INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_client_orders_created
+			ON client_orders(created_at)`,
 	}
 
 	for _, m := range migrations {
