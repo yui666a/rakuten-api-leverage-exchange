@@ -14,7 +14,7 @@ import (
 // Dependencies はMCPサーバーが必要とする依存コンポーネント。
 type Dependencies struct {
 	RiskManager         *usecase.RiskManager
-	LLMService          *usecase.LLMService
+	StanceResolver      *usecase.RuleBasedStanceResolver
 	IndicatorCalculator *usecase.IndicatorCalculator
 	MarketDataService   *usecase.MarketDataService
 	OrderClient         repository.OrderClient
@@ -77,18 +77,17 @@ func addPnLTool(s *server.MCPServer, deps Dependencies) {
 func addStrategyTool(s *server.MCPServer, deps Dependencies) {
 	s.AddTool(
 		gomcp.NewTool("get_strategy",
-			gomcp.WithDescription("LLMの現在の戦略方針を取得する（TREND_FOLLOW/CONTRARIAN/HOLD）"),
-			gomcp.WithNumber("symbolId",
-				gomcp.Description("銘柄ID（デフォルト: 7 = BTC_JPY）"),
-			),
+			gomcp.WithDescription("現在の戦略方針を取得する（TREND_FOLLOW/CONTRARIAN/HOLD）"),
 		),
 		func(ctx context.Context, req gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
-			symbolID := int64(req.GetInt("symbolId", 7))
-			advice := deps.LLMService.GetCachedAdvice(symbolID)
-			if advice == nil {
-				return gomcp.NewToolResultText("no cached strategy advice available"), nil
+			if deps.StanceResolver == nil {
+				return gomcp.NewToolResultError("stance resolver not configured"), nil
 			}
-			return jsonResult(advice)
+			override := deps.StanceResolver.GetOverride()
+			if override != nil {
+				return jsonResult(override)
+			}
+			return gomcp.NewToolResultText("no override set; stance determined by rules at trade time"), nil
 		},
 	)
 }

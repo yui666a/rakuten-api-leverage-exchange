@@ -13,7 +13,6 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
-	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/llm"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
@@ -42,7 +41,6 @@ func main() {
 	// --- Infrastructure ---
 	restClient := rakuten.NewRESTClient(cfg.Rakuten.BaseURL, cfg.Rakuten.APIKey, cfg.Rakuten.APISecret)
 	wsClient := rakuten.NewWSClient(cfg.Rakuten.WSURL)
-	claudeClient := llm.NewClaudeClient(cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.MaxTokens)
 	marketDataRepo := database.NewMarketDataRepo(db)
 	tradeHistoryRepo := database.NewTradeHistoryRepo(db)
 	riskStateRepo := database.NewRiskStateRepo(db)
@@ -52,8 +50,8 @@ func main() {
 	realtimeHub := usecase.NewRealtimeHub()
 	marketDataSvc.SetRealtimeHub(realtimeHub)
 	indicatorCalc := usecase.NewIndicatorCalculator(marketDataRepo)
-	llmSvc := usecase.NewLLMService(claudeClient, time.Duration(cfg.LLM.CacheTTLMin)*time.Minute)
 	stanceOverrideRepo := database.NewStanceOverrideRepo(db)
+	clientOrderRepo := database.NewClientOrderRepo(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
@@ -96,13 +94,15 @@ func main() {
 	// --- REST API ---
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
-		LLMService:          llmSvc,
 		StanceResolver:      stanceResolver,
 		IndicatorCalculator: indicatorCalc,
 		MarketDataService:   marketDataSvc,
 		RealtimeHub:         realtimeHub,
 		OrderClient:         restClient,
+		OrderExecutor:       orderExecutor,
 		Pipeline:            pipeline,
+		RESTClient:          restClient,
+		ClientOrderRepo:     clientOrderRepo,
 	})
 
 	// --- Graceful Shutdown ---

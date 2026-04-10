@@ -2,14 +2,12 @@ package main
 
 import (
 	"log"
-	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
-	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/llm"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
 	mcpserver "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/mcp"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
@@ -30,11 +28,11 @@ func main() {
 	}
 
 	restClient := rakuten.NewRESTClient(cfg.Rakuten.BaseURL, cfg.Rakuten.APIKey, cfg.Rakuten.APISecret)
-	claudeClient := llm.NewClaudeClient(cfg.LLM.APIKey, cfg.LLM.Model, cfg.LLM.MaxTokens)
 	marketDataRepo := database.NewMarketDataRepo(db)
+	stanceOverrideRepo := database.NewStanceOverrideRepo(db)
 
 	indicatorCalc := usecase.NewIndicatorCalculator(marketDataRepo)
-	llmSvc := usecase.NewLLMService(claudeClient, time.Duration(cfg.LLM.CacheTTLMin)*time.Minute)
+	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount: cfg.Risk.MaxPositionAmount,
 		MaxDailyLoss:      cfg.Risk.MaxDailyLoss,
@@ -44,7 +42,7 @@ func main() {
 
 	s := mcpserver.NewServer(mcpserver.Dependencies{
 		RiskManager:         riskMgr,
-		LLMService:          llmSvc,
+		StanceResolver:      stanceResolver,
 		IndicatorCalculator: indicatorCalc,
 		OrderClient:         restClient,
 	})
