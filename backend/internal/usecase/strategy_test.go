@@ -8,19 +8,25 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
 
-func ptr(f float64) *float64 { return &f }
+type mockStanceResolver struct {
+	result StanceResult
+}
+
+func (m *mockStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult {
+	return m.result
+}
 
 func TestStrategyEngine_TrendFollow_BuySignal(t *testing.T) {
 	// TREND_FOLLOW: SMA20 > SMA50 かつ RSI < 70 → BUY
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
 			Reasoning: "uptrend",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -38,15 +44,15 @@ func TestStrategyEngine_TrendFollow_BuySignal(t *testing.T) {
 }
 
 func TestStrategyEngine_TrendFollow_SellSignal(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
 			Reasoning: "downtrend",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -64,15 +70,15 @@ func TestStrategyEngine_TrendFollow_SellSignal(t *testing.T) {
 }
 
 func TestStrategyEngine_TrendFollow_HoldOnOverbought(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
 			Reasoning: "uptrend",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -90,15 +96,15 @@ func TestStrategyEngine_TrendFollow_HoldOnOverbought(t *testing.T) {
 }
 
 func TestStrategyEngine_Contrarian_BuyOnOversold(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceContrarian,
 			Reasoning: "oversold bounce expected",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -116,15 +122,15 @@ func TestStrategyEngine_Contrarian_BuyOnOversold(t *testing.T) {
 }
 
 func TestStrategyEngine_Contrarian_SellOnOverbought(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceContrarian,
 			Reasoning: "overbought reversal",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -142,15 +148,15 @@ func TestStrategyEngine_Contrarian_SellOnOverbought(t *testing.T) {
 }
 
 func TestStrategyEngine_Contrarian_HoldInNeutral(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceContrarian,
 			Reasoning: "range bound",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -168,15 +174,15 @@ func TestStrategyEngine_Contrarian_HoldInNeutral(t *testing.T) {
 }
 
 func TestStrategyEngine_HoldStance_AlwaysHold(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceHold,
 			Reasoning: "uncertain market",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -194,15 +200,15 @@ func TestStrategyEngine_HoldStance_AlwaysHold(t *testing.T) {
 }
 
 func TestStrategyEngine_InsufficientIndicators_Hold(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
+	resolver := &mockStanceResolver{
+		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
 			Reasoning: "uptrend",
+			Source:    "rule-based",
 			UpdatedAt: time.Now().Unix(),
 		},
 	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
+	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
@@ -213,29 +219,5 @@ func TestStrategyEngine_InsufficientIndicators_Hold(t *testing.T) {
 	}
 	if signal.Action != entity.SignalActionHold {
 		t.Fatalf("expected HOLD for insufficient indicators, got %s", signal.Action)
-	}
-}
-
-func TestStrategyEngine_InsufficientIndicators_SkipsLLMCall(t *testing.T) {
-	mock := &mockLLMClient{
-		response: &entity.StrategyAdvice{
-			Stance:    entity.MarketStanceTrendFollow,
-			Reasoning: "uptrend",
-			UpdatedAt: time.Now().Unix(),
-		},
-	}
-	llmSvc := NewLLMService(mock, 15*time.Minute)
-	engine := NewStrategyEngine(llmSvc)
-
-	// 指標不足の場合、LLMは呼ばれないべき
-	indicators := entity.IndicatorSet{
-		SymbolID: 7,
-	}
-	_, err := engine.Evaluate(context.Background(), indicators, 5000000)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mock.callCount != 0 {
-		t.Fatalf("expected 0 LLM calls for insufficient indicators, got %d", mock.callCount)
 	}
 }

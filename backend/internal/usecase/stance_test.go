@@ -10,6 +10,8 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 )
 
+func ptr(f float64) *float64 { return &f }
+
 func TestRuleBasedStanceResolver_RSIBelow25_Contrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{

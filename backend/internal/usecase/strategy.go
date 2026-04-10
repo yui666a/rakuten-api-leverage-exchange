@@ -7,21 +7,21 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
 
-// StrategyEngine はテクニカル指標とLLMの戦略方針を統合して売買シグナルを生成する。
+// StrategyEngine はテクニカル指標とスタンスリゾルバの戦略方針を統合して売買シグナルを生成する。
 type StrategyEngine struct {
-	llmService *LLMService
+	stanceResolver StanceResolver
 }
 
-func NewStrategyEngine(llmService *LLMService) *StrategyEngine {
+func NewStrategyEngine(stanceResolver StanceResolver) *StrategyEngine {
 	return &StrategyEngine{
-		llmService: llmService,
+		stanceResolver: stanceResolver,
 	}
 }
 
 // Evaluate はテクニカル指標と現在価格から売買シグナルを生成する。
-// 指標データが不足している場合はLLMを呼ばずにHOLDを返す。
+// 指標データが不足している場合はHOLDを返す。
 func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
-	// 指標チェックをLLM呼び出し前に行い、不要なAPI呼び出しとキャッシュ汚染を防ぐ
+	// 指標チェックを先に行い、不要な処理を防ぐ
 	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
@@ -31,26 +31,13 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 		}, nil
 	}
 
-	marketCtx := entity.MarketContext{
-		SymbolID:   indicators.SymbolID,
-		LastPrice:  lastPrice,
-		Indicators: indicators,
-	}
-	advice, err := e.llmService.GetAdvice(ctx, marketCtx)
-	if err != nil {
-		return &entity.Signal{
-			SymbolID:  indicators.SymbolID,
-			Action:    entity.SignalActionHold,
-			Reason:    "LLM error, defaulting to HOLD",
-			Timestamp: time.Now().Unix(),
-		}, nil
-	}
+	result := e.stanceResolver.Resolve(ctx, indicators)
 
 	sma20 := *indicators.SMA20
 	sma50 := *indicators.SMA50
 	rsi := *indicators.RSI14
 
-	switch advice.Stance {
+	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
 		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi), nil
 	case entity.MarketStanceContrarian:
