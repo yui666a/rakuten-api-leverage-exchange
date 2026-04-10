@@ -53,7 +53,9 @@ func main() {
 	marketDataSvc.SetRealtimeHub(realtimeHub)
 	indicatorCalc := usecase.NewIndicatorCalculator(marketDataRepo)
 	llmSvc := usecase.NewLLMService(claudeClient, time.Duration(cfg.LLM.CacheTTLMin)*time.Minute)
-	strategyEngine := usecase.NewStrategyEngine(llmSvc)
+	stanceOverrideRepo := database.NewStanceOverrideRepo(db)
+	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
+	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount: cfg.Risk.MaxPositionAmount,
 		MaxDailyLoss:      cfg.Risk.MaxDailyLoss,
@@ -95,6 +97,7 @@ func main() {
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
 		LLMService:          llmSvc,
+		StanceResolver:      stanceResolver,
 		IndicatorCalculator: indicatorCalc,
 		MarketDataService:   marketDataSvc,
 		RealtimeHub:         realtimeHub,
@@ -234,6 +237,21 @@ type rawOrderbookEntry struct {
 	Amount entity.StringFloat64 `json:"amount"`
 }
 
+type rawMarketTrade struct {
+	ID          int64                `json:"id"`
+	OrderSide   string               `json:"orderSide"`
+	Price       entity.StringFloat64 `json:"price"`
+	Amount      entity.StringFloat64 `json:"amount"`
+	AssetAmount entity.StringFloat64 `json:"assetAmount"`
+	TradedAt    int64                `json:"tradedAt"`
+}
+
+type rawMarketTradesResponse struct {
+	SymbolID  int64            `json:"symbolId"`
+	Trades    []rawMarketTrade `json:"trades"`
+	Timestamp int64            `json:"timestamp"`
+}
+
 type rawOrderbook struct {
 	SymbolID  int64               `json:"symbolId"`
 	Asks      []rawOrderbookEntry `json:"asks"`
@@ -261,7 +279,17 @@ func detectMessageType(raw []byte) string {
 }
 
 func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub) {
-	switch detectMessageType(raw) {
+	if len(raw) == 0 {
+		return
+	}
+
+	msgType := detectMessageType(raw)
+	if msgType == "unknown" {
+		slog.Debug("market websocket unknown message, skipping", "raw", string(raw))
+		return
+	}
+
+	switch msgType {
 	case "orderbook":
 		var r rawOrderbook
 		if err := json.Unmarshal(raw, &r); err != nil {
@@ -290,15 +318,30 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 			_ = realtimeHub.PublishData("orderbook", orderbook.SymbolID, orderbook)
 		}
 	case "trades":
-		var trades entity.MarketTradesResponse
-		if err := json.Unmarshal(raw, &trades); err != nil {
+		var r rawMarketTradesResponse
+		if err := json.Unmarshal(raw, &r); err != nil {
 			slog.Warn("market websocket trades decode failed", "error", err)
 			return
+		}
+		trades := entity.MarketTradesResponse{
+			SymbolID:  r.SymbolID,
+			Timestamp: r.Timestamp,
+			Trades:    make([]entity.MarketTrade, len(r.Trades)),
+		}
+		for i, t := range r.Trades {
+			trades.Trades[i] = entity.MarketTrade{
+				ID:          t.ID,
+				OrderSide:   t.OrderSide,
+				Price:       t.Price.Float64(),
+				Amount:      t.Amount.Float64(),
+				AssetAmount: t.AssetAmount.Float64(),
+				TradedAt:    t.TradedAt,
+			}
 		}
 		if realtimeHub != nil {
 			_ = realtimeHub.PublishData("market_trades", trades.SymbolID, trades)
 		}
-	default:
+	case "ticker":
 		var r rawTicker
 		if err := json.Unmarshal(raw, &r); err != nil {
 			slog.Warn("market websocket ticker decode failed", "error", err)

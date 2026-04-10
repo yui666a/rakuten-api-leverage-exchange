@@ -18,6 +18,7 @@ type PipelineController interface {
 type Dependencies struct {
 	RiskManager         *usecase.RiskManager
 	LLMService          *usecase.LLMService
+	StanceResolver      *usecase.RuleBasedStanceResolver
 	IndicatorCalculator *usecase.IndicatorCalculator
 	MarketDataService   *usecase.MarketDataService
 	RealtimeHub         *usecase.RealtimeHub
@@ -48,8 +49,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.PUT("/config", riskHandler.UpdateConfig)
 	v1.GET("/pnl", riskHandler.GetPnL)
 
-	strategyHandler := handler.NewStrategyHandler(deps.LLMService)
+	strategyHandler := handler.NewStrategyHandler(deps.StanceResolver)
 	v1.GET("/strategy", strategyHandler.GetStrategy)
+	v1.PUT("/strategy", strategyHandler.SetStrategy)
+	v1.DELETE("/strategy/override", strategyHandler.DeleteOverride)
 
 	indicatorHandler := handler.NewIndicatorHandler(deps.IndicatorCalculator)
 	v1.GET("/indicators/:symbol", indicatorHandler.GetIndicators)
