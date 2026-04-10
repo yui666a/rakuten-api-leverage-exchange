@@ -35,6 +35,22 @@ func (c *RESTClient) GetTicker(ctx context.Context, symbolID int64) (*entity.Tic
 	return &ticker, nil
 }
 
+type rawOrderbookEntry struct {
+	Price  entity.StringFloat64 `json:"price"`
+	Amount entity.StringFloat64 `json:"amount"`
+}
+
+type rawOrderbook struct {
+	SymbolID  int64                `json:"symbolId"`
+	Asks      []rawOrderbookEntry  `json:"asks"`
+	Bids      []rawOrderbookEntry  `json:"bids"`
+	BestAsk   entity.StringFloat64 `json:"bestAsk"`
+	BestBid   entity.StringFloat64 `json:"bestBid"`
+	MidPrice  entity.StringFloat64 `json:"midPrice"`
+	Spread    entity.StringFloat64 `json:"spread"`
+	Timestamp int64                `json:"timestamp"`
+}
+
 func (c *RESTClient) GetOrderbook(ctx context.Context, symbolID int64) (*entity.Orderbook, error) {
 	query := fmt.Sprintf("symbolId=%d", symbolID)
 	body, err := c.DoPublic(ctx, "GET", "/api/v1/orderbook", query, nil)
@@ -42,11 +58,30 @@ func (c *RESTClient) GetOrderbook(ctx context.Context, symbolID int64) (*entity.
 		return nil, fmt.Errorf("GetOrderbook: %w", err)
 	}
 
-	var ob entity.Orderbook
-	if err := json.Unmarshal(body, &ob); err != nil {
+	var raw rawOrderbook
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("GetOrderbook unmarshal: %w", err)
 	}
-	return &ob, nil
+
+	asks := make([]entity.OrderbookEntry, len(raw.Asks))
+	for i, a := range raw.Asks {
+		asks[i] = entity.OrderbookEntry{Price: a.Price.Float64(), Amount: a.Amount.Float64()}
+	}
+	bids := make([]entity.OrderbookEntry, len(raw.Bids))
+	for i, b := range raw.Bids {
+		bids[i] = entity.OrderbookEntry{Price: b.Price.Float64(), Amount: b.Amount.Float64()}
+	}
+
+	return &entity.Orderbook{
+		SymbolID:  raw.SymbolID,
+		Asks:      asks,
+		Bids:      bids,
+		BestAsk:   raw.BestAsk.Float64(),
+		BestBid:   raw.BestBid.Float64(),
+		MidPrice:  raw.MidPrice.Float64(),
+		Spread:    raw.Spread.Float64(),
+		Timestamp: raw.Timestamp,
+	}, nil
 }
 
 func (c *RESTClient) GetCandlestick(ctx context.Context, symbolID int64, candlestickType string, dateFrom, dateTo *int64) (*entity.CandlestickResponse, error) {
