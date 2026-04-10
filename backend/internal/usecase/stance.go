@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -58,7 +59,9 @@ func NewRuleBasedStanceResolver(repo repository.StanceOverrideRepository) *RuleB
 				}
 			} else {
 				// 期限切れのオーバーライドを削除
-				_ = repo.Delete(context.Background())
+				if err := repo.Delete(context.Background()); err != nil {
+					slog.Warn("failed to delete expired stance override on startup", "error", err)
+				}
 			}
 		}
 	}
@@ -151,8 +154,21 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, now
 	}
 }
 
+const (
+	minOverrideTTL = 1 * time.Minute
+	maxOverrideTTL = 1440 * time.Minute // 24h
+)
+
 // SetOverride はスタンスオーバーライドを設定する。
+// TTLは1分〜1440分(24時間)の範囲にクランプされる。
 func (r *RuleBasedStanceResolver) SetOverride(stance entity.MarketStance, reasoning string, ttl time.Duration) {
+	if ttl < minOverrideTTL {
+		ttl = minOverrideTTL
+	}
+	if ttl > maxOverrideTTL {
+		ttl = maxOverrideTTL
+	}
+
 	now := time.Now()
 	expiresAt := now.Add(ttl)
 
@@ -166,12 +182,14 @@ func (r *RuleBasedStanceResolver) SetOverride(stance entity.MarketStance, reason
 	r.mu.Unlock()
 
 	if r.repo != nil {
-		_ = r.repo.Save(context.Background(), repository.StanceOverrideRecord{
+		if err := r.repo.Save(context.Background(), repository.StanceOverrideRecord{
 			Stance:    string(stance),
 			Reasoning: reasoning,
 			SetAt:     now.Unix(),
 			TTLSec:    int64(ttl.Seconds()),
-		})
+		}); err != nil {
+			slog.Warn("failed to save stance override", "error", err)
+		}
 	}
 }
 
@@ -186,7 +204,9 @@ func (r *RuleBasedStanceResolver) clearOverrideInternal() {
 	r.mu.Unlock()
 
 	if r.repo != nil {
-		_ = r.repo.Delete(context.Background())
+		if err := r.repo.Delete(context.Background()); err != nil {
+			slog.Warn("failed to delete stance override", "error", err)
+		}
 	}
 }
 
