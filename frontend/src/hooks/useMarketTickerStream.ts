@@ -11,6 +11,9 @@ export function useMarketTickerStream(symbolId: number) {
   const lastIndicatorInvalidateRef = useRef(0)
 
   useEffect(() => {
+    // symbolId 変更時に旧シンボルの価格が残らないよう、即座にリセット
+    setTicker(null)
+
     let active = true
     let socket: WebSocket | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null

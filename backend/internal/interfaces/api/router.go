@@ -9,11 +9,14 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
 
-// PipelineController はTrading Pipelineの開始/停止を制御するインターフェース。
+// PipelineController はTrading Pipelineの開始/停止・銘柄切替を制御するインターフェース。
 type PipelineController interface {
 	Start()
 	Stop()
 	Running() bool
+	SymbolID() int64
+	TradeAmount() float64
+	SwitchSymbol(symbolID int64, tradeAmount float64, onSwitch func(oldID, newID int64))
 }
 
 type Dependencies struct {
@@ -27,6 +30,9 @@ type Dependencies struct {
 	Pipeline            PipelineController
 	RESTClient          *rakuten.RESTClient
 	ClientOrderRepo     repository.ClientOrderRepository
+	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
+	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
+	OnSymbolSwitch func(oldID, newID int64)
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -84,6 +90,27 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.RESTClient != nil {
 		orderbookHandler := handler.NewOrderbookHandler(deps.RESTClient)
 		v1.GET("/orderbook", orderbookHandler.GetOrderbook)
+
+		symbolHandler := handler.NewSymbolHandler(deps.RESTClient)
+		v1.GET("/symbols", symbolHandler.GetSymbols)
+	}
+
+	if deps.Pipeline != nil && deps.RESTClient != nil {
+		// switchSymbol を「pipeline.SwitchSymbol + OnSymbolSwitch」のクロージャに包んで
+		// handler に渡す。handler は onSwitch を知らない。
+		pipeline := deps.Pipeline
+		onSwitch := deps.OnSymbolSwitch
+		switchSymbolFn := func(symbolID int64, tradeAmount float64) {
+			pipeline.SwitchSymbol(symbolID, tradeAmount, onSwitch)
+		}
+		tradingConfigHandler := handler.NewTradingConfigHandler(
+			deps.Pipeline.SymbolID,
+			deps.Pipeline.TradeAmount,
+			switchSymbolFn,
+			deps.RESTClient,
+		)
+		v1.GET("/trading-config", tradingConfigHandler.GetTradingConfig)
+		v1.PUT("/trading-config", tradingConfigHandler.UpdateTradingConfig)
 	}
 
 	if deps.OrderExecutor != nil && deps.ClientOrderRepo != nil {

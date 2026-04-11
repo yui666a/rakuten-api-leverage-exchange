@@ -3,6 +3,7 @@ import type { LiveTicker } from '../lib/api'
 type LiveTickerCardProps = {
   ticker: LiveTicker | null
   connectionState: 'connecting' | 'connected' | 'disconnected'
+  currencyPair?: string
 }
 
 function formatYen(value: number | null | undefined) {
@@ -15,16 +16,17 @@ function formatTime(timestamp: number | null | undefined) {
   return new Date(timestamp).toLocaleTimeString('ja-JP')
 }
 
-export function LiveTickerCard({ ticker, connectionState }: LiveTickerCardProps) {
+export function LiveTickerCard({ ticker, connectionState, currencyPair }: LiveTickerCardProps) {
   const delta = ticker ? ticker.last - ticker.open : null
   const deltaClass = delta !== null && delta < 0 ? 'text-accent-red' : 'text-accent-green'
+  const pairLabel = currencyPair ?? 'BTC/JPY'
 
   return (
     <section className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Realtime Ticker</p>
-          <h2 className="mt-2 text-xl font-semibold text-white">BTC/JPY ライブ価格</h2>
+          <h2 className="mt-2 text-xl font-semibold text-white">{pairLabel} ライブ価格</h2>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-medium ${
           connectionState === 'connected'

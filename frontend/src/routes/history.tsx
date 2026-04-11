@@ -3,12 +3,14 @@ import { AppFrame } from '../components/AppFrame'
 import { TradeHistoryTable } from '../components/TradeHistoryTable'
 import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
 import { useTradeHistory } from '../hooks/useTradeHistory'
+import { useSymbolContext } from '../contexts/SymbolContext'
 
 export const Route = createFileRoute('/history')({ component: HistoryPage })
 
 function HistoryPage() {
-  useMarketTickerStream(7)
-  const { data: trades } = useTradeHistory(7)
+  const { symbolId } = useSymbolContext()
+  useMarketTickerStream(symbolId)
+  const { data: trades } = useTradeHistory(symbolId)
   const safeTrades = trades ?? []
   const totalProfit = safeTrades.reduce((sum, trade) => sum + trade.profit, 0)
 

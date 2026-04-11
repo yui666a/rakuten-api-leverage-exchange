@@ -14,19 +14,21 @@ import { useCandles } from '../hooks/useCandles'
 import { usePositions } from '../hooks/usePositions'
 import { useStartBot, useStopBot } from '../hooks/useBotControl'
 import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
+import { useSymbolContext } from '../contexts/SymbolContext'
 
 export const Route = createFileRoute('/')({ component: Dashboard })
 
 function Dashboard() {
+  const { symbolId, currentSymbol } = useSymbolContext()
   const { data: status } = useStatus()
   const { data: pnl } = usePnl()
   const { data: strategy } = useStrategy()
-  const { data: indicators } = useIndicators(7)
-  const { data: candles } = useCandles(7)
-  const { data: positions } = usePositions(7)
+  const { data: indicators } = useIndicators(symbolId)
+  const { data: candles } = useCandles(symbolId)
+  const { data: positions } = usePositions(symbolId)
   const startBot = useStartBot()
   const stopBot = useStopBot()
-  const { ticker, connectionState } = useMarketTickerStream(7)
+  const { ticker, connectionState } = useMarketTickerStream(symbolId)
 
   const statusLabel = status?.tradingHalted
     ? 'リスク停止'
@@ -66,7 +68,11 @@ function Dashboard() {
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
         <section className="space-y-4">
-          <LiveTickerCard ticker={ticker} connectionState={connectionState} />
+          <LiveTickerCard
+            ticker={ticker}
+            connectionState={connectionState}
+            currencyPair={currentSymbol?.currencyPair?.replace('_', '/')}
+          />
           <CandlestickChart candles={candles ?? []} />
           <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
             <div className="flex items-center justify-between">

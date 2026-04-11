@@ -1,5 +1,6 @@
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
+import { SymbolProvider } from '../contexts/SymbolContext'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -22,7 +23,9 @@ function RootComponent() {
         <HeadContent />
       </head>
       <body className="bg-bg-primary text-text-primary min-h-screen">
-        <Outlet />
+        <SymbolProvider>
+          <Outlet />
+        </SymbolProvider>
         <Scripts />
       </body>
     </html>
