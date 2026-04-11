@@ -16,6 +16,12 @@ function formatTime(timestamp: number | null | undefined) {
   return new Date(timestamp).toLocaleTimeString('ja-JP')
 }
 
+const CONNECTION_LABEL: Record<'connecting' | 'connected' | 'disconnected', string> = {
+  connecting: '接続中…',
+  connected: '接続済み',
+  disconnected: '切断',
+}
+
 export function LiveTickerCard({ ticker, connectionState, currencyPair }: LiveTickerCardProps) {
   const delta = ticker ? ticker.last - ticker.open : null
   const deltaClass = delta !== null && delta < 0 ? 'text-accent-red' : 'text-accent-green'
@@ -25,7 +31,7 @@ export function LiveTickerCard({ ticker, connectionState, currencyPair }: LiveTi
     <section className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Realtime Ticker</p>
+          <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">リアルタイムティッカー</p>
           <h2 className="mt-2 text-xl font-semibold text-white">{pairLabel} ライブ価格</h2>
         </div>
         <span className={`rounded-full px-3 py-1 text-xs font-medium ${
@@ -35,7 +41,7 @@ export function LiveTickerCard({ ticker, connectionState, currencyPair }: LiveTi
               ? 'bg-cyan-200/16 text-cyan-200'
               : 'bg-accent-red/18 text-accent-red'
         }`}>
-          {connectionState}
+          {CONNECTION_LABEL[connectionState]}
         </span>
       </div>
 
@@ -47,10 +53,10 @@ export function LiveTickerCard({ ticker, connectionState, currencyPair }: LiveTi
           </p>
         </div>
         <div className="grid grid-cols-2 gap-3 text-sm">
-          <Metric label="Best Ask" value={formatYen(ticker?.bestAsk)} />
-          <Metric label="Best Bid" value={formatYen(ticker?.bestBid)} />
-          <Metric label="Volume" value={ticker?.volume?.toLocaleString('ja-JP') ?? '\u2014'} />
-          <Metric label="Updated" value={formatTime(ticker?.timestamp)} />
+          <Metric label="売気配" value={formatYen(ticker?.bestAsk)} />
+          <Metric label="買気配" value={formatYen(ticker?.bestBid)} />
+          <Metric label="出来高" value={ticker?.volume?.toLocaleString('ja-JP') ?? '\u2014'} />
+          <Metric label="更新時刻" value={formatTime(ticker?.timestamp)} />
         </div>
       </div>
     </section>

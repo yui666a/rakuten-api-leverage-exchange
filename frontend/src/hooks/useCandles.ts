@@ -7,6 +7,7 @@ export function useCandles(symbolId: number, interval: CandleInterval = 'PT15M')
   return useQuery({
     queryKey: ['candles', symbolId, interval],
     queryFn: () => fetchApi<Candle[]>(`/candles/${symbolId}?interval=${interval}`),
+    enabled: Number.isFinite(symbolId),
     refetchInterval: 60_000,
   })
 }
