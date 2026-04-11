@@ -91,6 +91,36 @@ func main() {
 	// 起動時にポジション・残高を同期
 	pipeline.syncStateInitial(context.Background())
 
+	// --- Graceful Shutdown context ---
+	// NewRouter より先に ctx/cancel を定義する。onSymbolSwitch クロージャが ctx を
+	// キャプチャし、NewRouter に OnSymbolSwitch として渡すため。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// --- Symbol Switch channel + callback ---
+	// symbolSwitchCh は pipeline 側から startMarketRelay に切替を伝える。
+	// バッファ1の上書き方式: 古い値が取り残されていたら drain して新しい値を入れる。
+	symbolSwitchCh := make(chan [2]int64, 1)
+
+	onSymbolSwitch := func(oldID, newID int64) {
+		// 新シンボルのローソク足を bootstrap（main の ctx を使う）
+		if err := bootstrapCandles(ctx, restClient, marketDataSvc, newID, "15min", "PT15M", 500); err != nil {
+			slog.Warn("candle bootstrap for new symbol failed", "symbolID", newID, "error", err)
+		}
+
+		// 上書き方式: 古い値を drain してから送信。
+		// SwitchSymbol は pipeline の switchMu でシリアライズされているため、
+		// この関数が並行実行されることはない（drain + send の atomicity は不要）。
+		select {
+		case <-symbolSwitchCh:
+		default:
+		}
+		select {
+		case symbolSwitchCh <- [2]int64{oldID, newID}:
+		case <-ctx.Done():
+		}
+	}
+
 	// --- REST API ---
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
@@ -103,11 +133,8 @@ func main() {
 		Pipeline:            pipeline,
 		RESTClient:          restClient,
 		ClientOrderRepo:     clientOrderRepo,
+		OnSymbolSwitch:      onSymbolSwitch,
 	})
-
-	// --- Graceful Shutdown ---
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -127,7 +154,7 @@ func main() {
 		"capital", cfg.Risk.InitialCapital,
 	)
 
-	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID)
+	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID, symbolSwitchCh)
 	go startDailyLossReset(ctx, riskMgr)
 
 	slog.Info("Trading pipeline ready",
@@ -153,11 +180,19 @@ const (
 	wsMaxBackoff         = 60 * time.Second
 )
 
-func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub, symbolID int64) {
+func startMarketRelay(
+	ctx context.Context,
+	wsClient *rakuten.WSClient,
+	marketDataSvc *usecase.MarketDataService,
+	realtimeHub *usecase.RealtimeHub,
+	initialSymbolID int64,
+	symbolSwitchCh <-chan [2]int64,
+) {
 	if wsClient == nil || marketDataSvc == nil {
 		return
 	}
 
+	currentSymbolID := initialSymbolID
 	backoff := wsInitialBackoff
 
 	for {
@@ -176,17 +211,23 @@ func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDat
 			continue
 		}
 
+		// Subscribe — 失敗時は Close して外側ループで reconnect する
+		subscribeOK := true
 		for _, dataType := range []rakuten.DataType{rakuten.DataTypeTicker, rakuten.DataTypeOrderbook, rakuten.DataTypeTrades} {
-			if err := wsClient.Subscribe(ctx, symbolID, dataType); err != nil {
-				slog.Warn("market websocket subscribe failed", "error", err)
-				_ = wsClient.Close()
-				waitFor(ctx, backoff)
-				backoff = nextBackoff(backoff)
-				continue
+			if err := wsClient.Subscribe(ctx, currentSymbolID, dataType); err != nil {
+				slog.Warn("market websocket subscribe failed", "dataType", dataType, "error", err)
+				subscribeOK = false
+				break
 			}
 		}
+		if !subscribeOK {
+			_ = wsClient.Close()
+			waitFor(ctx, backoff)
+			backoff = nextBackoff(backoff)
+			continue
+		}
 
-		slog.Info("market websocket subscribed", "symbolID", symbolID)
+		slog.Info("market websocket subscribed", "symbolID", currentSymbolID)
 		backoff = wsInitialBackoff // 接続成功でバックオフリセット
 
 		// 2時間制限の事前再接続タイマー
@@ -202,6 +243,32 @@ func startMarketRelay(ctx context.Context, wsClient *rakuten.WSClient, marketDat
 			case <-sessionTimer.C:
 				slog.Info("market websocket session approaching 2h limit, reconnecting proactively")
 				reconnect = true
+			case ids := <-symbolSwitchCh:
+				oldID, newID := ids[0], ids[1]
+				slog.Info("switching websocket symbol subscription", "from", oldID, "to", newID)
+
+				// Unsubscribe（エラーはログのみ — 古いシンボルが既に無効でも続行する）
+				for _, dataType := range []rakuten.DataType{rakuten.DataTypeTicker, rakuten.DataTypeOrderbook, rakuten.DataTypeTrades} {
+					if err := wsClient.Unsubscribe(ctx, oldID, dataType); err != nil {
+						slog.Warn("market websocket unsubscribe failed", "dataType", dataType, "error", err)
+					}
+				}
+
+				// Subscribe（エラー時は reconnect。currentSymbolID は newID に進める）
+				switchOK := true
+				for _, dataType := range []rakuten.DataType{rakuten.DataTypeTicker, rakuten.DataTypeOrderbook, rakuten.DataTypeTrades} {
+					if err := wsClient.Subscribe(ctx, newID, dataType); err != nil {
+						slog.Error("market websocket re-subscribe failed, will reconnect", "dataType", dataType, "error", err)
+						switchOK = false
+						break
+					}
+				}
+				// pipeline 側は既に newID に切り替え済みなので、Subscribe 成否に関わらず
+				// currentSymbolID を newID にして reconnect 時に新シンボルで再接続する
+				currentSymbolID = newID
+				if !switchOK {
+					reconnect = true
+				}
 			case raw, ok := <-msgCh:
 				if !ok {
 					reconnect = true
