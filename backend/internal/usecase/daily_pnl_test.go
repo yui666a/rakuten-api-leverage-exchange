@@ -226,3 +226,61 @@ func TestDailyPnLCalculator_Compute_CacheExpiresAfterTTL(t *testing.T) {
 		t.Errorf("after TTL expiry, symbolsCalls = %d, want 2", fake.symbolsCalls.Load())
 	}
 }
+
+func TestDailyPnLCalculator_Compute_SingleflightCollapsesConcurrent(t *testing.T) {
+	// 100 goroutine が同時に Compute しても、楽天 API は 1 セット分 (symbols=1, trades=1, positions=1) しか呼ばれない
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}}
+	fake.positions[7] = nil
+
+	// 楽天 API に遅延を入れて singleflight の効果を観測する
+	// (fake 自体は同期的なので GetSymbols に sleep を仕込むためラッパーを使う)
+	slow := &slowFakeClient{inner: fake, delay: 50 * time.Millisecond}
+
+	c := NewDailyPnLCalculator(slow, 10*time.Second)
+	c.clock = &fixedClock{t: time.Date(2026, 4, 12, 12, 0, 0, 0, jst)}
+
+	var wg sync.WaitGroup
+	const N = 100
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Compute(context.Background()); err != nil {
+				t.Errorf("Compute: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if fake.symbolsCalls.Load() != 1 {
+		t.Errorf("symbolsCalls = %d, want 1 (singleflight collapses concurrent callers)",
+			fake.symbolsCalls.Load())
+	}
+	if fake.tradesCalls.Load() != 1 {
+		t.Errorf("tradesCalls = %d, want 1", fake.tradesCalls.Load())
+	}
+	if fake.positionsCalls.Load() != 1 {
+		t.Errorf("positionsCalls = %d, want 1", fake.positionsCalls.Load())
+	}
+}
+
+// slowFakeClient は GetSymbols/GetMyTrades/GetPositions に人工的な遅延を加える。
+// singleflight 検証用に「最初の呼び出しが完了する前に後続が合流できる」状況を作る。
+type slowFakeClient struct {
+	inner *fakeRakutenClient
+	delay time.Duration
+}
+
+func (s *slowFakeClient) GetSymbols(ctx context.Context) ([]entity.Symbol, error) {
+	time.Sleep(s.delay)
+	return s.inner.GetSymbols(ctx)
+}
+func (s *slowFakeClient) GetMyTrades(ctx context.Context, symbolID int64) ([]entity.MyTrade, error) {
+	time.Sleep(s.delay)
+	return s.inner.GetMyTrades(ctx, symbolID)
+}
+func (s *slowFakeClient) GetPositions(ctx context.Context, symbolID int64) ([]entity.Position, error) {
+	time.Sleep(s.delay)
+	return s.inner.GetPositions(ctx, symbolID)
+}
