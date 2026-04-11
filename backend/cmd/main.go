@@ -74,9 +74,10 @@ func main() {
 	// --- Trading Pipeline ---
 	pipeline := NewTradingPipeline(
 		TradingPipelineConfig{
-			SymbolID:    symbolID,
-			Interval:    time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
-			TradeAmount: cfg.Trading.TradeAmount,
+			SymbolID:          symbolID,
+			Interval:          time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
+			StateSyncInterval: time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
+			TradeAmount:       cfg.Trading.TradeAmount,
 		},
 		restClient,
 		marketDataSvc,
@@ -160,6 +161,7 @@ func main() {
 	slog.Info("Trading pipeline ready",
 		"tradeAmount", cfg.Trading.TradeAmount,
 		"intervalSec", cfg.Trading.PipelineIntervalSec,
+		"stateSyncIntervalSec", cfg.Trading.StateSyncIntervalSec,
 	)
 	slog.Info("Trading pipeline ready. Use POST /api/v1/start to begin auto-trading.")
 

@@ -18,6 +18,7 @@ type TradingConfig struct {
 	SymbolID            int64   // 取引対象シンボルID（デフォルト: 7 = BTC_JPY）
 	TradeAmount         float64 // 1回の注文金額（円）
 	PipelineIntervalSec int     // パイプライン評価間隔（秒）
+	StateSyncIntervalSec int    // ポジション・残高同期間隔（秒）
 }
 
 type LLMConfig struct {
@@ -76,9 +77,10 @@ func Load() *Config {
 			CacheTTLMin: getEnvInt("LLM_CACHE_TTL_MIN", 15),
 		},
 		Trading: TradingConfig{
-			SymbolID:            int64(getEnvInt("TRADE_SYMBOL_ID", 7)),
-			TradeAmount:         getEnvFloat("TRADE_AMOUNT", 1000),
-			PipelineIntervalSec: getEnvInt("PIPELINE_INTERVAL_SEC", 60),
+			SymbolID:             int64(getEnvInt("TRADE_SYMBOL_ID", 7)),
+			TradeAmount:          getEnvFloat("TRADE_AMOUNT", 1000),
+			PipelineIntervalSec:  getEnvInt("PIPELINE_INTERVAL_SEC", 60),
+			StateSyncIntervalSec: getEnvInt("STATE_SYNC_INTERVAL_SEC", 15),
 		},
 	}
 }
