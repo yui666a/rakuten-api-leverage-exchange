@@ -1,0 +1,140 @@
+package usecase
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+)
+
+// fakeRakutenClient は DailyPnLCalculator 単体テスト用のフェイク。
+// 呼び出し回数をカウントしてキャッシュ/singleflight 動作を検証できる。
+type fakeRakutenClient struct {
+	mu sync.Mutex
+
+	symbols []entity.Symbol
+
+	// trades[symbolID] = []MyTrade
+	trades map[int64][]entity.MyTrade
+	// positions[symbolID] = []Position
+	positions map[int64][]entity.Position
+
+	// 失敗設定
+	failSymbols        bool
+	failTradesSymbol   map[int64]bool
+	failPositionSymbol map[int64]bool
+
+	// call counters (atomic)
+	symbolsCalls   atomic.Int64
+	tradesCalls    atomic.Int64
+	positionsCalls atomic.Int64
+}
+
+func newFakeRakutenClient() *fakeRakutenClient {
+	return &fakeRakutenClient{
+		trades:             map[int64][]entity.MyTrade{},
+		positions:          map[int64][]entity.Position{},
+		failTradesSymbol:   map[int64]bool{},
+		failPositionSymbol: map[int64]bool{},
+	}
+}
+
+func (f *fakeRakutenClient) GetSymbols(_ context.Context) ([]entity.Symbol, error) {
+	f.symbolsCalls.Add(1)
+	if f.failSymbols {
+		return nil, errors.New("symbols failure")
+	}
+	return f.symbols, nil
+}
+
+func (f *fakeRakutenClient) GetMyTrades(_ context.Context, symbolID int64) ([]entity.MyTrade, error) {
+	f.tradesCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failTradesSymbol[symbolID] {
+		return nil, errors.New("trades failure")
+	}
+	return f.trades[symbolID], nil
+}
+
+func (f *fakeRakutenClient) GetPositions(_ context.Context, symbolID int64) ([]entity.Position, error) {
+	f.positionsCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failPositionSymbol[symbolID] {
+		return nil, errors.New("positions failure")
+	}
+	return f.positions[symbolID], nil
+}
+
+// fixedClock は固定時刻を返す Clock 実装。
+type fixedClock struct{ t time.Time }
+
+func (c *fixedClock) Now() time.Time { return c.t }
+
+// jst は JST 固定ゾーン。プロジェクトの既存コード (pipeline.go:500) と一致。
+var jst = time.FixedZone("JST", 9*60*60)
+
+// jstMillis は 指定した JST 日時の unix milliseconds を返すヘルパ。
+func jstMillis(year int, month time.Month, day, hour, minute, second, millis int) int64 {
+	return time.Date(year, month, day, hour, minute, second, millis*int(time.Millisecond), jst).UnixMilli()
+}
+
+func newCalculatorForTest(t *testing.T, fake *fakeRakutenClient, now time.Time) *DailyPnLCalculator {
+	t.Helper()
+	c := NewDailyPnLCalculator(fake, 10*time.Second)
+	c.clock = &fixedClock{t: now}
+	return c
+}
+
+func TestDailyPnLCalculator_Compute_SumsRealizedAndUnrealized(t *testing.T) {
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}, {ID: 10}}
+
+	// 今日 JST 2026-04-12 の trades
+	todayNoon := time.Date(2026, 4, 12, 12, 0, 0, 0, jst)
+
+	fake.trades[7] = []entity.MyTrade{
+		{ID: 1, SymbolID: 7, CloseTradeProfit: 100, CreatedAt: jstMillis(2026, 4, 12, 9, 0, 0, 0)},
+		{ID: 2, SymbolID: 7, CloseTradeProfit: -30, CreatedAt: jstMillis(2026, 4, 12, 10, 0, 0, 0)},
+	}
+	fake.trades[10] = []entity.MyTrade{
+		{ID: 3, SymbolID: 10, CloseTradeProfit: -6, CreatedAt: jstMillis(2026, 4, 12, 11, 0, 0, 0)},
+	}
+
+	fake.positions[7] = []entity.Position{
+		{ID: 100, SymbolID: 7, FloatingProfit: 50},
+	}
+	fake.positions[10] = []entity.Position{
+		{ID: 200, SymbolID: 10, FloatingProfit: -4},
+	}
+
+	c := newCalculatorForTest(t, fake, todayNoon)
+	got, err := c.Compute(context.Background())
+	if err != nil {
+		t.Fatalf("Compute returned error: %v", err)
+	}
+
+	// realized = 100 - 30 - 6 = 64
+	// unrealized = 50 - 4 = 46
+	// total = 110
+	if got.Realized != 64 {
+		t.Errorf("Realized = %v, want 64", got.Realized)
+	}
+	if got.Unrealized != 46 {
+		t.Errorf("Unrealized = %v, want 46", got.Unrealized)
+	}
+	if got.Total != 110 {
+		t.Errorf("Total = %v, want 110", got.Total)
+	}
+	if got.Stale {
+		t.Errorf("Stale = true, want false")
+	}
+	if got.ComputedAt != todayNoon.Unix() {
+		t.Errorf("ComputedAt = %v, want %v", got.ComputedAt, todayNoon.Unix())
+	}
+}

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,7 +74,108 @@ func NewDailyPnLCalculator(rest rakutenClient, ttl time.Duration) *DailyPnLCalcu
 }
 
 // Compute は最新または TTL 内キャッシュから DailyPnL を返す。
-// 実装は後続タスクで埋める。
 func (c *DailyPnLCalculator) Compute(ctx context.Context) (DailyPnL, error) {
-	return DailyPnL{}, nil
+	now := c.clock.Now()
+
+	// 1. キャッシュが生きていれば返す
+	if cached := c.cache.Load(); cached != nil && now.Before(cached.expiresAt) {
+		return cached.value, nil
+	}
+
+	// 2. singleflight で同時リクエストを 1 コールに収束
+	key := "daily_pnl"
+	res, err, _ := c.group.Do(key, func() (any, error) {
+		return c.fetchAndCompute(ctx, now)
+	})
+	if err != nil {
+		return DailyPnL{}, err
+	}
+	return res.(DailyPnL), nil
 }
+
+// fetchAndCompute は楽天 API から trades/positions を取得し、JST 今日分の realized と全 unrealized を計算する。
+func (c *DailyPnLCalculator) fetchAndCompute(ctx context.Context, now time.Time) (DailyPnL, error) {
+	symbols, err := c.rest.GetSymbols(ctx)
+	if err != nil {
+		return DailyPnL{}, err
+	}
+
+	nowJST := now.In(jstZone)
+	todayStart := time.Date(nowJST.Year(), nowJST.Month(), nowJST.Day(), 0, 0, 0, 0, jstZone)
+	cutoffMillis := todayStart.UnixMilli()
+
+	var (
+		mu         sync.Mutex
+		realized   float64
+		unrealized float64
+		failed     int
+	)
+
+	var wg sync.WaitGroup
+	for _, sym := range symbols {
+		sym := sym
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			trades, tErr := c.rest.GetMyTrades(ctx, sym.ID)
+			if tErr != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+			} else {
+				var sum float64
+				for _, tr := range trades {
+					if tr.CreatedAt >= cutoffMillis {
+						sum += float64(tr.CloseTradeProfit)
+					}
+				}
+				mu.Lock()
+				realized += sum
+				mu.Unlock()
+			}
+
+			positions, pErr := c.rest.GetPositions(ctx, sym.ID)
+			if pErr != nil {
+				mu.Lock()
+				failed++
+				mu.Unlock()
+			} else {
+				var sum float64
+				for _, pos := range positions {
+					sum += pos.FloatingProfit
+				}
+				mu.Lock()
+				unrealized += sum
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	// 全呼び出し失敗 (symbols × 2 = trades + positions) ならエラーにする。
+	// 1 つでも成功していれば stale フラグを立てて結果を返す。
+	totalCalls := len(symbols) * 2
+	if totalCalls > 0 && failed == totalCalls {
+		return DailyPnL{}, errors.New("daily_pnl: all rakuten API calls failed")
+	}
+
+	result := DailyPnL{
+		Realized:   realized,
+		Unrealized: unrealized,
+		Total:      realized + unrealized,
+		Stale:      failed > 0,
+		ComputedAt: now.Unix(),
+	}
+
+	c.mu.Lock()
+	c.cache.Store(&cachedPnL{
+		value:     result,
+		expiresAt: now.Add(c.ttl),
+	})
+	c.mu.Unlock()
+
+	return result, nil
+}
+
+// jstZone は pipeline.go の restoreRiskState と同じ JST 固定ゾーン。
+var jstZone = time.FixedZone("JST", 9*60*60)
