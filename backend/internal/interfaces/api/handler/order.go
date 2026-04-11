@@ -87,7 +87,7 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	result, err := h.orderExecutor.ExecuteSignal(c.Request.Context(), signal, 0, req.Amount)
+	result, err := h.orderExecutor.ExecuteSignal(c.Request.Context(), req.ClientOrderID, signal, 0, req.Amount)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

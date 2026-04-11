@@ -112,7 +112,7 @@ func (h *PositionHandler) ClosePosition(c *gin.Context) {
 		return
 	}
 
-	result, err := h.orderExecutor.ClosePosition(c.Request.Context(), *pos, pos.Price)
+	result, err := h.orderExecutor.ClosePosition(c.Request.Context(), req.ClientOrderID, *pos, pos.Price)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
