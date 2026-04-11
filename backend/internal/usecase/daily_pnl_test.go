@@ -138,3 +138,29 @@ func TestDailyPnLCalculator_Compute_SumsRealizedAndUnrealized(t *testing.T) {
 		t.Errorf("ComputedAt = %v, want %v", got.ComputedAt, todayNoon.Unix())
 	}
 }
+
+func TestDailyPnLCalculator_Compute_JSTBoundary(t *testing.T) {
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}}
+
+	// now = 2026-04-12 00:00:01 JST (今日になった直後)
+	now := time.Date(2026, 4, 12, 0, 0, 1, 0, jst)
+
+	fake.trades[7] = []entity.MyTrade{
+		// 昨日 23:59:59.999 JST の trade → 除外されるべき
+		{ID: 1, SymbolID: 7, CloseTradeProfit: 1000, CreatedAt: jstMillis(2026, 4, 11, 23, 59, 59, 999)},
+		// 今日 00:00:00.000 JST ちょうど → 含まれるべき
+		{ID: 2, SymbolID: 7, CloseTradeProfit: 7, CreatedAt: jstMillis(2026, 4, 12, 0, 0, 0, 0)},
+	}
+	fake.positions[7] = nil
+
+	c := newCalculatorForTest(t, fake, now)
+	got, err := c.Compute(context.Background())
+	if err != nil {
+		t.Fatalf("Compute returned error: %v", err)
+	}
+
+	if got.Realized != 7 {
+		t.Errorf("Realized = %v, want 7 (yesterday trade should be excluded, today 00:00 should be included)", got.Realized)
+	}
+}
