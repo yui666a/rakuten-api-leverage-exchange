@@ -284,3 +284,61 @@ func (s *slowFakeClient) GetPositions(ctx context.Context, symbolID int64) ([]en
 	time.Sleep(s.delay)
 	return s.inner.GetPositions(ctx, symbolID)
 }
+
+func TestDailyPnLCalculator_Compute_PartialFailureReturnsStale(t *testing.T) {
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}, {ID: 10}}
+
+	fake.trades[7] = []entity.MyTrade{
+		{ID: 1, SymbolID: 7, CloseTradeProfit: 20, CreatedAt: jstMillis(2026, 4, 12, 12, 0, 0, 0)},
+	}
+	// symbol 10 の positions だけ失敗させる
+	fake.failPositionSymbol[10] = true
+	fake.positions[7] = []entity.Position{{FloatingProfit: 5}}
+
+	c := newCalculatorForTest(t, fake, time.Date(2026, 4, 12, 13, 0, 0, 0, jst))
+	got, err := c.Compute(context.Background())
+	if err != nil {
+		t.Fatalf("Compute should not error on partial failure: %v", err)
+	}
+	if !got.Stale {
+		t.Errorf("Stale = false, want true on partial failure")
+	}
+	// realized は symbol 7 の 20
+	if got.Realized != 20 {
+		t.Errorf("Realized = %v, want 20", got.Realized)
+	}
+	// unrealized は symbol 7 の 5 のみ (symbol 10 は失敗で 0 扱い)
+	if got.Unrealized != 5 {
+		t.Errorf("Unrealized = %v, want 5", got.Unrealized)
+	}
+}
+
+func TestDailyPnLCalculator_Compute_AllFailureReturnsError(t *testing.T) {
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}}
+	fake.failTradesSymbol[7] = true
+	fake.failPositionSymbol[7] = true
+
+	c := newCalculatorForTest(t, fake, time.Date(2026, 4, 12, 12, 0, 0, 0, jst))
+	_, err := c.Compute(context.Background())
+	if err == nil {
+		t.Fatalf("expected error on all-failure, got nil")
+	}
+}
+
+func TestDailyPnLCalculator_Compute_Empty(t *testing.T) {
+	fake := newFakeRakutenClient()
+	fake.symbols = []entity.Symbol{{ID: 7}}
+	fake.trades[7] = nil
+	fake.positions[7] = nil
+
+	c := newCalculatorForTest(t, fake, time.Date(2026, 4, 12, 12, 0, 0, 0, jst))
+	got, err := c.Compute(context.Background())
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if got.Total != 0 || got.Realized != 0 || got.Unrealized != 0 || got.Stale {
+		t.Errorf("empty result got %+v, want all zero and Stale=false", got)
+	}
+}
