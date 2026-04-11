@@ -37,13 +37,12 @@ function Dashboard() {
         ? '稼働中'
         : '\u2014'
 
-  const dailyPnl = pnl ? -pnl.dailyLoss : null
+  const dailyPnlTotal = pnl?.dailyPnl?.total ?? null
+  const dailyPnlStale = pnl?.dailyPnl?.stale ?? false
   const dailyPnlLabel =
-    dailyPnl === null
+    dailyPnlTotal === null
       ? '\u2014'
-      : dailyPnl === 0
-        ? '¥0'
-        : `¥${dailyPnl.toLocaleString()}`
+      : `${dailyPnlTotal < 0 ? '-' : ''}¥${Math.abs(dailyPnlTotal).toLocaleString()}${dailyPnlStale ? '*' : ''}`
 
   const reasoningLabel = strategy?.reasoning
     ? strategy.reasoning === 'insufficient indicator data'
@@ -65,7 +64,7 @@ function Dashboard() {
         <KpiCard
           label="日次損益"
           value={dailyPnlLabel}
-          color={pnl && pnl.dailyLoss > 0 ? 'text-accent-red' : 'text-accent-green'}
+          color={dailyPnlTotal !== null && dailyPnlTotal < 0 ? 'text-accent-red' : 'text-accent-green'}
         />
         <KpiCard
           label="戦略方針"

@@ -30,6 +30,7 @@ type Dependencies struct {
 	Pipeline            PipelineController
 	RESTClient          *rakuten.RESTClient
 	ClientOrderRepo     repository.ClientOrderRepository
+	DailyPnLCalculator  *usecase.DailyPnLCalculator
 	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
 	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
 	OnSymbolSwitch func(oldID, newID int64)
@@ -53,7 +54,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.POST("/start", botHandler.Start)
 	v1.POST("/stop", botHandler.Stop)
 
-	riskHandler := handler.NewRiskHandler(deps.RiskManager, deps.RealtimeHub)
+	riskHandler := handler.NewRiskHandler(deps.RiskManager, deps.RealtimeHub, deps.DailyPnLCalculator)
 	v1.GET("/config", riskHandler.GetConfig)
 	v1.PUT("/config", riskHandler.UpdateConfig)
 	v1.GET("/pnl", riskHandler.GetPnL)

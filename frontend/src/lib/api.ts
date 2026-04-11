@@ -15,11 +15,20 @@ export type StatusResponse = {
   totalPosition: number
 }
 
+export type DailyPnLBreakdown = {
+  realized: number
+  unrealized: number
+  total: number
+  stale: boolean
+  computedAt: number
+}
+
 export type PnlResponse = {
   balance: number
   dailyLoss: number
   totalPosition: number
   tradingHalted: boolean
+  dailyPnl?: DailyPnLBreakdown
 }
 
 export type StrategyResponse = {

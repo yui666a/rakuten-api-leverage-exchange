@@ -123,6 +123,8 @@ func main() {
 	}
 
 	// --- REST API ---
+	dailyPnLCalc := usecase.NewDailyPnLCalculator(restClient, 10*time.Second)
+
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
 		StanceResolver:      stanceResolver,
@@ -135,6 +137,7 @@ func main() {
 		RESTClient:          restClient,
 		ClientOrderRepo:     clientOrderRepo,
 		OnSymbolSwitch:      onSymbolSwitch,
+		DailyPnLCalculator:  dailyPnLCalc,
 	})
 
 	sigCh := make(chan os.Signal, 1)
