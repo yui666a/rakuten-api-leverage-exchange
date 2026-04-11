@@ -46,9 +46,10 @@ type TradingPipeline struct {
 	mu       sync.RWMutex // フィールド保護（snapshot 経由で読む）
 	cancel   context.CancelFunc
 
-	symbolID    int64
-	interval    time.Duration
-	tradeAmount float64
+	symbolID          int64
+	interval          time.Duration
+	stateSyncInterval time.Duration
+	tradeAmount       float64
 
 	restClient       repository.OrderClient
 	marketDataSvc    *usecase.MarketDataService
@@ -77,9 +78,10 @@ func (p *TradingPipeline) snapshot() tradingSnapshot {
 
 // TradingPipelineConfig はパイプラインの設定。
 type TradingPipelineConfig struct {
-	SymbolID    int64
-	Interval    time.Duration
-	TradeAmount float64
+	SymbolID          int64
+	Interval          time.Duration
+	StateSyncInterval time.Duration
+	TradeAmount       float64
 }
 
 func NewTradingPipeline(
@@ -94,17 +96,18 @@ func NewTradingPipeline(
 	riskStateRepo repository.RiskStateRepository,
 ) *TradingPipeline {
 	return &TradingPipeline{
-		symbolID:         cfg.SymbolID,
-		interval:         cfg.Interval,
-		tradeAmount:      cfg.TradeAmount,
-		restClient:       restClient,
-		marketDataSvc:    marketDataSvc,
-		indicatorCalc:    indicatorCalc,
-		strategyEngine:   strategyEngine,
-		orderExecutor:    orderExecutor,
-		riskMgr:          riskMgr,
-		tradeHistoryRepo: tradeHistoryRepo,
-		riskStateRepo:    riskStateRepo,
+		symbolID:          cfg.SymbolID,
+		interval:          cfg.Interval,
+		stateSyncInterval: cfg.StateSyncInterval,
+		tradeAmount:       cfg.TradeAmount,
+		restClient:        restClient,
+		marketDataSvc:     marketDataSvc,
+		indicatorCalc:     indicatorCalc,
+		strategyEngine:    strategyEngine,
+		orderExecutor:     orderExecutor,
+		riskMgr:           riskMgr,
+		tradeHistoryRepo:  tradeHistoryRepo,
+		riskStateRepo:     riskStateRepo,
 	}
 }
 
@@ -131,6 +134,7 @@ func (p *TradingPipeline) startLocked() {
 
 	go p.runTradingLoop(ctx)
 	go p.runStopLossMonitor(ctx)
+	go p.runStateSyncLoop(ctx)
 
 	slog.Info("trading pipeline started")
 }
@@ -413,6 +417,37 @@ func (p *TradingPipeline) persistRiskState(ctx context.Context) {
 		Balance:   status.Balance,
 	}); err != nil {
 		slog.Error("pipeline: failed to persist risk state", "error", err)
+	}
+}
+
+// runStateSyncLoop は一定間隔で楽天APIからポジション・残高を取得し、RiskManagerに反映する。
+// これにより、画面の残高・損益表示がパイプライン外での約定（手動クローズ、別セッション、
+// stop-loss 経路など syncState を直接呼ばないコードパス）でも最新状態に追随する。
+// 間隔は stateSyncInterval を使い、LLM 評価ループ (interval) とは独立させている。
+func (p *TradingPipeline) runStateSyncLoop(ctx context.Context) {
+	// テスト時に依存が nil の場合はループを回さない
+	if p.restClient == nil || p.riskMgr == nil {
+		<-ctx.Done()
+		return
+	}
+
+	// stateSyncInterval 未設定時は評価間隔にフォールバック
+	syncInterval := p.stateSyncInterval
+	if syncInterval <= 0 {
+		syncInterval = p.interval
+	}
+
+	ticker := time.NewTicker(syncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.syncState(ctx)
+			p.persistRiskState(ctx)
+		}
 	}
 }
 
