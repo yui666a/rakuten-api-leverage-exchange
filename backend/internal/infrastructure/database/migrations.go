@@ -5,6 +5,44 @@ import (
 	"fmt"
 )
 
+// addColumnIfNotExists は SQLite の ALTER TABLE ADD COLUMN を冪等に実行する。
+// SQLite は `ADD COLUMN IF NOT EXISTS` をサポートしないため、PRAGMA table_info で
+// 既存カラムを確認してから ALTER を発行する。
+// columnDef は "<name> <type> [DEFAULT <value>] ..." の形式 (ADD COLUMN の右辺)。
+func addColumnIfNotExists(db *sql.DB, table, columnName, columnDef string) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info(%s): %w", table, err)
+		}
+		if name == columnName {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info(%s): %w", table, err)
+	}
+
+	stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", table, columnDef)
+	if _, err := db.Exec(stmt); err != nil {
+		return fmt.Errorf("alter table %s add column %s: %w", table, columnName, err)
+	}
+	return nil
+}
+
 // RunMigrations creates the database schema.
 // Uses IF NOT EXISTS so it can be run idempotently.
 func RunMigrations(db *sql.DB) error {
@@ -93,6 +131,33 @@ func RunMigrations(db *sql.DB) error {
 		if _, err := db.Exec(m); err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
+	}
+
+	// client_orders をライフサイクル監査ログに格上げするための ALTER 群。
+	// 既存行は status='completed' で保護される (executed=true 前提のレコードのみ存在していたため)。
+	clientOrderColumns := []struct {
+		name string
+		def  string
+	}{
+		{"status", "status TEXT NOT NULL DEFAULT 'completed'"},
+		{"symbol_id", "symbol_id INTEGER NOT NULL DEFAULT 0"},
+		{"intent", "intent TEXT NOT NULL DEFAULT ''"},
+		{"side", "side TEXT NOT NULL DEFAULT ''"},
+		{"amount", "amount REAL NOT NULL DEFAULT 0"},
+		{"position_id", "position_id INTEGER NOT NULL DEFAULT 0"},
+		{"raw_response", "raw_response TEXT NOT NULL DEFAULT ''"},
+		{"error_message", "error_message TEXT NOT NULL DEFAULT ''"},
+		{"updated_at", "updated_at INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, col := range clientOrderColumns {
+		if err := addColumnIfNotExists(db, "client_orders", col.name, col.def); err != nil {
+			return fmt.Errorf("client_orders alter: %w", err)
+		}
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_client_orders_status
+		ON client_orders(status, updated_at)`); err != nil {
+		return fmt.Errorf("create idx_client_orders_status: %w", err)
 	}
 
 	return nil

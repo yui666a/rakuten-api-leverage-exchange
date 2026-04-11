@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
 
@@ -17,6 +18,10 @@ type mockOrderClient struct{}
 
 func (m *mockOrderClient) CreateOrder(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
 	return nil, nil
+}
+
+func (m *mockOrderClient) CreateOrderRaw(_ context.Context, _ entity.OrderRequest) (repository.CreateOrderOutcome, error) {
+	return repository.CreateOrderOutcome{}, nil
 }
 
 func (m *mockOrderClient) CancelOrder(_ context.Context, _, _ int64) ([]entity.Order, error) {

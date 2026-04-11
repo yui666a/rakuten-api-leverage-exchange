@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 )
 
 type mockOrderClient struct {
@@ -27,6 +28,14 @@ func (m *mockOrderClient) CreateOrder(ctx context.Context, req entity.OrderReque
 		return nil, m.createErr
 	}
 	return m.createdOrders, nil
+}
+
+func (m *mockOrderClient) CreateOrderRaw(ctx context.Context, req entity.OrderRequest) (repository.CreateOrderOutcome, error) {
+	m.createCallCount++
+	if m.createErr != nil {
+		return repository.CreateOrderOutcome{TransportError: m.createErr}, nil
+	}
+	return repository.CreateOrderOutcome{HTTPStatus: 200, Orders: m.createdOrders}, nil
 }
 
 func (m *mockOrderClient) CancelOrder(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error) {
@@ -80,7 +89,7 @@ func TestOrderExecutor_ExecuteSignal_Buy(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	result, err := executor.ExecuteSignal(context.Background(), signal, 4000000, 0.001)
+	result, err := executor.ExecuteSignal(context.Background(), "co-test", signal, 4000000, 0.001)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -114,7 +123,7 @@ func TestOrderExecutor_ExecuteSignal_Sell(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	result, err := executor.ExecuteSignal(context.Background(), signal, 4000000, 0.001)
+	result, err := executor.ExecuteSignal(context.Background(), "co-test", signal, 4000000, 0.001)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +150,7 @@ func TestOrderExecutor_ExecuteSignal_HoldSkipsOrder(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	result, err := executor.ExecuteSignal(context.Background(), signal, 4000000, 0.001)
+	result, err := executor.ExecuteSignal(context.Background(), "co-test", signal, 4000000, 0.001)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -171,7 +180,7 @@ func TestOrderExecutor_ExecuteSignal_RiskRejected(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	result, err := executor.ExecuteSignal(context.Background(), signal, 4000000, 0.001)
+	result, err := executor.ExecuteSignal(context.Background(), "co-test", signal, 4000000, 0.001)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -203,7 +212,7 @@ func TestOrderExecutor_ExecuteSignal_APIError(t *testing.T) {
 		Timestamp: time.Now().Unix(),
 	}
 
-	_, err := executor.ExecuteSignal(context.Background(), signal, 4000000, 0.001)
+	_, err := executor.ExecuteSignal(context.Background(), "co-test", signal, 4000000, 0.001)
 	if err == nil {
 		t.Fatal("expected error from API failure")
 	}
@@ -233,7 +242,7 @@ func TestOrderExecutor_ClosePosition(t *testing.T) {
 		RemainingAmount: 0.001,
 	}
 
-	result, err := executor.ClosePosition(context.Background(), pos, 3800000)
+	result, err := executor.ClosePosition(context.Background(), "co-close", pos, 3800000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,7 +278,7 @@ func TestOrderExecutor_ClosePosition_SellPosition(t *testing.T) {
 		RemainingAmount: 0.001,
 	}
 
-	result, err := executor.ClosePosition(context.Background(), pos, 4200000)
+	result, err := executor.ClosePosition(context.Background(), "co-close", pos, 4200000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

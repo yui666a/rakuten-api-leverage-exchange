@@ -39,9 +39,34 @@ func (c *RESTClient) DoPrivate(ctx context.Context, method, path, query string, 
 	return c.do(ctx, method, path, query, body, true)
 }
 
+// httpExchange は do() の構造化版。トランスポート失敗・非 2xx・本文を区別して返す。
+type httpExchange struct {
+	statusCode     int
+	body           []byte
+	transportError error
+}
+
+// DoPrivateRaw は DoPrivate の構造化版。レスポンス本文を非 2xx でも返す。
+// 呼び出し側で submitted/failed の判定 (status コード + 本文パース可否) が必要なときに使う。
+func (c *RESTClient) DoPrivateRaw(ctx context.Context, method, path, query string, body []byte) (statusCode int, respBody []byte, transportErr error) {
+	ex := c.doRaw(ctx, method, path, query, body, true)
+	return ex.statusCode, ex.body, ex.transportError
+}
+
 func (c *RESTClient) do(ctx context.Context, method, path, query string, body []byte, authenticated bool) ([]byte, error) {
+	ex := c.doRaw(ctx, method, path, query, body, authenticated)
+	if ex.transportError != nil {
+		return nil, ex.transportError
+	}
+	if ex.statusCode < 200 || ex.statusCode >= 300 {
+		return nil, fmt.Errorf("API error (status %d): %s", ex.statusCode, string(ex.body))
+	}
+	return ex.body, nil
+}
+
+func (c *RESTClient) doRaw(ctx context.Context, method, path, query string, body []byte, authenticated bool) httpExchange {
 	if err := c.waitForRateLimit(ctx); err != nil {
-		return nil, err
+		return httpExchange{transportError: err}
 	}
 
 	url := c.baseURL + path
@@ -56,7 +81,7 @@ func (c *RESTClient) do(ctx context.Context, method, path, query string, body []
 
 	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return httpExchange{transportError: fmt.Errorf("failed to create request: %w", err)}
 	}
 
 	if body != nil {
@@ -72,20 +97,22 @@ func (c *RESTClient) do(ctx context.Context, method, path, query string, body []
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
+		return httpExchange{transportError: fmt.Errorf("request failed: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return httpExchange{
+			statusCode:     resp.StatusCode,
+			transportError: fmt.Errorf("failed to read response body: %w", err),
+		}
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+	return httpExchange{
+		statusCode: resp.StatusCode,
+		body:       respBody,
 	}
-
-	return respBody, nil
 }
 
 // waitForRateLimit enforces the Rakuten API 200ms interval limit.

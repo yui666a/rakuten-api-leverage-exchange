@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"math"
 	"strconv"
@@ -12,6 +15,21 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
+
+// newAgentClientOrderID は pipeline (自動売買エージェント) からの注文に使う
+// clientOrderId を採番する。形式は "agent-<intent>-<unix>-<rand8>"。
+//
+// rand を使うのは、同一秒内に複数注文が走った場合の衝突回避のため。
+// pipeline は単一プロセスで動く想定だが、stop-loss と open が同時刻に走るケースが
+// ありうるので intent を区別子として埋める。
+func newAgentClientOrderID(intent string) string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// rand 失敗時は時刻ナノ秒で代替 (極めてまれ)
+		return fmt.Sprintf("agent-%s-%d", intent, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("agent-%s-%d-%s", intent, time.Now().Unix(), hex.EncodeToString(b[:]))
+}
 
 // TradingPipeline は自動売買パイプラインを管理する。
 // POST /start で Start、POST /stop で Stop を呼ぶ。
@@ -300,7 +318,8 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	// 6. 注文実行
-	result, err := p.orderExecutor.ExecuteSignal(ctx, *signal, price, amount)
+	clientOrderID := newAgentClientOrderID("open")
+	result, err := p.orderExecutor.ExecuteSignal(ctx, clientOrderID, *signal, price, amount)
 	if err != nil {
 		slog.Error("pipeline: order execution failed", "error", err)
 		return
@@ -344,7 +363,8 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 				slog.Warn("pipeline: stop-loss triggered",
 					"positionID", pos.ID, "side", pos.OrderSide, "entryPrice", pos.Price, "currentPrice", t.Last)
 
-				result, err := p.orderExecutor.ClosePosition(ctx, pos, t.Last)
+				clientOrderID := newAgentClientOrderID("stoploss")
+				result, err := p.orderExecutor.ClosePosition(ctx, clientOrderID, pos, t.Last)
 				if err != nil {
 					slog.Error("pipeline: stop-loss close failed", "error", err)
 					continue

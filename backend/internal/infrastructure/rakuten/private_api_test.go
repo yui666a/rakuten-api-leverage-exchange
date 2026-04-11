@@ -61,6 +61,90 @@ func TestCreateOrder(t *testing.T) {
 	if orders[0].ID != 100 { t.Fatalf("expected order ID 100, got %d", orders[0].ID) }
 }
 
+func TestCreateOrderRaw_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertAuthHeaders(t, r)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":100,"symbolId":7,"orderBehavior":"OPEN","orderSide":"BUY","orderPattern":"NORMAL","orderType":"MARKET","price":0,"amount":0.001,"remainingAmount":0.001,"orderStatus":"WORKING_ORDER","leverage":2,"orderCreatedAt":1700000000000}]`))
+	}))
+	defer server.Close()
+	client := NewRESTClient(server.URL, "key", "secret")
+	out, err := client.CreateOrderRaw(context.Background(), entity.OrderRequest{
+		SymbolID: 7, OrderPattern: entity.OrderPatternNormal,
+		OrderData: entity.OrderData{OrderBehavior: entity.OrderBehaviorOpen, OrderSide: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket, Amount: 0.001},
+	})
+	if err != nil { t.Fatalf("unexpected error: %v", err) }
+	if out.HTTPStatus != 200 { t.Fatalf("expected status 200, got %d", out.HTTPStatus) }
+	if out.TransportError != nil || out.ParseError != nil || out.HTTPError != nil {
+		t.Fatalf("unexpected errors: %+v", out)
+	}
+	if len(out.Orders) != 1 || out.Orders[0].ID != 100 { t.Fatalf("expected 1 order with ID 100, got %+v", out.Orders) }
+	if len(out.RawResponse) == 0 { t.Fatal("RawResponse should be populated") }
+}
+
+func TestCreateOrderRaw_ParseFailureKeepsRawBody(t *testing.T) {
+	// 200 OK だが本文が解釈不能 (= submitted 候補) を再現する。
+	garbage := `not a json array`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertAuthHeaders(t, r)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(garbage))
+	}))
+	defer server.Close()
+	client := NewRESTClient(server.URL, "key", "secret")
+	out, err := client.CreateOrderRaw(context.Background(), entity.OrderRequest{
+		SymbolID: 7, OrderPattern: entity.OrderPatternNormal,
+		OrderData: entity.OrderData{OrderBehavior: entity.OrderBehaviorOpen, OrderSide: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket, Amount: 0.001},
+	})
+	if err != nil { t.Fatalf("unexpected transport-level error: %v", err) }
+	if out.HTTPStatus != 200 { t.Fatalf("expected status 200, got %d", out.HTTPStatus) }
+	if out.ParseError == nil { t.Fatal("expected ParseError for unparseable body") }
+	if string(out.RawResponse) != garbage { t.Fatalf("expected raw body preserved, got %q", string(out.RawResponse)) }
+	if len(out.Orders) != 0 { t.Fatalf("expected no parsed orders, got %d", len(out.Orders)) }
+}
+
+func TestCreateOrderRaw_HTTP4xxWithJSONBody(t *testing.T) {
+	// 4xx + 構造化エラーボディ (= failed)。ParseError が nil になり、HTTPError がセットされる。
+	body := `{"code":40001,"message":"insufficient balance"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertAuthHeaders(t, r)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+	client := NewRESTClient(server.URL, "key", "secret")
+	out, err := client.CreateOrderRaw(context.Background(), entity.OrderRequest{
+		SymbolID: 7, OrderPattern: entity.OrderPatternNormal,
+		OrderData: entity.OrderData{OrderBehavior: entity.OrderBehaviorOpen, OrderSide: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket, Amount: 0.001},
+	})
+	if err != nil { t.Fatalf("unexpected transport-level error: %v", err) }
+	if out.HTTPStatus != 400 { t.Fatalf("expected status 400, got %d", out.HTTPStatus) }
+	if out.HTTPError == nil { t.Fatal("expected HTTPError for 4xx") }
+	if out.ParseError != nil { t.Fatalf("4xx with parseable JSON body should not set ParseError, got %v", out.ParseError) }
+	if string(out.RawResponse) != body { t.Fatalf("raw body mismatch: %s", string(out.RawResponse)) }
+}
+
+func TestCreateOrderRaw_HTTP5xxWithGarbage(t *testing.T) {
+	// 5xx + 解釈不能ボディ (= submitted 候補)。ParseError と HTTPError の両方がセットされる。
+	body := `<html>internal server error</html>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertAuthHeaders(t, r)
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(body))
+	}))
+	defer server.Close()
+	client := NewRESTClient(server.URL, "key", "secret")
+	out, err := client.CreateOrderRaw(context.Background(), entity.OrderRequest{
+		SymbolID: 7, OrderPattern: entity.OrderPatternNormal,
+		OrderData: entity.OrderData{OrderBehavior: entity.OrderBehaviorOpen, OrderSide: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket, Amount: 0.001},
+	})
+	if err != nil { t.Fatalf("unexpected transport-level error: %v", err) }
+	if out.HTTPStatus != 500 { t.Fatalf("expected status 500, got %d", out.HTTPStatus) }
+	if out.HTTPError == nil { t.Fatal("expected HTTPError for 5xx") }
+	if out.ParseError == nil { t.Fatal("expected ParseError for unparseable body") }
+	if string(out.RawResponse) != body { t.Fatalf("raw body mismatch") }
+}
+
 func TestCancelOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertAuthHeaders(t, r)
