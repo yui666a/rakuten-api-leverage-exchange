@@ -78,8 +78,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		positionHandler := handler.NewPositionHandler(deps.OrderClient)
 		v1.GET("/positions", positionHandler.GetPositions)
 
-		tradeHandler := handler.NewTradeHandler(deps.OrderClient)
+		tradeHandler := handler.NewTradeHandler(deps.OrderClient, deps.RESTClient)
 		v1.GET("/trades", tradeHandler.GetTrades)
+		v1.GET("/trades/all", tradeHandler.GetAllTrades)
 	}
 
 	if deps.MarketDataService != nil {

@@ -89,13 +89,15 @@ func (c *RESTClient) do(ctx context.Context, method, path, query string, body []
 }
 
 // waitForRateLimit enforces the Rakuten API 200ms interval limit.
+// Uses a 220ms margin to absorb clock skew between client and Rakuten server,
+// since requests pacing exactly at 200ms occasionally trip AUTHENTICATION_ERROR_TOO_MANY_REQUESTS (code 20010).
 // Returns an error if the context is cancelled during the wait.
 func (c *RESTClient) waitForRateLimit(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	elapsed := time.Since(c.lastCall)
-	if wait := 200*time.Millisecond - elapsed; wait > 0 {
+	if wait := 220*time.Millisecond - elapsed; wait > 0 {
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
