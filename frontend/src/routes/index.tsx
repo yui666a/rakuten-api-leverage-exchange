@@ -36,12 +36,26 @@ function Dashboard() {
         ? '稼働中'
         : '\u2014'
 
+  const dailyPnl = pnl ? -pnl.dailyLoss : null
+  const dailyPnlLabel =
+    dailyPnl === null
+      ? '\u2014'
+      : dailyPnl === 0
+        ? '¥0'
+        : `¥${dailyPnl.toLocaleString()}`
+
+  const reasoningLabel = strategy?.reasoning
+    ? strategy.reasoning === 'insufficient indicator data'
+      ? '指標データが不足しています'
+      : strategy.reasoning
+    : '戦略コメントはまだ生成されていません。'
+
   return (
     <AppFrame
-      title="Trading Dashboard"
-      subtitle="KPI・戦略・ポジションを集約しつつ、Phase 2 の操作系を同じ導線に載せた監視画面です。"
+      title="トレーディングダッシュボード"
+      subtitle="KPI・戦略・ポジション・操作系を集約した監視画面です。"
     >
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <KpiCard
           label="残高"
           value={pnl ? `¥${pnl.balance.toLocaleString()}` : '\u2014'}
@@ -49,7 +63,7 @@ function Dashboard() {
         />
         <KpiCard
           label="日次損益"
-          value={pnl ? `¥${(-pnl.dailyLoss).toLocaleString()}` : '\u2014'}
+          value={dailyPnlLabel}
           color={pnl && pnl.dailyLoss > 0 ? 'text-accent-red' : 'text-accent-green'}
         />
         <KpiCard
@@ -75,15 +89,15 @@ function Dashboard() {
           <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Strategy Insight</p>
-                <h2 className="mt-2 text-xl font-semibold text-white">LLM reasoning</h2>
+                <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">戦略インサイト</p>
+                <h2 className="mt-2 text-xl font-semibold text-white">LLM判断理由</h2>
               </div>
               <Link to="/history" className="text-sm text-cyan-200 transition hover:text-cyan-100">
                 履歴を見る
               </Link>
             </div>
             <p className="mt-4 text-sm leading-7 text-slate-300">
-              {strategy?.reasoning ?? '戦略コメントはまだ生成されていません。'}
+              {reasoningLabel}
             </p>
           </div>
         </section>
