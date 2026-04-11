@@ -112,6 +112,17 @@ export type TradeHistoryItem = {
   createdAt: number
 }
 
+export type AllTradesEntry = {
+  symbolId: number
+  currencyPair: string
+  trades?: TradeHistoryItem[]
+  error?: string
+}
+
+export type AllTradesResponse = {
+  results: AllTradesEntry[]
+}
+
 export type LiveTicker = {
   symbolId: number
   bestAsk: number
