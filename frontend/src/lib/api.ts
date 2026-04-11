@@ -65,6 +65,32 @@ export type RiskConfig = {
   initialCapital: number
 }
 
+// TradableSymbol は GET /api/v1/symbols のレスポンス要素。
+// 名前を Symbol にすると ES の組み込み Symbol と衝突するため TradableSymbol にしている。
+export type TradableSymbol = {
+  id: number
+  authority: string
+  tradeType: string
+  currencyPair: string
+  baseCurrency: string
+  quoteCurrency: string
+  baseScale: number
+  quoteScale: number
+  baseStepAmount: number
+  minOrderAmount: number
+  maxOrderAmount: number
+  makerTradeFeePercent: number
+  takerTradeFeePercent: number
+  closeOnly: boolean
+  viewOnly: boolean
+  enabled: boolean
+}
+
+export type TradingConfig = {
+  symbolId: number
+  tradeAmount: number
+}
+
 export type BotControlResponse = {
   status: 'running' | 'stopped'
   tradingHalted: boolean
