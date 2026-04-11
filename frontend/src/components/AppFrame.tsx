@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
+import { SymbolSelector } from './SymbolSelector'
 
 type AppFrameProps = {
   title: string
@@ -23,19 +24,22 @@ export function AppFrame({ title, subtitle, children }: AppFrameProps) {
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white sm:text-4xl">{title}</h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-300">{subtitle}</p>
           </div>
-          <nav className="flex flex-wrap gap-2">
-            {navItems.map((item) => (
-              <Link
-                key={item.to}
-                to={item.to}
-                activeProps={{ className: 'bg-white text-slate-950 shadow-lg' }}
-                inactiveProps={{ className: 'bg-white/8 text-slate-200 hover:bg-white/14' }}
-                className="rounded-full px-4 py-2 text-sm font-medium transition"
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
+          <div className="flex flex-col items-end gap-3">
+            <SymbolSelector />
+            <nav className="flex flex-wrap gap-2">
+              {navItems.map((item) => (
+                <Link
+                  key={item.to}
+                  to={item.to}
+                  activeProps={{ className: 'bg-white text-slate-950 shadow-lg' }}
+                  inactiveProps={{ className: 'bg-white/8 text-slate-200 hover:bg-white/14' }}
+                  className="rounded-full px-4 py-2 text-sm font-medium transition"
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
         </div>
       </header>
       {children}
