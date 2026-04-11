@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Link } from '@tanstack/react-router'
+import { Link, useSearch } from '@tanstack/react-router'
 import { SymbolSelector } from './SymbolSelector'
 
 type AppFrameProps = {
@@ -15,6 +15,7 @@ const navItems = [
 ] as const
 
 export function AppFrame({ title, subtitle, children }: AppFrameProps) {
+  const rootSearch = useSearch({ from: '__root__' }) as { symbol?: string }
   return (
     <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <header className="mb-6 overflow-hidden rounded-3xl border border-white/8 bg-[linear-gradient(135deg,rgba(55,66,250,0.24),rgba(8,12,32,0.92)_45%,rgba(0,212,170,0.18))] p-5 sm:p-6 shadow-[0_20px_80px_rgba(0,0,0,0.35)]">
@@ -31,6 +32,7 @@ export function AppFrame({ title, subtitle, children }: AppFrameProps) {
                 <Link
                   key={item.to}
                   to={item.to}
+                  search={rootSearch}
                   activeProps={{
                     style: {
                       backgroundColor: '#00d4aa',

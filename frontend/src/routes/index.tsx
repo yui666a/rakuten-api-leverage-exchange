@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useSearch } from '@tanstack/react-router'
 import { AppFrame } from '../components/AppFrame'
 import { KpiCard } from '../components/KpiCard'
 import { CandlestickChart } from '../components/CandlestickChart'
@@ -19,6 +19,7 @@ export const Route = createFileRoute('/')({ component: Dashboard })
 
 function Dashboard() {
   const { symbolId, currentSymbol } = useSymbolContext()
+  const rootSearch = useSearch({ from: '__root__' }) as { symbol?: string }
   const { data: status } = useStatus()
   const { data: pnl } = usePnl()
   const { data: strategy } = useStrategy()
@@ -92,7 +93,11 @@ function Dashboard() {
                 <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">戦略インサイト</p>
                 <h2 className="mt-2 text-xl font-semibold text-white">LLM判断理由</h2>
               </div>
-              <Link to="/history" className="text-sm text-cyan-200 transition hover:text-cyan-100">
+              <Link
+                to="/history"
+                search={rootSearch}
+                className="text-sm text-cyan-200 transition hover:text-cyan-100"
+              >
                 履歴を見る
               </Link>
             </div>

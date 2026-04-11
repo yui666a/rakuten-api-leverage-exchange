@@ -2,7 +2,14 @@ import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-r
 import appCss from '../styles.css?url'
 import { SymbolProvider } from '../contexts/SymbolContext'
 
+type RootSearch = {
+  symbol?: string
+}
+
 export const Route = createRootRoute({
+  validateSearch: (search: Record<string, unknown>): RootSearch => ({
+    symbol: typeof search.symbol === 'string' ? search.symbol : undefined,
+  }),
   head: () => ({
     meta: [
       { charSet: 'utf-8' },
