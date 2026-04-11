@@ -10,7 +10,6 @@ import { useStatus } from '../hooks/useStatus'
 import { usePnl } from '../hooks/usePnl'
 import { useStrategy } from '../hooks/useStrategy'
 import { useIndicators } from '../hooks/useIndicators'
-import { useCandles } from '../hooks/useCandles'
 import { usePositions } from '../hooks/usePositions'
 import { useStartBot, useStopBot } from '../hooks/useBotControl'
 import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
@@ -24,7 +23,6 @@ function Dashboard() {
   const { data: pnl } = usePnl()
   const { data: strategy } = useStrategy()
   const { data: indicators } = useIndicators(symbolId)
-  const { data: candles } = useCandles(symbolId)
   const { data: positions } = usePositions(symbolId)
   const startBot = useStartBot()
   const stopBot = useStopBot()
@@ -73,7 +71,7 @@ function Dashboard() {
             connectionState={connectionState}
             currencyPair={currentSymbol?.currencyPair?.replace('_', '/')}
           />
-          <CandlestickChart candles={candles ?? []} />
+          <CandlestickChart symbolId={symbolId} />
           <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
             <div className="flex items-center justify-between">
               <div>

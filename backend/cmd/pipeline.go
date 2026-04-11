@@ -243,7 +243,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	// 2. テクニカル指標を計算
-	indicators, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "15min")
+	indicators, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "PT15M")
 	if err != nil {
 		slog.Warn("pipeline: failed to calculate indicators", "error", err)
 		return

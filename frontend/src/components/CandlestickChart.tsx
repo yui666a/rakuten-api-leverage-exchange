@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time } from 'lightweight-charts'
-import type { Candle } from '../lib/api'
+import { useCandles, type CandleInterval } from '../hooks/useCandles'
 
 type CandlestickChartProps = {
-  candles: Candle[]
+  symbolId: number
 }
 
 type MALineKey = 'sma20' | 'sma50' | 'ema12' | 'ema26'
+
+const INTERVAL_OPTIONS: { value: CandleInterval; label: string }[] = [
+  { value: 'PT1M', label: '1m' },
+  { value: 'PT5M', label: '5m' },
+  { value: 'PT15M', label: '15m' },
+  { value: 'PT1H', label: '1h' },
+  { value: 'P1D', label: '1D' },
+  { value: 'P1W', label: '1W' },
+]
 
 const MA_CONFIG: Record<MALineKey, { label: string; color: string }> = {
   sma20: { label: 'SMA(20)', color: '#f5a623' },
@@ -47,11 +56,15 @@ function calcEMA(closes: number[], period: number): (number | null)[] {
   return result
 }
 
-export function CandlestickChart({ candles }: CandlestickChartProps) {
+export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const lineSeriesRefs = useRef<Partial<Record<MALineKey, ISeriesApi<'Line'>>>>({})
+
+  const [interval, setInterval] = useState<CandleInterval>('PT15M')
+  const { data: candlesData, isFetching } = useCandles(symbolId, interval)
+  const candles = candlesData ?? []
 
   const [visible, setVisible] = useState<Record<MALineKey, boolean>>({
     sma20: false,
@@ -175,8 +188,30 @@ export function CandlestickChart({ candles }: CandlestickChartProps) {
 
   return (
     <div className="bg-bg-card rounded-lg p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-text-secondary text-xs">BTC/JPY</div>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1">
+            {INTERVAL_OPTIONS.map((opt) => {
+              const active = interval === opt.value
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setInterval(opt.value)}
+                  className="rounded-md px-2.5 py-0.5 text-[11px] font-medium transition"
+                  style={{
+                    backgroundColor: active ? 'rgba(0, 212, 170, 0.18)' : 'rgba(255,255,255,0.06)',
+                    color: active ? '#00d4aa' : '#94a3b8',
+                    border: `1px solid ${active ? 'rgba(0, 212, 170, 0.45)' : 'rgba(255,255,255,0.1)'}`,
+                  }}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+          {isFetching && <span className="text-[10px] text-text-secondary">読み込み中...</span>}
+        </div>
         <div className="flex gap-1.5">
           {(Object.keys(MA_CONFIG) as MALineKey[]).map((key) => (
             <button

@@ -106,7 +106,7 @@ func addIndicatorsTool(s *server.MCPServer, deps Dependencies) {
 			if err != nil {
 				return gomcp.NewToolResultError(err.Error()), nil
 			}
-			indicators, err := deps.IndicatorCalculator.Calculate(ctx, int64(symbolID), "15min")
+			indicators, err := deps.IndicatorCalculator.Calculate(ctx, int64(symbolID), "PT15M")
 			if err != nil {
 				return gomcp.NewToolResultError(fmt.Sprintf("failed to calculate indicators: %v", err)), nil
 			}

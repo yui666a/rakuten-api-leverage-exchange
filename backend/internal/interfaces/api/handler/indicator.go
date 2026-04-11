@@ -24,7 +24,7 @@ func (h *IndicatorHandler) GetIndicators(c *gin.Context) {
 		return
 	}
 
-	interval := c.DefaultQuery("interval", "15min")
+	interval := c.DefaultQuery("interval", "PT15M")
 
 	indicators, err := h.calculator.Calculate(c.Request.Context(), symbolID, interval)
 	if err != nil {
