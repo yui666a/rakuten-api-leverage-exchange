@@ -230,3 +230,37 @@ func TestGetIndicators_InvalidSymbol(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
+
+func TestGetPnL_PreservesLegacyFields(t *testing.T) {
+	router := setupRouter()
+	w := doRequest(router, "GET", "/api/v1/pnl", nil)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var body map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode: %v", err)
+	}
+
+	// 既存フィールドが引き続き返ること
+	for _, key := range []string{"balance", "dailyLoss", "totalPosition", "tradingHalted"} {
+		if _, ok := body[key]; !ok {
+			t.Errorf("expected field %q in response, got keys=%v", key, mapKeys(body))
+		}
+	}
+
+	// calculator は setupRouter では nil なので dailyPnl は省略されるはず
+	if _, ok := body["dailyPnl"]; ok {
+		t.Errorf("dailyPnl should be absent when calculator is nil, got %v", body["dailyPnl"])
+	}
+}
+
+func mapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
