@@ -1,5 +1,7 @@
 package entity
 
+import "encoding/json"
+
 type OrderSide string
 
 const (
@@ -72,4 +74,42 @@ type Order struct {
 	OrderStatus     OrderStatus   `json:"orderStatus"`
 	Leverage        float64       `json:"leverage"`
 	OrderCreatedAt  int64         `json:"orderCreatedAt"`
+}
+
+// Rakuten API may return numeric fields as JSON strings for some symbols.
+// Accept both string and number forms.
+func (o *Order) UnmarshalJSON(data []byte) error {
+	type raw struct {
+		ID              int64         `json:"id"`
+		SymbolID        int64         `json:"symbolId"`
+		OrderBehavior   OrderBehavior `json:"orderBehavior"`
+		OrderSide       OrderSide     `json:"orderSide"`
+		OrderPattern    OrderPattern  `json:"orderPattern"`
+		OrderType       OrderType     `json:"orderType"`
+		Price           flexFloat     `json:"price"`
+		Amount          flexFloat     `json:"amount"`
+		RemainingAmount flexFloat     `json:"remainingAmount"`
+		OrderStatus     OrderStatus   `json:"orderStatus"`
+		Leverage        flexFloat     `json:"leverage"`
+		OrderCreatedAt  int64         `json:"orderCreatedAt"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return err
+	}
+	*o = Order{
+		ID:              r.ID,
+		SymbolID:        r.SymbolID,
+		OrderBehavior:   r.OrderBehavior,
+		OrderSide:       r.OrderSide,
+		OrderPattern:    r.OrderPattern,
+		OrderType:       r.OrderType,
+		Price:           float64(r.Price),
+		Amount:          float64(r.Amount),
+		RemainingAmount: float64(r.RemainingAmount),
+		OrderStatus:     r.OrderStatus,
+		Leverage:        float64(r.Leverage),
+		OrderCreatedAt:  r.OrderCreatedAt,
+	}
+	return nil
 }
