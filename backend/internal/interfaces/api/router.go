@@ -84,6 +84,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.RESTClient != nil {
 		orderbookHandler := handler.NewOrderbookHandler(deps.RESTClient)
 		v1.GET("/orderbook", orderbookHandler.GetOrderbook)
+
+		symbolHandler := handler.NewSymbolHandler(deps.RESTClient)
+		v1.GET("/symbols", symbolHandler.GetSymbols)
 	}
 
 	if deps.OrderExecutor != nil && deps.ClientOrderRepo != nil {
