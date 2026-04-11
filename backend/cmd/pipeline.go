@@ -15,9 +15,18 @@ import (
 
 // TradingPipeline は自動売買パイプラインを管理する。
 // POST /start で Start、POST /stop で Stop を呼ぶ。
+//
+// Locking strategy:
+//   - switchMu: SwitchSymbol / Start / Stop を直列化する（これら3つが並行すると
+//     停止要求の握りつぶしや bootstrap 完了前の再開が発生するため）。
+//   - mu: symbolID / tradeAmount / cancel のフィールドアクセスを保護する。
+//     読み取りは snapshot() 経由でスナップショットを取る。
+//
+// ロック順序の原則: 必ず switchMu → mu の順で取得する。逆順で取るパスを作らないこと。
 type TradingPipeline struct {
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	switchMu sync.Mutex   // SwitchSymbol / Start / Stop を直列化
+	mu       sync.RWMutex // フィールド保護（snapshot 経由で読む）
+	cancel   context.CancelFunc
 
 	symbolID    int64
 	interval    time.Duration
@@ -31,6 +40,21 @@ type TradingPipeline struct {
 	riskMgr          *usecase.RiskManager
 	tradeHistoryRepo repository.TradeHistoryRepository
 	riskStateRepo    repository.RiskStateRepository
+}
+
+// tradingSnapshot は evaluate / stopLoss ループで使う、ロック下にコピーしたフィールド束。
+type tradingSnapshot struct {
+	symbolID    int64
+	tradeAmount float64
+}
+
+func (p *TradingPipeline) snapshot() tradingSnapshot {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return tradingSnapshot{
+		symbolID:    p.symbolID,
+		tradeAmount: p.tradeAmount,
+	}
 }
 
 // TradingPipelineConfig はパイプラインの設定。
@@ -67,7 +91,16 @@ func NewTradingPipeline(
 }
 
 // Start はパイプラインを開始する。すでに実行中なら何もしない。
+// switchMu で SwitchSymbol との並行実行を防ぐ。
 func (p *TradingPipeline) Start() {
+	p.switchMu.Lock()
+	defer p.switchMu.Unlock()
+	p.startLocked()
+}
+
+// startLocked は switchMu を保持した状態で呼ぶこと。
+// SwitchSymbol から再利用するために分離されている。
+func (p *TradingPipeline) startLocked() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -85,7 +118,15 @@ func (p *TradingPipeline) Start() {
 }
 
 // Stop はパイプラインを停止する。
+// switchMu で SwitchSymbol との並行実行を防ぐ。
 func (p *TradingPipeline) Stop() {
+	p.switchMu.Lock()
+	defer p.switchMu.Unlock()
+	p.stopLocked()
+}
+
+// stopLocked は switchMu を保持した状態で呼ぶこと。
+func (p *TradingPipeline) stopLocked() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -101,13 +142,80 @@ func (p *TradingPipeline) Stop() {
 
 // Running はパイプラインが実行中かどうかを返す。
 func (p *TradingPipeline) Running() bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	return p.cancel != nil
+}
+
+// SymbolID は現在の取引対象シンボルIDを返す。
+func (p *TradingPipeline) SymbolID() int64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.symbolID
+}
+
+// TradeAmount は現在の1回あたりの注文金額を返す。
+func (p *TradingPipeline) TradeAmount() float64 {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.tradeAmount
+}
+
+// SwitchSymbol は取引対象シンボルを切り替える。
+// switchMu でシリアライズすることで:
+//   - 連続切替の順序保証（逆順適用を防ぐ）
+//   - SwitchSymbol 実行中の Start/Stop 割込みを防ぐ
+//
+// 処理順序: 停止 → フィールド更新 → onSwitch（bootstrap + WS切替）→ 再開
+// onSwitch は同期実行されるため HTTP レスポンスは bootstrap 完了まで待つ。
+//
+// ロック順序: switchMu → mu（startLocked/stopLocked 内部で mu を取る）
+func (p *TradingPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, onSwitch func(oldID, newID int64)) {
+	p.switchMu.Lock()
+	defer p.switchMu.Unlock()
+
+	// 現在の状態を読み取り（switchMu 保持中なので Start/Stop は進行できない）
+	p.mu.RLock()
+	oldID := p.symbolID
+	wasRunning := p.cancel != nil
+	p.mu.RUnlock()
+
+	// 停止（switchMu 保持済みなので stopLocked を使う）
+	if wasRunning {
+		p.stopLocked()
+	}
+
+	// フィールド更新
+	p.mu.Lock()
+	p.symbolID = symbolID
+	if tradeAmount > 0 {
+		p.tradeAmount = tradeAmount
+	}
+	p.mu.Unlock()
+
+	// onSwitch（bootstrapCandles + WS切替）を同期実行
+	// switchMu で順序保証されているため、連続切替でも逆順適用されない
+	// この間 Start/Stop は switchMu 待ちでブロックされるので、
+	// bootstrap 完了前にパイプラインが動き出すことはない
+	if onSwitch != nil {
+		onSwitch(oldID, symbolID)
+	}
+
+	// 再開（switchMu 保持済みなので startLocked を使う）
+	// bootstrap 完了後に再開することで、新シンボルの指標計算が即座に可能になる
+	if wasRunning {
+		p.startLocked()
+	}
 }
 
 // runTradingLoop は一定間隔で指標計算→戦略判定→注文実行を行う。
 func (p *TradingPipeline) runTradingLoop(ctx context.Context) {
+	// テスト時に依存が nil の場合は評価ループを回さない（ロック挙動のみ検証する用途）
+	if p.marketDataSvc == nil || p.indicatorCalc == nil || p.strategyEngine == nil || p.restClient == nil || p.orderExecutor == nil {
+		<-ctx.Done()
+		return
+	}
+
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
 
@@ -125,15 +233,17 @@ func (p *TradingPipeline) runTradingLoop(ctx context.Context) {
 }
 
 func (p *TradingPipeline) evaluate(ctx context.Context) {
+	snap := p.snapshot()
+
 	// 1. 最新ティッカーを取得
-	latestTicker, err := p.marketDataSvc.GetLatestTicker(ctx, p.symbolID)
+	latestTicker, err := p.marketDataSvc.GetLatestTicker(ctx, snap.symbolID)
 	if err != nil || latestTicker == nil {
 		slog.Warn("pipeline: failed to get latest ticker", "error", err)
 		return
 	}
 
 	// 2. テクニカル指標を計算
-	indicators, err := p.indicatorCalc.Calculate(ctx, p.symbolID, "15min")
+	indicators, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "15min")
 	if err != nil {
 		slog.Warn("pipeline: failed to calculate indicators", "error", err)
 		return
@@ -153,7 +263,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	// 4. 同一方向のポジションを保持中ならスキップ
-	positions, err := p.restClient.GetPositions(ctx, p.symbolID)
+	positions, err := p.restClient.GetPositions(ctx, snap.symbolID)
 	if err != nil {
 		slog.Warn("pipeline: failed to get positions", "error", err)
 		return
@@ -181,11 +291,11 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
-	amount := p.tradeAmount / price
+	amount := snap.tradeAmount / price
 	// 楽天の最小注文単位に丸める（BTC_JPY は 0.0001 BTC）
 	amount = math.Floor(amount*10000) / 10000
 	if amount <= 0 {
-		slog.Warn("pipeline: calculated amount is 0, skip", "tradeAmount", p.tradeAmount, "price", price)
+		slog.Warn("pipeline: calculated amount is 0, skip", "tradeAmount", snap.tradeAmount, "price", price)
 		return
 	}
 
@@ -198,7 +308,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 
 	if result.Executed {
 		slog.Info("pipeline: order executed", "orderID", result.OrderID, "side", side, "amount", amount, "price", price)
-		p.recordTrade(ctx, p.symbolID, result.OrderID, string(side), "open", price, amount, signal.Reason, false)
+		p.recordTrade(ctx, snap.symbolID, result.OrderID, string(side), "open", price, amount, signal.Reason, false)
 		p.syncState(ctx)
 		p.persistRiskState(ctx)
 	} else {
@@ -208,6 +318,11 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 
 // runStopLossMonitor は Ticker を監視し、損切り条件に達したポジションを即時決済する。
 func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
+	// テスト時に依存が nil の場合は監視ループを回さない
+	if p.marketDataSvc == nil || p.riskMgr == nil || p.orderExecutor == nil {
+		<-ctx.Done()
+		return
+	}
 	tickerCh := p.marketDataSvc.SubscribeTicker()
 	defer p.marketDataSvc.UnsubscribeTicker(tickerCh)
 
@@ -219,7 +334,8 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 			if !ok {
 				return
 			}
-			if t.SymbolID != p.symbolID {
+			snap := p.snapshot()
+			if t.SymbolID != snap.symbolID {
 				continue
 			}
 
@@ -282,7 +398,8 @@ func (p *TradingPipeline) persistRiskState(ctx context.Context) {
 
 // syncState は楽天APIから現在のポジション・残高を取得し、RiskManagerに反映する。
 func (p *TradingPipeline) syncState(ctx context.Context) {
-	positions, err := p.restClient.GetPositions(ctx, p.symbolID)
+	snap := p.snapshot()
+	positions, err := p.restClient.GetPositions(ctx, snap.symbolID)
 	if err != nil {
 		slog.Warn("pipeline: failed to sync positions", "error", err)
 	} else {
