@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -12,10 +15,11 @@ import (
 type RiskHandler struct {
 	riskMgr     *usecase.RiskManager
 	realtimeHub *usecase.RealtimeHub
+	pnlCalc     *usecase.DailyPnLCalculator
 }
 
-func NewRiskHandler(riskMgr *usecase.RiskManager, realtimeHub *usecase.RealtimeHub) *RiskHandler {
-	return &RiskHandler{riskMgr: riskMgr, realtimeHub: realtimeHub}
+func NewRiskHandler(riskMgr *usecase.RiskManager, realtimeHub *usecase.RealtimeHub, pnlCalc *usecase.DailyPnLCalculator) *RiskHandler {
+	return &RiskHandler{riskMgr: riskMgr, realtimeHub: realtimeHub, pnlCalc: pnlCalc}
 }
 
 func (h *RiskHandler) GetConfig(c *gin.Context) {
@@ -67,10 +71,26 @@ func (h *RiskHandler) UpdateConfig(c *gin.Context) {
 
 func (h *RiskHandler) GetPnL(c *gin.Context) {
 	status := h.riskMgr.GetStatus()
-	c.JSON(http.StatusOK, gin.H{
+
+	resp := gin.H{
 		"balance":       status.Balance,
 		"dailyLoss":     status.DailyLoss,
 		"totalPosition": status.TotalPosition,
 		"tradingHalted": status.TradingHalted,
-	})
+	}
+
+	if h.pnlCalc != nil {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+
+		pnl, err := h.pnlCalc.Compute(ctx)
+		if err != nil {
+			slog.Warn("daily pnl compute failed", "error", err)
+			// エラー時は dailyPnl ブロック自体を省略 (フロントは undefined として handle する)
+		} else {
+			resp["dailyPnl"] = pnl
+		}
+	}
+
+	c.JSON(http.StatusOK, resp)
 }
