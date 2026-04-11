@@ -1,7 +1,10 @@
 import type { TradeHistoryItem } from '../lib/api'
 
+export type TradeHistoryRow = TradeHistoryItem & { currencyPair?: string }
+
 type TradeHistoryTableProps = {
-  trades: TradeHistoryItem[]
+  trades: TradeHistoryRow[]
+  showCurrencyPair?: boolean
 }
 
 function formatYen(value: number) {
@@ -12,7 +15,8 @@ function formatTimestamp(timestamp: number) {
   return new Date(timestamp).toLocaleString('ja-JP')
 }
 
-export function TradeHistoryTable({ trades }: TradeHistoryTableProps) {
+export function TradeHistoryTable({ trades, showCurrencyPair = false }: TradeHistoryTableProps) {
+  const colCount = showCurrencyPair ? 7 : 6
   return (
     <div className="overflow-hidden rounded-3xl border border-white/8 bg-bg-card/90 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
       <div className="border-b border-white/8 px-5 py-4">
@@ -24,6 +28,7 @@ export function TradeHistoryTable({ trades }: TradeHistoryTableProps) {
           <thead className="bg-white/4 text-left text-text-secondary">
             <tr>
               <th className="px-5 py-3 font-medium">日時</th>
+              {showCurrencyPair && <th className="px-5 py-3 font-medium">通貨</th>}
               <th className="px-5 py-3 font-medium">方向</th>
               <th className="px-5 py-3 font-medium">数量</th>
               <th className="px-5 py-3 font-medium">価格</th>
@@ -34,14 +39,19 @@ export function TradeHistoryTable({ trades }: TradeHistoryTableProps) {
           <tbody>
             {trades.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-5 py-10 text-center text-text-secondary">
+                <td colSpan={colCount} className="px-5 py-10 text-center text-text-secondary">
                   約定履歴はありません
                 </td>
               </tr>
             ) : (
               trades.map((trade) => (
-                <tr key={trade.id} className="border-t border-white/6 text-slate-100">
+                <tr key={`${trade.symbolId}-${trade.id}`} className="border-t border-white/6 text-slate-100">
                   <td className="px-5 py-4">{formatTimestamp(trade.createdAt)}</td>
+                  {showCurrencyPair && (
+                    <td className="px-5 py-4 font-mono text-xs text-text-secondary">
+                      {trade.currencyPair ?? '\u2014'}
+                    </td>
+                  )}
                   <td className={`px-5 py-4 font-medium ${trade.orderSide === 'BUY' ? 'text-accent-green' : 'text-accent-red'}`}>
                     {trade.orderSide}
                   </td>
