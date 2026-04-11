@@ -86,6 +86,26 @@ func TestGetMyTrades(t *testing.T) {
 	trades, err := client.GetMyTrades(context.Background(), 7)
 	if err != nil { t.Fatalf("unexpected error: %v", err) }
 	if len(trades) != 1 { t.Fatalf("expected 1 trade, got %d", len(trades)) }
+	if trades[0].Price.Float64() != 5000000 { t.Fatalf("expected price 5000000, got %v", trades[0].Price.Float64()) }
+}
+
+// TestGetMyTrades_StringNumericFields は楽天 LTC_JPY 等で観測されている
+// 数値フィールドが string で返ってくるケースで unmarshal が通ることを保証する。
+func TestGetMyTrades_StringNumericFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertAuthHeaders(t, r)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":2,"symbolId":10,"orderSide":"BUY","price":"12345.6","amount":"0.5","profit":"10.5","fee":"1.2","positionFee":"0","closeTradeProfit":"0","orderId":200,"positionId":2,"createdAt":1700000000000}]`))
+	}))
+	defer server.Close()
+	client := NewRESTClient(server.URL, "key", "secret")
+	trades, err := client.GetMyTrades(context.Background(), 10)
+	if err != nil { t.Fatalf("unexpected error: %v", err) }
+	if len(trades) != 1 { t.Fatalf("expected 1 trade, got %d", len(trades)) }
+	if trades[0].Price.Float64() != 12345.6 { t.Fatalf("expected price 12345.6, got %v", trades[0].Price.Float64()) }
+	if trades[0].Amount.Float64() != 0.5 { t.Fatalf("expected amount 0.5, got %v", trades[0].Amount.Float64()) }
+	if trades[0].Profit.Float64() != 10.5 { t.Fatalf("expected profit 10.5, got %v", trades[0].Profit.Float64()) }
+	if trades[0].Fee.Float64() != 1.2 { t.Fatalf("expected fee 1.2, got %v", trades[0].Fee.Float64()) }
 }
 
 func assertAuthHeaders(t *testing.T, r *http.Request) {
