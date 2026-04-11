@@ -67,7 +67,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/indicators/:symbol", indicatorHandler.GetIndicators)
 
 	if deps.MarketDataService != nil {
-		candleHandler := handler.NewCandleHandler(deps.MarketDataService)
+		candleHandler := handler.NewCandleHandler(deps.MarketDataService, deps.RESTClient)
 		v1.GET("/candles/:symbol", candleHandler.GetCandles)
 
 		realtimeHandler := handler.NewRealtimeHandler(deps.MarketDataService, deps.RiskManager, deps.RealtimeHub)

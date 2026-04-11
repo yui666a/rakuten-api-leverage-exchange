@@ -64,7 +64,7 @@ func main() {
 
 	symbolID := cfg.Trading.SymbolID
 
-	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "15min", "PT15M", 500); err != nil {
+	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "PT15M", 500); err != nil {
 		slog.Warn("initial candle bootstrap failed", "error", err)
 	}
 
@@ -104,7 +104,7 @@ func main() {
 
 	onSymbolSwitch := func(oldID, newID int64) {
 		// 新シンボルのローソク足を bootstrap（main の ctx を使う）
-		if err := bootstrapCandles(ctx, restClient, marketDataSvc, newID, "15min", "PT15M", 500); err != nil {
+		if err := bootstrapCandles(ctx, restClient, marketDataSvc, newID, "PT15M", 500); err != nil {
 			slog.Warn("candle bootstrap for new symbol failed", "symbolID", newID, "error", err)
 		}
 
@@ -449,15 +449,14 @@ func bootstrapCandles(
 	restClient *rakuten.RESTClient,
 	marketDataSvc *usecase.MarketDataService,
 	symbolID int64,
-	internalInterval string,
-	rakutenCandlestickType string,
+	interval string,
 	limit int,
 ) error {
 	if restClient == nil || marketDataSvc == nil {
 		return nil
 	}
 
-	resp, err := restClient.GetCandlestick(ctx, symbolID, rakutenCandlestickType, nil, nil)
+	resp, err := restClient.GetCandlestick(ctx, symbolID, interval, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -468,15 +467,15 @@ func bootstrapCandles(
 	}
 
 	if len(candles) == 0 {
-		slog.Warn("candle bootstrap returned no candles", "symbolID", symbolID, "interval", internalInterval)
+		slog.Warn("candle bootstrap returned no candles", "symbolID", symbolID, "interval", interval)
 		return nil
 	}
 
 	// INSERT OR IGNORE により既存データと重複しないため、毎回全件渡して差分のみ保存される
-	if err := marketDataSvc.SaveCandles(ctx, symbolID, internalInterval, candles); err != nil {
+	if err := marketDataSvc.SaveCandles(ctx, symbolID, interval, candles); err != nil {
 		return err
 	}
 
-	slog.Info("bootstrapped candles", "count", len(candles), "symbolID", symbolID, "interval", internalInterval)
+	slog.Info("bootstrapped candles", "count", len(candles), "symbolID", symbolID, "interval", interval)
 	return nil
 }
