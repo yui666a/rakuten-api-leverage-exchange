@@ -75,8 +75,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	}
 
 	if deps.OrderClient != nil {
-		positionHandler := handler.NewPositionHandler(deps.OrderClient)
+		positionHandler := handler.NewPositionHandler(deps.OrderClient, deps.OrderExecutor, deps.ClientOrderRepo)
 		v1.GET("/positions", positionHandler.GetPositions)
+		if deps.OrderExecutor != nil && deps.ClientOrderRepo != nil {
+			v1.POST("/positions/:id/close", positionHandler.ClosePosition)
+		}
 
 		tradeHandler := handler.NewTradeHandler(deps.OrderClient, deps.RESTClient)
 		v1.GET("/trades", tradeHandler.GetTrades)
