@@ -59,6 +59,10 @@ type TradingPipeline struct {
 	riskMgr          *usecase.RiskManager
 	tradeHistoryRepo repository.TradeHistoryRepository
 	riskStateRepo    repository.RiskStateRepository
+
+	// sleepFn は syncState のリトライバックオフで使う sleep 関数。
+	// テストで実時間を消費しないよう差し替え可能にしている。nil なら time.Sleep を使う。
+	sleepFn func(time.Duration)
 }
 
 // tradingSnapshot は evaluate / stopLoss ループで使う、ロック下にコピーしたフィールド束。
@@ -134,7 +138,9 @@ func (p *TradingPipeline) startLocked() {
 
 	go p.runTradingLoop(ctx)
 	go p.runStopLossMonitor(ctx)
-	go p.runStateSyncLoop(ctx)
+	// NOTE: runStateSyncLoop は main.go から main ctx で常時起動するため、
+	// Start()/Stop() には含めない。これにより「停止中は残高が更新されない」
+	// という silent failure を防ぐ。
 
 	slog.Info("trading pipeline started")
 }
@@ -452,18 +458,36 @@ func (p *TradingPipeline) runStateSyncLoop(ctx context.Context) {
 }
 
 // syncState は楽天APIから現在のポジション・残高を取得し、RiskManagerに反映する。
+// 楽天 Private API のレートリミット (20010) に当たった場合のみ、retryOn20010 によって
+// 最大 3 回まで再試行する。他のエラーはリトライせずに warn を吐いて抜ける。
 func (p *TradingPipeline) syncState(ctx context.Context) {
+	sleep := p.sleepFn
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+
 	snap := p.snapshot()
-	positions, err := p.restClient.GetPositions(ctx, snap.symbolID)
-	if err != nil {
-		slog.Warn("pipeline: failed to sync positions", "error", err)
+
+	var positions []entity.Position
+	posErr := retryOn20010(ctx, sleep, func() error {
+		var err error
+		positions, err = p.restClient.GetPositions(ctx, snap.symbolID)
+		return err
+	})
+	if posErr != nil {
+		slog.Warn("pipeline: failed to sync positions", "error", posErr)
 	} else {
 		p.riskMgr.UpdatePositions(positions)
 	}
 
-	assets, err := p.restClient.GetAssets(ctx)
-	if err != nil {
-		slog.Warn("pipeline: failed to sync assets", "error", err)
+	var assets []entity.Asset
+	assetErr := retryOn20010(ctx, sleep, func() error {
+		var err error
+		assets, err = p.restClient.GetAssets(ctx)
+		return err
+	})
+	if assetErr != nil {
+		slog.Warn("pipeline: failed to sync assets", "error", assetErr)
 	} else {
 		for _, a := range assets {
 			if a.Currency == "JPY" {
