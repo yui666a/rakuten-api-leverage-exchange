@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -169,4 +170,32 @@ func TestSwitchSymbol_PreservesRunningState(t *testing.T) {
 	}
 
 	p.Stop()
+}
+
+func TestRoundDownToStep(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount float64
+		step   float64
+		want   float64
+	}{
+		{"LTC step=0.1, amount=0.1166", 0.1166, 0.1, 0.1},
+		{"LTC step=0.1, amount=0.9999", 0.9999, 0.1, 0.9},
+		{"BTC step=0.01, amount=0.0156", 0.0156, 0.01, 0.01},
+		{"XRP step=100, amount=250", 250.0, 100.0, 200.0},
+		{"ADA step=10, amount=24.8", 24.8, 10.0, 20.0},
+		{"DOT step=1, amount=4.76", 4.76, 1.0, 4.0},
+		{"exact match", 0.3, 0.1, 0.3},
+		{"step=0 fallback to 4 decimals", 0.11667, 0, 0.1166},
+		{"step negative fallback", 0.11667, -1, 0.1166},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := roundDownToStep(tt.amount, tt.step)
+			if math.Abs(got-tt.want) > 1e-9 {
+				t.Errorf("roundDownToStep(%v, %v) = %v, want %v", tt.amount, tt.step, got, tt.want)
+			}
+		})
+	}
 }
