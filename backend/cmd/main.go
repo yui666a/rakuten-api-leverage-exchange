@@ -160,6 +160,10 @@ func main() {
 
 	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID, symbolSwitchCh)
 	go startDailyLossReset(ctx, riskMgr)
+	// 残高・ポジションの定期同期は auto-trading の start/stop とは独立して常時回す。
+	// これにより自動売買停止中でも画面の残高が楽天の実残高に追随し、起動直後に 20010
+	// で失敗したケースも 15 秒ごとに再試行される。
+	go pipeline.runStateSyncLoop(ctx)
 
 	slog.Info("Trading pipeline ready",
 		"tradeAmount", cfg.Trading.TradeAmount,
