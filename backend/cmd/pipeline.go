@@ -46,12 +46,15 @@ type TradingPipeline struct {
 	mu       sync.RWMutex // フィールド保護（snapshot 経由で読む）
 	cancel   context.CancelFunc
 
-	symbolID          int64
-	interval          time.Duration
+	symbolID       int64
+	interval       time.Duration
 	stateSyncInterval time.Duration
-	tradeAmount       float64
+	tradeAmount    float64
+	baseStepAmount float64 // シンボルごとの最小注文刻み幅（例: BTC=0.01, LTC=0.1）
+	minOrderAmount float64 // シンボルごとの最小注文数量
 
 	restClient       repository.OrderClient
+	symbolFetcher    repository.SymbolFetcher
 	marketDataSvc    *usecase.MarketDataService
 	indicatorCalc    *usecase.IndicatorCalculator
 	strategyEngine   *usecase.StrategyEngine
@@ -67,16 +70,20 @@ type TradingPipeline struct {
 
 // tradingSnapshot は evaluate / stopLoss ループで使う、ロック下にコピーしたフィールド束。
 type tradingSnapshot struct {
-	symbolID    int64
-	tradeAmount float64
+	symbolID       int64
+	tradeAmount    float64
+	baseStepAmount float64
+	minOrderAmount float64
 }
 
 func (p *TradingPipeline) snapshot() tradingSnapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return tradingSnapshot{
-		symbolID:    p.symbolID,
-		tradeAmount: p.tradeAmount,
+		symbolID:       p.symbolID,
+		tradeAmount:    p.tradeAmount,
+		baseStepAmount: p.baseStepAmount,
+		minOrderAmount: p.minOrderAmount,
 	}
 }
 
@@ -91,6 +98,7 @@ type TradingPipelineConfig struct {
 func NewTradingPipeline(
 	cfg TradingPipelineConfig,
 	restClient repository.OrderClient,
+	symbolFetcher repository.SymbolFetcher,
 	marketDataSvc *usecase.MarketDataService,
 	indicatorCalc *usecase.IndicatorCalculator,
 	strategyEngine *usecase.StrategyEngine,
@@ -105,6 +113,7 @@ func NewTradingPipeline(
 		stateSyncInterval: cfg.StateSyncInterval,
 		tradeAmount:       cfg.TradeAmount,
 		restClient:        restClient,
+		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
 		indicatorCalc:     indicatorCalc,
 		strategyEngine:    strategyEngine,
@@ -189,6 +198,32 @@ func (p *TradingPipeline) TradeAmount() float64 {
 	return p.tradeAmount
 }
 
+// loadSymbolMeta は指定シンボルの baseStepAmount / minOrderAmount を楽天 API から取得し、
+// パイプラインのフィールドを更新する。mu ロック下で呼ぶこと。
+func (p *TradingPipeline) loadSymbolMeta(ctx context.Context, symbolID int64) {
+	if p.symbolFetcher == nil {
+		return
+	}
+	symbols, err := p.symbolFetcher.GetSymbols(ctx)
+	if err != nil {
+		slog.Warn("pipeline: failed to fetch symbols for step amount", "error", err)
+		return
+	}
+	for _, s := range symbols {
+		if s.ID == symbolID {
+			p.baseStepAmount = s.BaseStepAmount.Float64()
+			p.minOrderAmount = s.MinOrderAmount.Float64()
+			slog.Info("pipeline: loaded symbol meta",
+				"symbolID", symbolID,
+				"baseStepAmount", p.baseStepAmount,
+				"minOrderAmount", p.minOrderAmount,
+			)
+			return
+		}
+	}
+	slog.Warn("pipeline: symbol not found in API response", "symbolID", symbolID)
+}
+
 // SwitchSymbol は取引対象シンボルを切り替える。
 // switchMu でシリアライズすることで:
 //   - 連続切替の順序保証（逆順適用を防ぐ）
@@ -219,6 +254,7 @@ func (p *TradingPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, onSw
 	if tradeAmount > 0 {
 		p.tradeAmount = tradeAmount
 	}
+	p.loadSymbolMeta(context.Background(), symbolID)
 	p.mu.Unlock()
 
 	// onSwitch（bootstrapCandles + WS切替）を同期実行
@@ -320,10 +356,12 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	amount := snap.tradeAmount / price
-	// 楽天の最小注文単位に丸める（BTC_JPY は 0.0001 BTC）
-	amount = math.Floor(amount*10000) / 10000
-	if amount <= 0 {
-		slog.Warn("pipeline: calculated amount is 0, skip", "tradeAmount", snap.tradeAmount, "price", price)
+	// シンボルの baseStepAmount に合わせて切り捨て丸め
+	amount = roundDownToStep(amount, snap.baseStepAmount)
+	if amount <= 0 || amount < snap.minOrderAmount {
+		slog.Warn("pipeline: amount below minimum, skip",
+			"amount", amount, "minOrderAmount", snap.minOrderAmount,
+			"tradeAmount", snap.tradeAmount, "price", price)
 		return
 	}
 
@@ -535,6 +573,17 @@ func restoreRiskState(ctx context.Context, repo repository.RiskStateRepository, 
 		riskMgr.RecordLoss(state.DailyLoss)
 	}
 	slog.Info("risk state restored", "balance", state.Balance, "dailyLoss", state.DailyLoss)
+}
+
+// roundDownToStep は amount を step の整数倍に切り捨てる。
+// step が 0 以下の場合はフォールバックとして小数4位で切り捨てる。
+// 浮動小数点の丸め誤差を避けるため、除算結果を 1e9 スケールで round してから floor する。
+func roundDownToStep(amount, step float64) float64 {
+	if step <= 0 {
+		return math.Floor(amount*10000) / 10000
+	}
+	n := math.Round(amount/step*1e9) / 1e9
+	return math.Floor(n) * step
 }
 
 // startDailyLossReset は毎日0時(JST)に日次損失をリセットするgoroutineを起動する。

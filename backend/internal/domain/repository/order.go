@@ -35,3 +35,8 @@ type OrderClient interface {
 	GetMyTrades(ctx context.Context, symbolID int64) ([]entity.MyTrade, error)
 	GetAssets(ctx context.Context) ([]entity.Asset, error)
 }
+
+// SymbolFetcher はシンボル情報取得のインターフェース。
+type SymbolFetcher interface {
+	GetSymbols(ctx context.Context) ([]entity.Symbol, error)
+}

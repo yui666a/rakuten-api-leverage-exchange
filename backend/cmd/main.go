@@ -80,6 +80,7 @@ func main() {
 			TradeAmount:       cfg.Trading.TradeAmount,
 		},
 		restClient,
+		restClient, // SymbolFetcher
 		marketDataSvc,
 		indicatorCalc,
 		strategyEngine,
@@ -88,6 +89,11 @@ func main() {
 		tradeHistoryRepo,
 		riskStateRepo,
 	)
+
+	// 初期シンボルの baseStepAmount / minOrderAmount をロード
+	pipeline.mu.Lock()
+	pipeline.loadSymbolMeta(context.Background(), symbolID)
+	pipeline.mu.Unlock()
 
 	// 起動時にポジション・残高を同期
 	pipeline.syncStateInitial(context.Background())
