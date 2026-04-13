@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -70,10 +71,11 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 			reason += ", MACD confirmed"
 		}
 		return &entity.Signal{
-			SymbolID:  symbolID,
-			Action:    entity.SignalActionBuy,
-			Reason:    reason,
-			Timestamp: now,
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionBuy,
+			Confidence: trendFollowConfidence(sma20, sma50, rsi, histogram, true),
+			Reason:     reason,
+			Timestamp:  now,
 		}
 	}
 	if sma20 < sma50 && rsi > 30 {
@@ -91,10 +93,11 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 			reason += ", MACD confirmed"
 		}
 		return &entity.Signal{
-			SymbolID:  symbolID,
-			Action:    entity.SignalActionSell,
-			Reason:    reason,
-			Timestamp: now,
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionSell,
+			Confidence: trendFollowConfidence(sma20, sma50, rsi, histogram, false),
+			Reason:     reason,
+			Timestamp:  now,
 		}
 	}
 	return &entity.Signal{
@@ -103,6 +106,30 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 		Reason:    "trend follow: no clear signal",
 		Timestamp: now,
 	}
+}
+
+// trendFollowConfidence computes a 0.0–1.0 confidence score for trend-follow signals.
+// Factors: SMA divergence strength (40%), RSI headroom (30%), MACD histogram agreement (30%).
+func trendFollowConfidence(sma20, sma50, rsi float64, histogram *float64, isBuy bool) float64 {
+	// SMA divergence: how strongly the cross is established (capped at 2%)
+	smaDivergence := math.Min(math.Abs(sma20-sma50)/sma50*100, 2.0) / 2.0
+
+	// RSI headroom: distance from the overbought/oversold boundary
+	var rsiRoom float64
+	if isBuy {
+		rsiRoom = (70 - rsi) / 40 // 30→1.0, 70→0.0
+	} else {
+		rsiRoom = (rsi - 30) / 40 // 70→1.0, 30→0.0
+	}
+	rsiRoom = math.Max(0, math.Min(1, rsiRoom))
+
+	// MACD histogram confirmation
+	macdConfirm := 0.5 // neutral when histogram unavailable
+	if histogram != nil {
+		macdConfirm = math.Min(math.Abs(*histogram)/10, 1.0)
+	}
+
+	return smaDivergence*0.4 + rsiRoom*0.3 + macdConfirm*0.3
 }
 
 func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64) *entity.Signal {
@@ -123,10 +150,11 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 			reason += ", MACD not strongly against"
 		}
 		return &entity.Signal{
-			SymbolID:  symbolID,
-			Action:    entity.SignalActionBuy,
-			Reason:    reason,
-			Timestamp: now,
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionBuy,
+			Confidence: contrarianConfidence(rsi, histogram, true),
+			Reason:     reason,
+			Timestamp:  now,
 		}
 	}
 	if rsi > 70 {
@@ -144,10 +172,11 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 			reason += ", MACD not strongly against"
 		}
 		return &entity.Signal{
-			SymbolID:  symbolID,
-			Action:    entity.SignalActionSell,
-			Reason:    reason,
-			Timestamp: now,
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionSell,
+			Confidence: contrarianConfidence(rsi, histogram, false),
+			Reason:     reason,
+			Timestamp:  now,
 		}
 	}
 	return &entity.Signal{
@@ -156,4 +185,25 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 		Reason:    "contrarian: RSI in neutral zone",
 		Timestamp: now,
 	}
+}
+
+// contrarianConfidence computes a 0.0–1.0 confidence score for contrarian signals.
+// Factors: RSI extremity (60%), MACD not-against (40%).
+func contrarianConfidence(rsi float64, histogram *float64, isBuy bool) float64 {
+	// RSI extremity: how deep into oversold/overbought territory
+	var rsiExtreme float64
+	if isBuy {
+		rsiExtreme = (30 - rsi) / 30 // 0→1.0, 30→0.0
+	} else {
+		rsiExtreme = (rsi - 70) / 30 // 100→1.0, 70→0.0
+	}
+	rsiExtreme = math.Max(0, math.Min(1, rsiExtreme))
+
+	// MACD not-against: lower opposing momentum = higher confidence
+	macdNotAgainst := 0.5 // neutral when histogram unavailable
+	if histogram != nil {
+		macdNotAgainst = 1.0 - math.Min(math.Abs(*histogram)/20, 1.0)
+	}
+
+	return rsiExtreme*0.6 + macdNotAgainst*0.4
 }

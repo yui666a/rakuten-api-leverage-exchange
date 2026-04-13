@@ -15,10 +15,11 @@ type Config struct {
 }
 
 type TradingConfig struct {
-	SymbolID            int64   // 取引対象シンボルID（デフォルト: 7 = BTC_JPY）
-	TradeAmount         float64 // 1回の注文金額（円）
-	PipelineIntervalSec int     // パイプライン評価間隔（秒）
-	StateSyncIntervalSec int    // ポジション・残高同期間隔（秒）
+	SymbolID             int64   // 取引対象シンボルID（デフォルト: 7 = BTC_JPY）
+	TradeAmount          float64 // 1回の注文金額（円）
+	PipelineIntervalSec  int     // パイプライン評価間隔（秒）
+	StateSyncIntervalSec int     // ポジション・残高同期間隔（秒）
+	MinConfidence        float64 // シグナル最小信頼度（0.0–1.0, デフォルト 0.3）
 }
 
 type LLMConfig struct {
@@ -87,6 +88,7 @@ func Load() *Config {
 			TradeAmount:          getEnvFloat("TRADE_AMOUNT", 1000),
 			PipelineIntervalSec:  getEnvInt("PIPELINE_INTERVAL_SEC", 60),
 			StateSyncIntervalSec: getEnvInt("STATE_SYNC_INTERVAL_SEC", 15),
+			MinConfidence:        getEnvFloat("TRADE_MIN_CONFIDENCE", 0.3),
 		},
 	}
 }

@@ -377,3 +377,117 @@ func TestStrategyEngine_TrendFollow_NilHistogramStillTrades(t *testing.T) {
 		t.Fatalf("expected BUY with nil histogram (backward compat), got %s", signal.Action)
 	}
 }
+
+func TestStrategyEngine_Confidence_TrendFollowStrong(t *testing.T) {
+	// Strong uptrend: SMA divergence 2%, RSI 55, histogram +5 → high confidence
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000.0), // 2% above SMA50
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(55.0),
+		Histogram: ptr(5.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY, got %s", signal.Action)
+	}
+	// SMA divergence: min(2.0, 2.0)/2.0 = 1.0 * 0.4 = 0.4
+	// RSI room: (70-55)/40 = 0.375 * 0.3 = 0.1125
+	// MACD confirm: min(5/10, 1.0) = 0.5 * 0.3 = 0.15
+	// Total: 0.6625
+	if signal.Confidence < 0.6 || signal.Confidence > 0.75 {
+		t.Fatalf("expected confidence ~0.66, got %.4f", signal.Confidence)
+	}
+}
+
+func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
+	// Weak uptrend: SMA barely crossing (0.1% divergence), RSI 68, no histogram
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5005000.0), // 0.1% above SMA50
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(68.0),
+		Histogram: nil,
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5005000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY, got %s", signal.Action)
+	}
+	// SMA divergence: min(0.1, 2.0)/2.0 = 0.05 * 0.4 = 0.02
+	// RSI room: (70-68)/40 = 0.05 * 0.3 = 0.015
+	// MACD confirm: nil → 0.5 * 0.3 = 0.15
+	// Total: 0.185
+	if signal.Confidence > 0.25 {
+		t.Fatalf("expected low confidence (<0.25), got %.4f", signal.Confidence)
+	}
+}
+
+func TestStrategyEngine_Confidence_ContrarianStrong(t *testing.T) {
+	// Deep oversold: RSI 15, histogram mildly negative (-3)
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceContrarian, Reasoning: "oversold", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(4900000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(15.0),
+		Histogram: ptr(-3.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY, got %s", signal.Action)
+	}
+	// RSI extreme: (30-15)/30 = 0.5 * 0.6 = 0.3
+	// MACD not against: 1.0 - min(3/20, 1.0) = 0.85 * 0.4 = 0.34
+	// Total: 0.64
+	if signal.Confidence < 0.55 || signal.Confidence > 0.75 {
+		t.Fatalf("expected confidence ~0.64, got %.4f", signal.Confidence)
+	}
+}
+
+func TestStrategyEngine_Confidence_HoldIsZero(t *testing.T) {
+	// HOLD signals should have 0.0 confidence
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceHold, Reasoning: "uncertain", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(5100000.0),
+		SMA50:    ptr(5000000.0),
+		RSI14:    ptr(55.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD, got %s", signal.Action)
+	}
+	if signal.Confidence != 0.0 {
+		t.Fatalf("expected confidence 0.0 for HOLD, got %.4f", signal.Confidence)
+	}
+}
