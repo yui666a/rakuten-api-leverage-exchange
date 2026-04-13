@@ -40,6 +40,7 @@ type RiskConfig struct {
 	MaxPositionAmount float64
 	MaxDailyLoss      float64
 	StopLossPercent   float64
+	TakeProfitPercent float64
 	InitialCapital    float64
 }
 
@@ -62,6 +63,7 @@ func Load() *Config {
 			MaxPositionAmount: getEnvFloat("RISK_MAX_POSITION_AMOUNT", 5000),
 			MaxDailyLoss:      getEnvFloat("RISK_MAX_DAILY_LOSS", 5000),
 			StopLossPercent:   getEnvFloat("RISK_STOP_LOSS_PERCENT", 5),
+			TakeProfitPercent: getEnvFloat("RISK_TAKE_PROFIT_PERCENT", 10),
 			InitialCapital:    getEnvFloat("RISK_INITIAL_CAPITAL", 10000),
 		},
 		Rakuten: RakutenConfig{
