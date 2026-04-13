@@ -433,6 +433,7 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 						closeSide = string(entity.OrderSideBuy)
 					}
 					p.recordTrade(ctx, pos.SymbolID, result.OrderID, closeSide, "close", t.Last, pos.RemainingAmount, "trailing-stop", false)
+					p.riskMgr.RecordConsecutiveLoss()
 					p.persistRiskState(ctx)
 				}
 			}
@@ -452,6 +453,7 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 					slog.Info("pipeline: stop-loss closed", "orderID", result.OrderID)
 					loss := math.Abs(pos.FloatingProfit)
 					p.riskMgr.RecordLoss(loss)
+					p.riskMgr.RecordConsecutiveLoss()
 					closeSide := string(entity.OrderSideSell)
 					if pos.OrderSide == entity.OrderSideSell {
 						closeSide = string(entity.OrderSideBuy)
@@ -475,6 +477,7 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 				}
 				if result.Executed {
 					slog.Info("pipeline: take-profit closed", "orderID", result.OrderID)
+					p.riskMgr.ResetConsecutiveLosses()
 					closeSide := string(entity.OrderSideSell)
 					if pos.OrderSide == entity.OrderSideSell {
 						closeSide = string(entity.OrderSideBuy)

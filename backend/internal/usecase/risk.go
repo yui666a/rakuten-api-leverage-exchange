@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
@@ -18,13 +19,15 @@ type RiskStatus struct {
 }
 
 type RiskManager struct {
-	config         entity.RiskConfig
-	mu             sync.RWMutex
-	balance        float64
-	dailyLoss      float64
-	positions      []entity.Position
-	manualStop     bool
-	highWaterMarks map[int64]float64 // positionID → best price
+	config            entity.RiskConfig
+	mu                sync.RWMutex
+	balance           float64
+	dailyLoss         float64
+	positions         []entity.Position
+	manualStop        bool
+	highWaterMarks    map[int64]float64 // positionID → best price
+	consecutiveLosses int
+	cooldownUntil     time.Time
 }
 
 func NewRiskManager(config entity.RiskConfig) *RiskManager {
@@ -49,6 +52,13 @@ func (rm *RiskManager) CheckOrder(ctx context.Context, proposal entity.OrderProp
 		return entity.RiskCheckResult{
 			Approved: false,
 			Reason:   "trading is manually stopped",
+		}
+	}
+
+	if rm.config.MaxConsecutiveLosses > 0 && !rm.cooldownUntil.IsZero() && time.Now().Before(rm.cooldownUntil) {
+		return entity.RiskCheckResult{
+			Approved: false,
+			Reason:   fmt.Sprintf("cooldown: %d consecutive losses, trading paused until %s", rm.consecutiveLosses, rm.cooldownUntil.Format("15:04")),
 		}
 	}
 
@@ -134,6 +144,25 @@ func (rm *RiskManager) ResetDailyLoss() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.dailyLoss = 0
+}
+
+// RecordConsecutiveLoss increments the consecutive loss counter.
+// If the counter reaches MaxConsecutiveLosses, a cooldown period is activated.
+func (rm *RiskManager) RecordConsecutiveLoss() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.consecutiveLosses++
+	if rm.config.MaxConsecutiveLosses > 0 && rm.consecutiveLosses >= rm.config.MaxConsecutiveLosses {
+		rm.cooldownUntil = time.Now().Add(time.Duration(rm.config.CooldownMinutes) * time.Minute)
+	}
+}
+
+// ResetConsecutiveLosses resets the consecutive loss counter and clears cooldown.
+func (rm *RiskManager) ResetConsecutiveLosses() {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.consecutiveLosses = 0
+	rm.cooldownUntil = time.Time{}
 }
 
 // UpdateHighWaterMark updates the best price for a position.

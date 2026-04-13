@@ -9,11 +9,13 @@ import (
 
 func defaultRiskConfig() entity.RiskConfig {
 	return entity.RiskConfig{
-		MaxPositionAmount: 5000,
-		MaxDailyLoss:      5000,
-		StopLossPercent:   5,
-		TakeProfitPercent: 10,
-		InitialCapital:    10000,
+		MaxPositionAmount:    5000,
+		MaxDailyLoss:         5000,
+		StopLossPercent:      5,
+		TakeProfitPercent:    10,
+		InitialCapital:       10000,
+		MaxConsecutiveLosses: 3,
+		CooldownMinutes:      30,
 	}
 }
 
@@ -281,5 +283,80 @@ func TestRiskManager_TrailingStop_SellPosition(t *testing.T) {
 	targets := rm.CheckTrailingStop(7, 4750000)
 	if len(targets) != 1 {
 		t.Fatalf("expected 1 trailing stop for sell position, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_ConsecutiveLossBreaker_BlocksAfterNLosses(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	// Record 3 consecutive losses (MaxConsecutiveLosses=3)
+	rm.RecordConsecutiveLoss()
+	rm.RecordConsecutiveLoss()
+	rm.RecordConsecutiveLoss()
+
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000,
+	}
+	result := rm.CheckOrder(context.Background(), proposal)
+	if result.Approved {
+		t.Fatal("order should be rejected after 3 consecutive losses")
+	}
+	if result.Reason == "" {
+		t.Fatal("rejection reason should not be empty")
+	}
+}
+
+func TestRiskManager_ConsecutiveLossBreaker_ResetOnWin(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	// Record 2 losses then reset (simulating a take-profit win)
+	rm.RecordConsecutiveLoss()
+	rm.RecordConsecutiveLoss()
+	rm.ResetConsecutiveLosses()
+
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000,
+	}
+	result := rm.CheckOrder(context.Background(), proposal)
+	if !result.Approved {
+		t.Fatalf("order should be approved after reset: %s", result.Reason)
+	}
+}
+
+func TestRiskManager_ConsecutiveLossBreaker_DisabledWhenZero(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.MaxConsecutiveLosses = 0
+	rm := NewRiskManager(cfg)
+
+	// Record many losses — should never trigger cooldown when disabled
+	for i := 0; i < 10; i++ {
+		rm.RecordConsecutiveLoss()
+	}
+
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000,
+	}
+	result := rm.CheckOrder(context.Background(), proposal)
+	if !result.Approved {
+		t.Fatalf("order should be approved when MaxConsecutiveLosses=0: %s", result.Reason)
+	}
+}
+
+func TestRiskManager_ConsecutiveLossBreaker_CloseOrdersAllowed(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	// Trigger cooldown
+	rm.RecordConsecutiveLoss()
+	rm.RecordConsecutiveLoss()
+	rm.RecordConsecutiveLoss()
+
+	posID := int64(1)
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideSell, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000, IsClose: true, PositionID: &posID,
+	}
+	result := rm.CheckOrder(context.Background(), proposal)
+	if !result.Approved {
+		t.Fatalf("close order should always be approved during cooldown: %s", result.Reason)
 	}
 }

@@ -2,11 +2,13 @@ package entity
 
 // RiskConfig はリスク管理のパラメータ。
 type RiskConfig struct {
-	MaxPositionAmount float64 `json:"maxPositionAmount"` // 同時ポジション上限（円）
-	MaxDailyLoss      float64 `json:"maxDailyLoss"`      // 日次損失上限（円）
-	StopLossPercent   float64 `json:"stopLossPercent"`    // 損切りライン（%）
-	TakeProfitPercent float64 `json:"takeProfitPercent"`  // 利確ライン（%）
-	InitialCapital    float64 `json:"initialCapital"`     // 軍資金（円）
+	MaxPositionAmount    float64 `json:"maxPositionAmount"`    // 同時ポジション上限（円）
+	MaxDailyLoss         float64 `json:"maxDailyLoss"`         // 日次損失上限（円）
+	StopLossPercent      float64 `json:"stopLossPercent"`      // 損切りライン（%）
+	TakeProfitPercent    float64 `json:"takeProfitPercent"`    // 利確ライン（%）
+	InitialCapital       float64 `json:"initialCapital"`       // 軍資金（円）
+	MaxConsecutiveLosses int     `json:"maxConsecutiveLosses"` // 連敗上限（0=無効）
+	CooldownMinutes      int     `json:"cooldownMinutes"`      // 冷却期間（分）
 }
 
 // OrderProposal はRisk Managerに承認を求める注文提案。
