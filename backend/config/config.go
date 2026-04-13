@@ -37,11 +37,13 @@ type DatabaseConfig struct {
 }
 
 type RiskConfig struct {
-	MaxPositionAmount float64
-	MaxDailyLoss      float64
-	StopLossPercent   float64
-	TakeProfitPercent float64
-	InitialCapital    float64
+	MaxPositionAmount    float64
+	MaxDailyLoss         float64
+	StopLossPercent      float64
+	TakeProfitPercent    float64
+	InitialCapital       float64
+	MaxConsecutiveLosses int
+	CooldownMinutes      int
 }
 
 type RakutenConfig struct {
@@ -60,11 +62,13 @@ func Load() *Config {
 			Path: getEnv("DATABASE_PATH", "data/trading.db"),
 		},
 		Risk: RiskConfig{
-			MaxPositionAmount: getEnvFloat("RISK_MAX_POSITION_AMOUNT", 5000),
-			MaxDailyLoss:      getEnvFloat("RISK_MAX_DAILY_LOSS", 5000),
-			StopLossPercent:   getEnvFloat("RISK_STOP_LOSS_PERCENT", 5),
-			TakeProfitPercent: getEnvFloat("RISK_TAKE_PROFIT_PERCENT", 10),
-			InitialCapital:    getEnvFloat("RISK_INITIAL_CAPITAL", 10000),
+			MaxPositionAmount:    getEnvFloat("RISK_MAX_POSITION_AMOUNT", 5000),
+			MaxDailyLoss:         getEnvFloat("RISK_MAX_DAILY_LOSS", 5000),
+			StopLossPercent:      getEnvFloat("RISK_STOP_LOSS_PERCENT", 5),
+			TakeProfitPercent:    getEnvFloat("RISK_TAKE_PROFIT_PERCENT", 10),
+			InitialCapital:       getEnvFloat("RISK_INITIAL_CAPITAL", 10000),
+			MaxConsecutiveLosses: getEnvInt("RISK_MAX_CONSECUTIVE_LOSSES", 3),
+			CooldownMinutes:      getEnvInt("RISK_COOLDOWN_MINUTES", 30),
 		},
 		Rakuten: RakutenConfig{
 			BaseURL:   getEnv("RAKUTEN_API_BASE_URL", "https://exchange.rakuten-wallet.co.jp"),
