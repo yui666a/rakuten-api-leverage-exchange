@@ -609,6 +609,92 @@ func TestStrategyEngine_MTF_ContrarianNotFiltered(t *testing.T) {
 	}
 }
 
+func TestStrategyEngine_VolatilityFilter_SqueezeBlocksTrendFollow(t *testing.T) {
+	// BB bandwidth < 0.02 during trend follow → HOLD
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5100000.0),
+		SMA50:       ptr(5000000.0),
+		RSI14:       ptr(55.0),
+		Histogram:   ptr(3.0),
+		BBBandwidth: ptr(0.015), // squeeze
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD during BB squeeze, got %s", signal.Action)
+	}
+	if signal.Reason != "volatility filter: Bollinger squeeze, trend signal unreliable" {
+		t.Fatalf("unexpected reason: %s", signal.Reason)
+	}
+}
+
+func TestStrategyEngine_VolatilityFilter_NormalBandwidthAllowsTrade(t *testing.T) {
+	// BB bandwidth >= 0.02 → normal trading
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5100000.0),
+		SMA50:       ptr(5000000.0),
+		RSI14:       ptr(55.0),
+		Histogram:   ptr(3.0),
+		BBBandwidth: ptr(0.05), // normal volatility
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY with normal bandwidth, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_BB_ContrarianBuyAtLowerBandBoost(t *testing.T) {
+	// Contrarian BUY with price at lower BB → confidence boosted
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceContrarian, Reasoning: "oversold", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(4900000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(25.0),
+		Histogram: ptr(-3.0),
+		BBUpper:   ptr(5200000.0),
+		BBLower:   ptr(4850000.0),
+	}
+	// Price at lower band
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 4850000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY, got %s", signal.Action)
+	}
+
+	// Compare with same signal without BB
+	indicatorsNoBB := indicators
+	indicatorsNoBB.BBLower = nil
+	indicatorsNoBB.BBUpper = nil
+	signalNoBB, _ := engine.EvaluateWithHigherTF(context.Background(), indicatorsNoBB, nil, 4850000)
+	if signal.Confidence <= signalNoBB.Confidence {
+		t.Fatalf("expected BB-boosted confidence (%.4f) > base (%.4f)", signal.Confidence, signalNoBB.Confidence)
+	}
+}
+
 func TestStrategyEngine_Confidence_HoldIsZero(t *testing.T) {
 	// HOLD signals should have 0.0 confidence
 	resolver := &mockStanceResolver{

@@ -56,6 +56,12 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.SignalLine = toPtr(signalLine)
 	result.Histogram = toPtr(histogram)
 
+	bbUpper, bbMiddle, bbLower, bbBandwidth := indicator.BollingerBands(prices, 20, 2.0)
+	result.BBUpper = toPtr(bbUpper)
+	result.BBMiddle = toPtr(bbMiddle)
+	result.BBLower = toPtr(bbLower)
+	result.BBBandwidth = toPtr(bbBandwidth)
+
 	return result, nil
 }
 

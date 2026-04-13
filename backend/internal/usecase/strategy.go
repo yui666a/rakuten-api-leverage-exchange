@@ -23,18 +23,42 @@ func NewStrategyEngine(stanceResolver StanceResolver) *StrategyEngine {
 // higherTFがnon-nilの場合、Trend Followシグナルが上位トレンドに逆行していればHOLDにフィルタする。
 // 上位トレンドと一致している場合はconfidenceを10%ブーストする。
 // Contrarianシグナルは意図的に逆張りなのでフィルタしない。
+// ボラティリティフィルター: BBバンド幅が非常に狭い(squeeze)場合、Trend Followシグナルを抑制する。
 func (e *StrategyEngine) EvaluateWithHigherTF(ctx context.Context, indicators entity.IndicatorSet, higherTF *entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
 	signal, err := e.Evaluate(ctx, indicators, lastPrice)
 	if err != nil || signal.Action == entity.SignalActionHold {
 		return signal, err
 	}
 
+	result := e.stanceResolver.Resolve(ctx, indicators)
+
+	// Volatility filter: squeeze detection for trend-follow signals
+	// BBBandwidth < 0.02 (2%) indicates very low volatility / consolidation
+	if result.Stance == entity.MarketStanceTrendFollow && indicators.BBBandwidth != nil && *indicators.BBBandwidth < 0.02 {
+		return &entity.Signal{
+			SymbolID:  indicators.SymbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    "volatility filter: Bollinger squeeze, trend signal unreliable",
+			Timestamp: signal.Timestamp,
+		}, nil
+	}
+
+	// BB position can boost/penalize confidence for contrarian
+	if result.Stance == entity.MarketStanceContrarian && indicators.BBLower != nil && indicators.BBUpper != nil {
+		if signal.Action == entity.SignalActionBuy && lastPrice <= *indicators.BBLower {
+			// Price at/below lower band: extra confidence for buy
+			signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
+		} else if signal.Action == entity.SignalActionSell && lastPrice >= *indicators.BBUpper {
+			// Price at/above upper band: extra confidence for sell
+			signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
+		}
+	}
+
 	if higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
 		return signal, nil
 	}
 
-	// Contrarian signals are intentionally counter-trend; don't filter them
-	result := e.stanceResolver.Resolve(ctx, indicators)
+	// Contrarian signals are intentionally counter-trend; don't filter by higher TF
 	if result.Stance == entity.MarketStanceContrarian {
 		return signal, nil
 	}
@@ -59,11 +83,7 @@ func (e *StrategyEngine) EvaluateWithHigherTF(ctx context.Context, indicators en
 	}
 
 	// Signal aligns with higher TF: boost confidence by 10% (capped at 1.0)
-	boosted := signal.Confidence + 0.1
-	if boosted > 1.0 {
-		boosted = 1.0
-	}
-	signal.Confidence = boosted
+	signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
 	return signal, nil
 }
 
