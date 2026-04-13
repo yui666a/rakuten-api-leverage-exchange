@@ -78,8 +78,9 @@ func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Tick
 }
 
 // GetCandles retrieves candlestick data from the repository.
-func (s *MarketDataService) GetCandles(ctx context.Context, symbolID int64, interval string, limit int) ([]entity.Candle, error) {
-	return s.repo.GetCandles(ctx, symbolID, interval, limit)
+// If before > 0, only candles older than that timestamp are returned.
+func (s *MarketDataService) GetCandles(ctx context.Context, symbolID int64, interval string, limit int, before int64) ([]entity.Candle, error) {
+	return s.repo.GetCandles(ctx, symbolID, interval, limit, before)
 }
 
 // GetLatestTicker returns the most recently persisted ticker for a symbol.

@@ -50,32 +50,54 @@ func (h *CandleHandler) GetCandles(c *gin.Context) {
 		limit = 500
 	}
 
+	var before int64
+	if beforeStr := c.Query("before"); beforeStr != "" {
+		before, _ = strconv.ParseInt(beforeStr, 10, 64)
+	}
+
 	ctx := c.Request.Context()
-	candles, err := h.marketDataSvc.GetCandles(ctx, symbolID, interval, limit)
+	candles, err := h.marketDataSvc.GetCandles(ctx, symbolID, interval, limit, before)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// DB にデータが無ければ楽天APIから取得して保存、再取得する。
-	if len(candles) == 0 && h.restClient != nil {
-		resp, fetchErr := h.restClient.GetCandlestick(ctx, symbolID, interval, nil, nil)
+	// DB のデータが不足していれば楽天APIからオンデマンド取得して補充する。
+	// - before なし: DB が空なら最新データを取得
+	// - before あり: DB が limit 未満なら dateTo=before で過去データを取得
+	needFetch := h.restClient != nil &&
+		(len(candles) == 0 || (before > 0 && len(candles) < limit))
+	if needFetch {
+		var dateFrom, dateTo *int64
+		if before > 0 {
+			dateTo = &before
+		}
+		resp, fetchErr := h.restClient.GetCandlestick(ctx, symbolID, interval, dateFrom, dateTo)
 		if fetchErr != nil {
+			// フェッチ失敗でも DB のデータがあればそれを返す
+			if len(candles) > 0 {
+				goto respond
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fetchErr.Error()})
 			return
 		}
 		if len(resp.Candlesticks) > 0 {
 			if saveErr := h.marketDataSvc.SaveCandles(ctx, symbolID, interval, resp.Candlesticks); saveErr != nil {
+				if len(candles) > 0 {
+					goto respond
+				}
 				c.JSON(http.StatusInternalServerError, gin.H{"error": saveErr.Error()})
 				return
 			}
-			candles, err = h.marketDataSvc.GetCandles(ctx, symbolID, interval, limit)
+			candles, err = h.marketDataSvc.GetCandles(ctx, symbolID, interval, limit, before)
 			if err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
 		}
 	}
+
+respond:
 
 	// Lightweight Charts expects oldest -> newest ordering.
 	for i, j := 0, len(candles)-1; i < j; i, j = i+1, j-1 {

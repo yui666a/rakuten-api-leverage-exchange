@@ -36,7 +36,7 @@ func TestSaveAndGetCandle(t *testing.T) {
 		t.Fatalf("save failed: %v", err)
 	}
 
-	candles, err := repo.GetCandles(ctx, 7, "PT1M", 10)
+	candles, err := repo.GetCandles(ctx, 7, "PT1M", 10, 0)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestSaveCandle_DuplicateIgnored(t *testing.T) {
 		t.Fatalf("duplicate save should not error: %v", err)
 	}
 
-	candles, err := repo.GetCandles(ctx, 7, "PT1M", 10)
+	candles, err := repo.GetCandles(ctx, 7, "PT1M", 10, 0)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestSaveCandles_Batch(t *testing.T) {
 		t.Fatalf("batch save failed: %v", err)
 	}
 
-	result, err := repo.GetCandles(ctx, 7, "PT1M", 10)
+	result, err := repo.GetCandles(ctx, 7, "PT1M", 10, 0)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
@@ -116,12 +116,63 @@ func TestGetCandles_Limit(t *testing.T) {
 	}
 	_ = repo.SaveCandles(ctx, 7, "PT1M", candles)
 
-	result, err := repo.GetCandles(ctx, 7, "PT1M", 3)
+	result, err := repo.GetCandles(ctx, 7, "PT1M", 3, 0)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}
 	if len(result) != 3 {
 		t.Fatalf("expected 3 candles (limited), got %d", len(result))
+	}
+}
+
+func TestGetCandles_BeforeCursor(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	candles := []entity.Candle{
+		{Open: 1, High: 2, Low: 0, Close: 1, Volume: 1, Time: 1000},
+		{Open: 2, High: 3, Low: 1, Close: 2, Volume: 2, Time: 2000},
+		{Open: 3, High: 4, Low: 2, Close: 3, Volume: 3, Time: 3000},
+		{Open: 4, High: 5, Low: 3, Close: 4, Volume: 4, Time: 4000},
+		{Open: 5, High: 6, Low: 4, Close: 5, Volume: 5, Time: 5000},
+	}
+	_ = repo.SaveCandles(ctx, 7, "PT1M", candles)
+
+	// before=3000 should return candles with time < 3000, i.e. time=2000 and time=1000
+	result, err := repo.GetCandles(ctx, 7, "PT1M", 10, 3000)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 candles before time=3000, got %d", len(result))
+	}
+	// Newest first
+	if result[0].Time != 2000 {
+		t.Fatalf("expected newest first (time=2000), got time=%d", result[0].Time)
+	}
+	if result[1].Time != 1000 {
+		t.Fatalf("expected second (time=1000), got time=%d", result[1].Time)
+	}
+
+	// before=0 should return all (no filter)
+	all, err := repo.GetCandles(ctx, 7, "PT1M", 10, 0)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("expected 5 candles with before=0, got %d", len(all))
+	}
+
+	// before with limit
+	limited, err := repo.GetCandles(ctx, 7, "PT1M", 1, 5000)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	if len(limited) != 1 {
+		t.Fatalf("expected 1 candle with limit=1, got %d", len(limited))
+	}
+	if limited[0].Time != 4000 {
+		t.Fatalf("expected time=4000 (newest before 5000 with limit 1), got %d", limited[0].Time)
 	}
 }
 
@@ -133,7 +184,7 @@ func TestGetCandles_FilterBySymbolAndInterval(t *testing.T) {
 	_ = repo.SaveCandle(ctx, 7, "PT5M", entity.Candle{Open: 1, High: 2, Low: 0, Close: 1, Volume: 1, Time: 1000})
 	_ = repo.SaveCandle(ctx, 8, "PT1M", entity.Candle{Open: 1, High: 2, Low: 0, Close: 1, Volume: 1, Time: 1000})
 
-	result, err := repo.GetCandles(ctx, 7, "PT1M", 10)
+	result, err := repo.GetCandles(ctx, 7, "PT1M", 10, 0)
 	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	}

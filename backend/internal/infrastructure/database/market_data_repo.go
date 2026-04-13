@@ -56,13 +56,24 @@ func (r *MarketDataRepo) SaveCandles(ctx context.Context, symbolID int64, interv
 	return nil
 }
 
-func (r *MarketDataRepo) GetCandles(ctx context.Context, symbolID int64, interval string, limit int) ([]entity.Candle, error) {
-	rows, err := r.db.QueryContext(ctx,
-		`SELECT open, high, low, close, volume, time FROM candles
-		 WHERE symbol_id = ? AND interval = ?
-		 ORDER BY time DESC LIMIT ?`,
-		symbolID, interval, limit,
-	)
+func (r *MarketDataRepo) GetCandles(ctx context.Context, symbolID int64, interval string, limit int, before int64) ([]entity.Candle, error) {
+	var rows *sql.Rows
+	var err error
+	if before > 0 {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT open, high, low, close, volume, time FROM candles
+			 WHERE symbol_id = ? AND interval = ? AND time < ?
+			 ORDER BY time DESC LIMIT ?`,
+			symbolID, interval, before, limit,
+		)
+	} else {
+		rows, err = r.db.QueryContext(ctx,
+			`SELECT open, high, low, close, volume, time FROM candles
+			 WHERE symbol_id = ? AND interval = ?
+			 ORDER BY time DESC LIMIT ?`,
+			symbolID, interval, limit,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query candles: %w", err)
 	}
