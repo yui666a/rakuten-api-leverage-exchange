@@ -55,10 +55,14 @@ func main() {
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
-		MaxPositionAmount: cfg.Risk.MaxPositionAmount,
-		MaxDailyLoss:      cfg.Risk.MaxDailyLoss,
-		StopLossPercent:   cfg.Risk.StopLossPercent,
-		InitialCapital:    cfg.Risk.InitialCapital,
+		MaxPositionAmount:     cfg.Risk.MaxPositionAmount,
+		MaxDailyLoss:          cfg.Risk.MaxDailyLoss,
+		StopLossPercent:       cfg.Risk.StopLossPercent,
+		StopLossATRMultiplier: cfg.Risk.StopLossATRMultiplier,
+		TakeProfitPercent:     cfg.Risk.TakeProfitPercent,
+		InitialCapital:        cfg.Risk.InitialCapital,
+		MaxConsecutiveLosses:  cfg.Risk.MaxConsecutiveLosses,
+		CooldownMinutes:       cfg.Risk.CooldownMinutes,
 	})
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
 

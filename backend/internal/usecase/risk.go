@@ -15,6 +15,7 @@ type RiskStatus struct {
 	TotalPosition float64           `json:"totalPosition"`
 	TradingHalted bool              `json:"tradingHalted"`
 	ManuallyStopped bool            `json:"manuallyStopped"`
+	CurrentATR    float64           `json:"currentAtr"`
 	Config        entity.RiskConfig `json:"config"`
 }
 
@@ -28,6 +29,7 @@ type RiskManager struct {
 	highWaterMarks    map[int64]float64 // positionID → best price
 	consecutiveLosses int
 	cooldownUntil     time.Time
+	currentATR        float64 // latest ATR value for dynamic stop-loss
 }
 
 func NewRiskManager(config entity.RiskConfig) *RiskManager {
@@ -96,13 +98,14 @@ func (rm *RiskManager) CheckStopLoss(symbolID int64, currentPrice float64) []ent
 		if pos.SymbolID != symbolID {
 			continue
 		}
-		var lossPercent float64
+		slDistance := rm.stopLossDistance(pos.Price)
+		var loss float64
 		if pos.OrderSide == entity.OrderSideBuy {
-			lossPercent = (pos.Price - currentPrice) / pos.Price * 100
+			loss = pos.Price - currentPrice
 		} else {
-			lossPercent = (currentPrice - pos.Price) / pos.Price * 100
+			loss = currentPrice - pos.Price
 		}
-		if lossPercent >= rm.config.StopLossPercent {
+		if loss >= slDistance {
 			result = append(result, pos)
 		}
 	}
@@ -193,8 +196,9 @@ func (rm *RiskManager) UpdateHighWaterMark(positionID int64, currentPrice float6
 	}
 }
 
-// CheckTrailingStop returns positions where price has reversed by StopLossPercent
-// from the high water mark. Only activates when the position is in profit.
+// CheckTrailingStop returns positions where price has reversed by the stop-loss
+// distance from the high water mark. Only activates when the position is in profit.
+// Uses ATR-based distance when available, otherwise falls back to fixed percentage.
 func (rm *RiskManager) CheckTrailingStop(symbolID int64, currentPrice float64) []entity.Position {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -209,13 +213,14 @@ func (rm *RiskManager) CheckTrailingStop(symbolID int64, currentPrice float64) [
 			continue
 		}
 
+		slDistance := rm.stopLossDistance(pos.Price)
+
 		if pos.OrderSide == entity.OrderSideBuy {
 			// Only activate if position has been in profit
 			if hwm <= pos.Price {
 				continue
 			}
-			trailLine := hwm * (1 - rm.config.StopLossPercent/100)
-			if currentPrice <= trailLine {
+			if hwm-currentPrice >= slDistance {
 				result = append(result, pos)
 			}
 		} else {
@@ -223,8 +228,7 @@ func (rm *RiskManager) CheckTrailingStop(symbolID int64, currentPrice float64) [
 			if hwm >= pos.Price {
 				continue
 			}
-			trailLine := hwm * (1 + rm.config.StopLossPercent/100)
-			if currentPrice >= trailLine {
+			if currentPrice-hwm >= slDistance {
 				result = append(result, pos)
 			}
 		}
@@ -261,6 +265,23 @@ func (rm *RiskManager) UpdateConfig(config entity.RiskConfig) {
 	rm.config = config
 }
 
+// UpdateATR updates the current ATR value used for dynamic stop-loss calculation.
+func (rm *RiskManager) UpdateATR(atr float64) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.currentATR = atr
+}
+
+// stopLossDistance returns the stop-loss distance in price units for a given entry price.
+// If ATR-based stop-loss is configured and ATR is available, uses ATR * multiplier.
+// Otherwise falls back to entry price * StopLossPercent / 100.
+func (rm *RiskManager) stopLossDistance(entryPrice float64) float64 {
+	if rm.config.StopLossATRMultiplier > 0 && rm.currentATR > 0 {
+		return rm.currentATR * rm.config.StopLossATRMultiplier
+	}
+	return entryPrice * rm.config.StopLossPercent / 100
+}
+
 func (rm *RiskManager) StartTrading() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
@@ -282,6 +303,7 @@ func (rm *RiskManager) GetStatus() RiskStatus {
 		TotalPosition:   rm.calcTotalPositionValue(),
 		TradingHalted:   rm.dailyLoss >= rm.config.MaxDailyLoss,
 		ManuallyStopped: rm.manualStop,
+		CurrentATR:      rm.currentATR,
 		Config:          rm.config,
 	}
 }

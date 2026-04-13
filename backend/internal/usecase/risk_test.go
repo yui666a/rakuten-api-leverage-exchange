@@ -360,3 +360,100 @@ func TestRiskManager_ConsecutiveLossBreaker_CloseOrdersAllowed(t *testing.T) {
 		t.Fatalf("close order should always be approved during cooldown: %s", result.Reason)
 	}
 }
+
+func TestRiskManager_ATR_StopLoss(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.StopLossATRMultiplier = 2.0
+	cfg.StopLossPercent = 5 // fallback
+	rm := NewRiskManager(cfg)
+
+	rm.UpdateATR(50000) // ATR = 50,000 → stop distance = 100,000
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.01, RemainingAmount: 0.01},
+	})
+
+	// Price dropped 90,000 → within ATR stop (100,000), no trigger
+	targets := rm.CheckStopLoss(7, 4910000)
+	if len(targets) != 0 {
+		t.Fatalf("expected no stop-loss at 90k drop (ATR stop = 100k), got %d targets", len(targets))
+	}
+
+	// Price dropped 100,000 → exactly at ATR stop, trigger
+	targets = rm.CheckStopLoss(7, 4900000)
+	if len(targets) != 1 {
+		t.Fatalf("expected stop-loss trigger at 100k drop, got %d targets", len(targets))
+	}
+}
+
+func TestRiskManager_ATR_FallbackToPercent(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.StopLossATRMultiplier = 2.0
+	cfg.StopLossPercent = 5
+	rm := NewRiskManager(cfg)
+
+	// ATR not set (0) → fallback to 5% = 250,000 at price 5,000,000
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.01, RemainingAmount: 0.01},
+	})
+
+	// 4% drop → no trigger
+	targets := rm.CheckStopLoss(7, 4800000)
+	if len(targets) != 0 {
+		t.Fatalf("expected no trigger at 4%% drop, got %d", len(targets))
+	}
+
+	// 5% drop → trigger
+	targets = rm.CheckStopLoss(7, 4750000)
+	if len(targets) != 1 {
+		t.Fatalf("expected trigger at 5%% drop, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_ATR_TrailingStop(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.StopLossATRMultiplier = 1.5
+	rm := NewRiskManager(cfg)
+
+	rm.UpdateATR(40000) // trailing distance = 60,000
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.01, RemainingAmount: 0.01},
+	})
+
+	// Price went up to 5,100,000 (in profit)
+	rm.UpdateHighWaterMark(1, 5100000)
+
+	// Dropped to 5,050,000 → 50k reversal from HWM, within 60k distance
+	targets := rm.CheckTrailingStop(7, 5050000)
+	if len(targets) != 0 {
+		t.Fatalf("expected no trailing stop at 50k reversal (distance=60k), got %d", len(targets))
+	}
+
+	// Dropped to 5,040,000 → 60k reversal, trigger
+	targets = rm.CheckTrailingStop(7, 5040000)
+	if len(targets) != 1 {
+		t.Fatalf("expected trailing stop at 60k reversal, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_ATR_DisabledUsesPercent(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.StopLossATRMultiplier = 0 // ATR disabled
+	cfg.StopLossPercent = 5
+	rm := NewRiskManager(cfg)
+
+	rm.UpdateATR(50000) // ATR set but disabled by multiplier=0
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.01, RemainingAmount: 0.01},
+	})
+
+	// Should use 5% = 250,000, not ATR
+	targets := rm.CheckStopLoss(7, 4800000) // 200k drop, within 5%
+	if len(targets) != 0 {
+		t.Fatalf("expected no trigger (ATR disabled, using 5%%), got %d", len(targets))
+	}
+
+	targets = rm.CheckStopLoss(7, 4750000) // exactly 5%
+	if len(targets) != 1 {
+		t.Fatalf("expected trigger at 5%%, got %d", len(targets))
+	}
+}

@@ -31,9 +31,14 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	}
 
 	// GetCandles returns newest-first, reverse to oldest-first for calculations
-	prices := make([]float64, len(candles))
+	n := len(candles)
+	prices := make([]float64, n)
+	highs := make([]float64, n)
+	lows := make([]float64, n)
 	for i, cd := range candles {
-		prices[len(candles)-1-i] = cd.Close
+		prices[n-1-i] = cd.Close
+		highs[n-1-i] = cd.High
+		lows[n-1-i] = cd.Low
 	}
 
 	var timestamp int64
@@ -61,6 +66,8 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.BBMiddle = toPtr(bbMiddle)
 	result.BBLower = toPtr(bbLower)
 	result.BBBandwidth = toPtr(bbBandwidth)
+
+	result.ATR14 = toPtr(indicator.ATR(highs, lows, prices, 14))
 
 	return result, nil
 }

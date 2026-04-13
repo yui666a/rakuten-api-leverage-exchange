@@ -4,7 +4,8 @@ package entity
 type RiskConfig struct {
 	MaxPositionAmount    float64 `json:"maxPositionAmount"`    // 同時ポジション上限（円）
 	MaxDailyLoss         float64 `json:"maxDailyLoss"`         // 日次損失上限（円）
-	StopLossPercent      float64 `json:"stopLossPercent"`      // 損切りライン（%）
+	StopLossPercent      float64 `json:"stopLossPercent"`      // 損切りライン（%）— ATR未使用時のフォールバック
+	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // ATR基準の損切り倍率（0=固定%を使用）
 	TakeProfitPercent    float64 `json:"takeProfitPercent"`    // 利確ライン（%）
 	InitialCapital       float64 `json:"initialCapital"`       // 軍資金（円）
 	MaxConsecutiveLosses int     `json:"maxConsecutiveLosses"` // 連敗上限（0=無効）

@@ -16,5 +16,6 @@ type IndicatorSet struct {
 	BBMiddle       *float64 `json:"bbMiddle"`
 	BBLower        *float64 `json:"bbLower"`
 	BBBandwidth    *float64 `json:"bbBandwidth"`
+	ATR14          *float64 `json:"atr14"`
 	Timestamp      int64    `json:"timestamp"`
 }
