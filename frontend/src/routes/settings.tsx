@@ -23,7 +23,10 @@ function SettingsPage() {
     maxPositionAmount: 0,
     maxDailyLoss: 0,
     stopLossPercent: 0,
+    takeProfitPercent: 0,
     initialCapital: 0,
+    maxConsecutiveLosses: 0,
+    cooldownMinutes: 0,
   })
 
   useEffect(() => {
@@ -66,9 +69,24 @@ function SettingsPage() {
               onChange={(value) => handleNumberChange('stopLossPercent', value)}
             />
             <Field
+              label="利確率 (%)"
+              value={form.takeProfitPercent}
+              onChange={(value) => handleNumberChange('takeProfitPercent', value)}
+            />
+            <Field
               label="初期資金"
               value={form.initialCapital}
               onChange={(value) => handleNumberChange('initialCapital', value)}
+            />
+            <Field
+              label="連敗上限 (0=無効)"
+              value={form.maxConsecutiveLosses}
+              onChange={(value) => handleNumberChange('maxConsecutiveLosses', value)}
+            />
+            <Field
+              label="冷却期間 (分)"
+              value={form.cooldownMinutes}
+              onChange={(value) => handleNumberChange('cooldownMinutes', value)}
             />
           </div>
 

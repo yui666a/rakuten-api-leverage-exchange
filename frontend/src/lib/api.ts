@@ -71,7 +71,10 @@ export type RiskConfig = {
   maxPositionAmount: number
   maxDailyLoss: number
   stopLossPercent: number
+  takeProfitPercent: number
   initialCapital: number
+  maxConsecutiveLosses: number
+  cooldownMinutes: number
 }
 
 // TradableSymbol は GET /api/v1/symbols のレスポンス要素。
