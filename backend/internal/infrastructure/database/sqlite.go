@@ -18,7 +18,7 @@ func NewDB(dbPath string) (*sql.DB, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout%3d5000")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
