@@ -39,9 +39,9 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 
 	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
-		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi), nil
+		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.Histogram), nil
 	case entity.MarketStanceContrarian:
-		return e.evaluateContrarian(indicators.SymbolID, rsi), nil
+		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram), nil
 	default:
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
@@ -52,22 +52,48 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 	}
 }
 
-func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64) *entity.Signal {
+func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, histogram *float64) *entity.Signal {
 	now := time.Now().Unix()
 
 	if sma20 > sma50 && rsi < 70 {
+		// MACD histogram confirmation: skip buy if momentum is negative
+		if histogram != nil && *histogram < 0 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "trend follow: MACD histogram negative, skipping buy",
+				Timestamp: now,
+			}
+		}
+		reason := "trend follow: SMA20 > SMA50, RSI not overbought"
+		if histogram != nil {
+			reason += ", MACD confirmed"
+		}
 		return &entity.Signal{
 			SymbolID:  symbolID,
 			Action:    entity.SignalActionBuy,
-			Reason:    "trend follow: SMA20 > SMA50, RSI not overbought",
+			Reason:    reason,
 			Timestamp: now,
 		}
 	}
 	if sma20 < sma50 && rsi > 30 {
+		// MACD histogram confirmation: skip sell if momentum is positive
+		if histogram != nil && *histogram > 0 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "trend follow: MACD histogram positive, skipping sell",
+				Timestamp: now,
+			}
+		}
+		reason := "trend follow: SMA20 < SMA50, RSI not oversold"
+		if histogram != nil {
+			reason += ", MACD confirmed"
+		}
 		return &entity.Signal{
 			SymbolID:  symbolID,
 			Action:    entity.SignalActionSell,
-			Reason:    "trend follow: SMA20 < SMA50, RSI not oversold",
+			Reason:    reason,
 			Timestamp: now,
 		}
 	}
@@ -79,22 +105,48 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 	}
 }
 
-func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64) *entity.Signal {
+func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64) *entity.Signal {
 	now := time.Now().Unix()
 
 	if rsi < 30 {
+		// Skip contrarian buy if MACD momentum is still strongly negative
+		if histogram != nil && *histogram < -10 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "contrarian: RSI oversold but MACD momentum still strongly negative",
+				Timestamp: now,
+			}
+		}
+		reason := "contrarian: RSI oversold, expecting bounce"
+		if histogram != nil {
+			reason += ", MACD not strongly against"
+		}
 		return &entity.Signal{
 			SymbolID:  symbolID,
 			Action:    entity.SignalActionBuy,
-			Reason:    "contrarian: RSI oversold, expecting bounce",
+			Reason:    reason,
 			Timestamp: now,
 		}
 	}
 	if rsi > 70 {
+		// Skip contrarian sell if MACD momentum is still strongly positive
+		if histogram != nil && *histogram > 10 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "contrarian: RSI overbought but MACD momentum still strongly positive",
+				Timestamp: now,
+			}
+		}
+		reason := "contrarian: RSI overbought, expecting pullback"
+		if histogram != nil {
+			reason += ", MACD not strongly against"
+		}
 		return &entity.Signal{
 			SymbolID:  symbolID,
 			Action:    entity.SignalActionSell,
-			Reason:    "contrarian: RSI overbought, expecting pullback",
+			Reason:    reason,
 			Timestamp: now,
 		}
 	}
