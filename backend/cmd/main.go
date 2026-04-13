@@ -78,6 +78,7 @@ func main() {
 			Interval:          time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
 			StateSyncInterval: time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
 			TradeAmount:       cfg.Trading.TradeAmount,
+			MinConfidence:     cfg.Trading.MinConfidence,
 		},
 		restClient,
 		restClient, // SymbolFetcher

@@ -11,8 +11,9 @@ const (
 
 // Signal はStrategy Engineが生成する売買シグナル。
 type Signal struct {
-	SymbolID  int64        `json:"symbolId"`
-	Action    SignalAction `json:"action"`
-	Reason    string       `json:"reason"`
-	Timestamp int64        `json:"timestamp"`
+	SymbolID   int64        `json:"symbolId"`
+	Action     SignalAction `json:"action"`
+	Confidence float64      `json:"confidence"` // 0.0–1.0: indicator agreement score
+	Reason     string       `json:"reason"`
+	Timestamp  int64        `json:"timestamp"`
 }

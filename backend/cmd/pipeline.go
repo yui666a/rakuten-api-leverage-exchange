@@ -52,6 +52,7 @@ type TradingPipeline struct {
 	tradeAmount    float64
 	baseStepAmount float64 // シンボルごとの最小注文刻み幅（例: BTC=0.01, LTC=0.1）
 	minOrderAmount float64 // シンボルごとの最小注文数量
+	minConfidence  float64 // シグナル最小信頼度（これ未満はHOLD扱い）
 
 	restClient       repository.OrderClient
 	symbolFetcher    repository.SymbolFetcher
@@ -74,6 +75,7 @@ type tradingSnapshot struct {
 	tradeAmount    float64
 	baseStepAmount float64
 	minOrderAmount float64
+	minConfidence  float64
 }
 
 func (p *TradingPipeline) snapshot() tradingSnapshot {
@@ -84,6 +86,7 @@ func (p *TradingPipeline) snapshot() tradingSnapshot {
 		tradeAmount:    p.tradeAmount,
 		baseStepAmount: p.baseStepAmount,
 		minOrderAmount: p.minOrderAmount,
+		minConfidence:  p.minConfidence,
 	}
 }
 
@@ -93,6 +96,7 @@ type TradingPipelineConfig struct {
 	Interval          time.Duration
 	StateSyncInterval time.Duration
 	TradeAmount       float64
+	MinConfidence     float64
 }
 
 func NewTradingPipeline(
@@ -112,6 +116,7 @@ func NewTradingPipeline(
 		interval:          cfg.Interval,
 		stateSyncInterval: cfg.StateSyncInterval,
 		tradeAmount:       cfg.TradeAmount,
+		minConfidence:     cfg.MinConfidence,
 		restClient:        restClient,
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
@@ -320,9 +325,15 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
-	slog.Info("pipeline: signal evaluated", "action", signal.Action, "reason", signal.Reason, "price", latestTicker.Last)
+	slog.Info("pipeline: signal evaluated", "action", signal.Action, "confidence", signal.Confidence, "reason", signal.Reason, "price", latestTicker.Last)
 
 	if signal.Action == entity.SignalActionHold {
+		return
+	}
+
+	// Skip low-confidence signals
+	if snap.minConfidence > 0 && signal.Confidence < snap.minConfidence {
+		slog.Info("pipeline: signal below min confidence, skipping", "confidence", signal.Confidence, "minConfidence", snap.minConfidence)
 		return
 	}
 
@@ -355,7 +366,8 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
-	amount := snap.tradeAmount / price
+	scaledTradeAmount := snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)
+	amount := scaledTradeAmount / price
 	// シンボルの baseStepAmount に合わせて切り捨て丸め
 	amount = roundDownToStep(amount, snap.baseStepAmount)
 	if amount <= 0 || amount < snap.minOrderAmount {
@@ -630,6 +642,18 @@ func restoreRiskState(ctx context.Context, repo repository.RiskStateRepository, 
 		riskMgr.RecordLoss(state.DailyLoss)
 	}
 	slog.Info("risk state restored", "balance", state.Balance, "dailyLoss", state.DailyLoss)
+}
+
+// scaleByConfidence は信頼度に基づいて注文金額のスケール係数を返す。
+// [minConfidence, 1.0] → [0.5, 1.0] の線形マッピング。
+func scaleByConfidence(confidence, minConfidence float64) float64 {
+	if confidence >= 1.0 {
+		return 1.0
+	}
+	if minConfidence >= 1.0 {
+		return 1.0
+	}
+	return 0.5 + 0.5*(confidence-minConfidence)/(1.0-minConfidence)
 }
 
 // roundDownToStep は amount を step の整数倍に切り捨てる。
