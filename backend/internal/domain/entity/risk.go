@@ -5,6 +5,7 @@ type RiskConfig struct {
 	MaxPositionAmount float64 `json:"maxPositionAmount"` // 同時ポジション上限（円）
 	MaxDailyLoss      float64 `json:"maxDailyLoss"`      // 日次損失上限（円）
 	StopLossPercent   float64 `json:"stopLossPercent"`    // 損切りライン（%）
+	TakeProfitPercent float64 `json:"takeProfitPercent"`  // 利確ライン（%）
 	InitialCapital    float64 `json:"initialCapital"`     // 軍資金（円）
 }
 

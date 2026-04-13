@@ -12,6 +12,7 @@ func defaultRiskConfig() entity.RiskConfig {
 		MaxPositionAmount: 5000,
 		MaxDailyLoss:      5000,
 		StopLossPercent:   5,
+		TakeProfitPercent: 10,
 		InitialCapital:    10000,
 	}
 }
@@ -177,5 +178,55 @@ func TestRiskManager_TradingHalted(t *testing.T) {
 	status := rm.GetStatus()
 	if !status.TradingHalted {
 		t.Fatal("trading should be halted after max daily loss")
+	}
+}
+
+func TestRiskManager_CheckTakeProfit_BuyPosition(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// 5,500,000 is 10% above 5,000,000 → should trigger take-profit
+	tpPositions := rm.CheckTakeProfit(7, 5500000)
+	if len(tpPositions) != 1 {
+		t.Fatalf("expected 1 take-profit position, got %d", len(tpPositions))
+	}
+}
+
+func TestRiskManager_CheckTakeProfit_NoTrigger(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// 5,250,000 is 5% above 5,000,000 → should NOT trigger (threshold is 10%)
+	tpPositions := rm.CheckTakeProfit(7, 5250000)
+	if len(tpPositions) != 0 {
+		t.Fatalf("expected 0 take-profit positions, got %d", len(tpPositions))
+	}
+}
+
+func TestRiskManager_CheckTakeProfit_SellPosition(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideSell, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// 4,500,000 is 10% below 5,000,000 → should trigger take-profit for sell
+	tpPositions := rm.CheckTakeProfit(7, 4500000)
+	if len(tpPositions) != 1 {
+		t.Fatalf("expected 1 take-profit position, got %d", len(tpPositions))
+	}
+}
+
+func TestRiskManager_CheckTakeProfit_ZeroConfig_NeverTriggers(t *testing.T) {
+	cfg := defaultRiskConfig()
+	cfg.TakeProfitPercent = 0
+	rm := NewRiskManager(cfg)
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// Even with 20% profit, should return nil when TakeProfitPercent is 0
+	tpPositions := rm.CheckTakeProfit(7, 6000000)
+	if len(tpPositions) != 0 {
+		t.Fatalf("expected 0 take-profit positions when disabled, got %d", len(tpPositions))
 	}
 }

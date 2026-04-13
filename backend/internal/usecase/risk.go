@@ -97,6 +97,31 @@ func (rm *RiskManager) CheckStopLoss(symbolID int64, currentPrice float64) []ent
 	return result
 }
 
+func (rm *RiskManager) CheckTakeProfit(symbolID int64, currentPrice float64) []entity.Position {
+	if rm.config.TakeProfitPercent <= 0 {
+		return nil
+	}
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	var result []entity.Position
+	for _, pos := range rm.positions {
+		if pos.SymbolID != symbolID {
+			continue
+		}
+		var profitPercent float64
+		if pos.OrderSide == entity.OrderSideBuy {
+			profitPercent = (currentPrice - pos.Price) / pos.Price * 100
+		} else {
+			profitPercent = (pos.Price - currentPrice) / pos.Price * 100
+		}
+		if profitPercent >= rm.config.TakeProfitPercent {
+			result = append(result, pos)
+		}
+	}
+	return result
+}
+
 func (rm *RiskManager) RecordLoss(loss float64) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()

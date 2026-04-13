@@ -429,6 +429,29 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 					p.persistRiskState(ctx)
 				}
 			}
+
+			// Take-profit チェック
+			tpTargets := p.riskMgr.CheckTakeProfit(t.SymbolID, t.Last)
+			for _, pos := range tpTargets {
+				slog.Info("pipeline: take-profit triggered",
+					"positionID", pos.ID, "side", pos.OrderSide, "entryPrice", pos.Price, "currentPrice", t.Last)
+
+				clientOrderID := newAgentClientOrderID("takeprofit")
+				result, err := p.orderExecutor.ClosePosition(ctx, clientOrderID, pos, t.Last)
+				if err != nil {
+					slog.Error("pipeline: take-profit close failed", "error", err)
+					continue
+				}
+				if result.Executed {
+					slog.Info("pipeline: take-profit closed", "orderID", result.OrderID)
+					closeSide := string(entity.OrderSideSell)
+					if pos.OrderSide == entity.OrderSideSell {
+						closeSide = string(entity.OrderSideBuy)
+					}
+					p.recordTrade(ctx, pos.SymbolID, result.OrderID, closeSide, "close", t.Last, pos.RemainingAmount, "take-profit", false)
+					p.persistRiskState(ctx)
+				}
+			}
 		}
 	}
 }
