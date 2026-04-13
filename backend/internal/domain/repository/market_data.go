@@ -15,7 +15,8 @@ type MarketDataRepository interface {
 	SaveCandles(ctx context.Context, symbolID int64, interval string, candles []entity.Candle) error
 
 	// GetCandles returns candlesticks for a symbol/interval, newest first, up to limit.
-	GetCandles(ctx context.Context, symbolID int64, interval string, limit int) ([]entity.Candle, error)
+	// If before > 0, only candles with time < before are returned (for pagination).
+	GetCandles(ctx context.Context, symbolID int64, interval string, limit int, before int64) ([]entity.Candle, error)
 
 	// SaveTicker saves ticker data.
 	SaveTicker(ctx context.Context, ticker entity.Ticker) error

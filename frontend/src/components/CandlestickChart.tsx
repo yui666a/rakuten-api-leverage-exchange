@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time } from 'lightweight-charts'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
 
@@ -23,6 +23,9 @@ const MA_CONFIG: Record<MALineKey, { label: string; color: string }> = {
   ema12: { label: 'EMA(12)', color: '#00bfff' },
   ema26: { label: 'EMA(26)', color: '#a78bfa' },
 }
+
+/** Threshold: fetch more data when user scrolls within N bars of the left edge. */
+const SCROLL_THRESHOLD = 20
 
 function calcSMA(closes: number[], period: number): (number | null)[] {
   const result: (number | null)[] = []
@@ -61,10 +64,26 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const lineSeriesRefs = useRef<Partial<Record<MALineKey, ISeriesApi<'Line'>>>>({})
+  const prevCandleCountRef = useRef(0)
 
   const [interval, setInterval] = useState<CandleInterval>('PT15M')
-  const { data: candlesData, isFetching } = useCandles(symbolId, interval)
-  const candles = candlesData ?? []
+  const { data, isFetching, hasNextPage, fetchNextPage, isFetchingNextPage } = useCandles(symbolId, interval)
+
+  // Flatten all pages into a single sorted (oldest→newest) candle array
+  const candles = useMemo(() => {
+    if (!data?.pages) return []
+    // Pages: page 0 = newest, page 1 = older, etc.
+    // Each page is already sorted oldest→newest from API.
+    // Concat older pages first, then newer.
+    const all = [...data.pages].reverse().flat()
+    // Deduplicate by time (in case of overlap from refetch)
+    const seen = new Set<number>()
+    return all.filter((c) => {
+      if (seen.has(c.time)) return false
+      seen.add(c.time)
+      return true
+    })
+  }, [data])
 
   const [visible, setVisible] = useState<Record<MALineKey, boolean>>({
     sma20: false,
@@ -115,14 +134,43 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     return () => {
       window.removeEventListener('resize', handleResize)
       lineSeriesRefs.current = {}
+      prevCandleCountRef.current = 0
       chart.remove()
     }
   }, [])
 
+  // Infinite scroll: detect when user is near the left (oldest) edge
   useEffect(() => {
-    if (!seriesRef.current || candles.length === 0) return
+    const chart = chartRef.current
+    if (!chart) return
 
-    const data: CandlestickData<Time>[] = candles.map((c) => ({
+    const onVisibleRangeChange = () => {
+      const range = chart.timeScale().getVisibleLogicalRange()
+      if (!range) return
+      if (range.from <= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
+        fetchNextPage()
+      }
+    }
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onVisibleRangeChange)
+    return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onVisibleRangeChange)
+    }
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage])
+
+  // Update chart data — preserve scroll position when prepending older candles
+  useEffect(() => {
+    if (!seriesRef.current || !chartRef.current || candles.length === 0) return
+
+    const chart = chartRef.current
+    const prevCount = prevCandleCountRef.current
+    const prepended = candles.length > prevCount && prevCount > 0
+
+    // Save the visible time range before updating data.
+    // Time-based range is stable even when logical indices shift due to prepend.
+    const visibleTimeRange = prepended ? chart.timeScale().getVisibleRange() : null
+
+    const chartData: CandlestickData<Time>[] = candles.map((c) => ({
       time: (Math.floor(c.time / 1000)) as Time,
       open: c.open,
       high: c.high,
@@ -130,8 +178,17 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       close: c.close,
     }))
 
-    seriesRef.current.setData(data)
-    chartRef.current?.timeScale().fitContent()
+    seriesRef.current.setData(chartData)
+    prevCandleCountRef.current = candles.length
+
+    if (visibleTimeRange) {
+      // Restore the same time window after prepending older candles
+      chart.timeScale().setVisibleRange(visibleTimeRange)
+    } else if (prevCount === 0) {
+      // First load — fit all content
+      chart.timeScale().fitContent()
+    }
+    // On refetch with no new candles, do nothing — keep current scroll position
   }, [candles])
 
   // Manage MA line series based on toggle state
@@ -210,7 +267,11 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
               )
             })}
           </div>
-          {isFetching && <span className="text-[10px] text-text-secondary">読み込み中...</span>}
+          {(isFetching || isFetchingNextPage) && (
+            <span className="text-[10px] text-text-secondary">
+              {isFetchingNextPage ? '過去データを読み込み中...' : '読み込み中...'}
+            </span>
+          )}
         </div>
         <div className="flex gap-1.5">
           {(Object.keys(MA_CONFIG) as MALineKey[]).map((key) => (

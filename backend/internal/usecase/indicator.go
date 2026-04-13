@@ -25,7 +25,7 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	// EMA/RSI/MACDはパス依存型指標のため、十分なウォームアップ期間が必要。
 	// EMA26は約3倍(78本)、MACD Signal(9)の追加で約90本のウォームアップ。
 	// 500本取得すれば実用上十分な精度に収束する。
-	candles, err := c.repo.GetCandles(ctx, symbolID, interval, 500)
+	candles, err := c.repo.GetCandles(ctx, symbolID, interval, 500, 0)
 	if err != nil {
 		return nil, err
 	}

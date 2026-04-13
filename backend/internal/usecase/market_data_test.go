@@ -35,16 +35,28 @@ func (m *mockMarketDataRepo) SaveCandles(_ context.Context, _ int64, _ string, c
 	return nil
 }
 
-func (m *mockMarketDataRepo) GetCandles(_ context.Context, _ int64, _ string, limit int) ([]entity.Candle, error) {
+func (m *mockMarketDataRepo) GetCandles(_ context.Context, _ int64, _ string, limit int, before int64) ([]entity.Candle, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if limit > len(m.candles) {
-		limit = len(m.candles)
+
+	src := m.candles
+	if before > 0 {
+		var filtered []entity.Candle
+		for _, c := range src {
+			if c.Time < before {
+				filtered = append(filtered, c)
+			}
+		}
+		src = filtered
+	}
+
+	if limit > len(src) {
+		limit = len(src)
 	}
 	// リポジトリ契約通り新しい順で返す
 	result := make([]entity.Candle, limit)
 	for i := 0; i < limit; i++ {
-		result[i] = m.candles[len(m.candles)-1-i]
+		result[i] = src[len(src)-1-i]
 	}
 	return result, nil
 }
