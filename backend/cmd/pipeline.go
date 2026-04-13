@@ -318,6 +318,11 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
+	// Update ATR for dynamic stop-loss
+	if indicators.ATR14 != nil {
+		p.riskMgr.UpdateATR(*indicators.ATR14)
+	}
+
 	higherTF, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "PT1H")
 	if err != nil {
 		slog.Warn("pipeline: failed to calculate higher TF indicators, proceeding without", "error", err)
