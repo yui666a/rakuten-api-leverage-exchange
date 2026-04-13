@@ -311,15 +311,21 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
-	// 2. テクニカル指標を計算
+	// 2. テクニカル指標を計算（主: PT15M、上位: PT1H）
 	indicators, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "PT15M")
 	if err != nil {
 		slog.Warn("pipeline: failed to calculate indicators", "error", err)
 		return
 	}
 
-	// 3. 戦略判定
-	signal, err := p.strategyEngine.Evaluate(ctx, *indicators, latestTicker.Last)
+	higherTF, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "PT1H")
+	if err != nil {
+		slog.Warn("pipeline: failed to calculate higher TF indicators, proceeding without", "error", err)
+		higherTF = nil
+	}
+
+	// 3. 戦略判定（マルチタイムフレーム分析付き）
+	signal, err := p.strategyEngine.EvaluateWithHigherTF(ctx, *indicators, higherTF, latestTicker.Last)
 	if err != nil {
 		slog.Warn("pipeline: failed to evaluate strategy", "error", err)
 		return

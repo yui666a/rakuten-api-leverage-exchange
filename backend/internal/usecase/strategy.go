@@ -19,6 +19,54 @@ func NewStrategyEngine(stanceResolver StanceResolver) *StrategyEngine {
 	}
 }
 
+// EvaluateWithHigherTF はマルチタイムフレーム分析付きでシグナルを生成する。
+// higherTFがnon-nilの場合、Trend Followシグナルが上位トレンドに逆行していればHOLDにフィルタする。
+// 上位トレンドと一致している場合はconfidenceを10%ブーストする。
+// Contrarianシグナルは意図的に逆張りなのでフィルタしない。
+func (e *StrategyEngine) EvaluateWithHigherTF(ctx context.Context, indicators entity.IndicatorSet, higherTF *entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
+	signal, err := e.Evaluate(ctx, indicators, lastPrice)
+	if err != nil || signal.Action == entity.SignalActionHold {
+		return signal, err
+	}
+
+	if higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
+		return signal, nil
+	}
+
+	// Contrarian signals are intentionally counter-trend; don't filter them
+	result := e.stanceResolver.Resolve(ctx, indicators)
+	if result.Stance == entity.MarketStanceContrarian {
+		return signal, nil
+	}
+
+	higherUptrend := *higherTF.SMA20 > *higherTF.SMA50
+
+	if signal.Action == entity.SignalActionBuy && !higherUptrend {
+		return &entity.Signal{
+			SymbolID:  indicators.SymbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    "MTF filter: higher timeframe downtrend blocks buy",
+			Timestamp: signal.Timestamp,
+		}, nil
+	}
+	if signal.Action == entity.SignalActionSell && higherUptrend {
+		return &entity.Signal{
+			SymbolID:  indicators.SymbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    "MTF filter: higher timeframe uptrend blocks sell",
+			Timestamp: signal.Timestamp,
+		}, nil
+	}
+
+	// Signal aligns with higher TF: boost confidence by 10% (capped at 1.0)
+	boosted := signal.Confidence + 0.1
+	if boosted > 1.0 {
+		boosted = 1.0
+	}
+	signal.Confidence = boosted
+	return signal, nil
+}
+
 // Evaluate はテクニカル指標と現在価格から売買シグナルを生成する。
 // 指標データが不足している場合はHOLDを返す。
 func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {

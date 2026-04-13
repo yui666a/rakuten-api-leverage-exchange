@@ -467,6 +467,148 @@ func TestStrategyEngine_Confidence_ContrarianStrong(t *testing.T) {
 	}
 }
 
+func TestStrategyEngine_MTF_BuyBlockedByHigherDowntrend(t *testing.T) {
+	// PT15M says BUY, but PT1H SMA20 < SMA50 (higher timeframe downtrend) → HOLD
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(55.0),
+		Histogram: ptr(3.0),
+	}
+	higherTF := &entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(4900000.0), // downtrend on higher TF
+		SMA50:    ptr(5000000.0),
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD when higher TF is downtrend but signal is BUY, got %s (reason: %s)", signal.Action, signal.Reason)
+	}
+}
+
+func TestStrategyEngine_MTF_SellBlockedByHigherUptrend(t *testing.T) {
+	// PT15M says SELL, but PT1H SMA20 > SMA50 (higher timeframe uptrend) → HOLD
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "downtrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(4900000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(45.0),
+		Histogram: ptr(-3.0),
+	}
+	higherTF := &entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(5100000.0), // uptrend on higher TF
+		SMA50:    ptr(5000000.0),
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 4900000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD when higher TF is uptrend but signal is SELL, got %s (reason: %s)", signal.Action, signal.Reason)
+	}
+}
+
+func TestStrategyEngine_MTF_BuyAlignedWithHigherUptrend(t *testing.T) {
+	// PT15M says BUY, PT1H also uptrend → BUY with boosted confidence
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(55.0),
+		Histogram: ptr(5.0),
+	}
+	higherTF := &entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(5200000.0), // uptrend on higher TF too
+		SMA50:    ptr(5000000.0),
+	}
+
+	signalWithMTF, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signalWithMTF.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY, got %s", signalWithMTF.Action)
+	}
+
+	// Compare: without higher TF
+	signalBase, _ := engine.Evaluate(context.Background(), indicators, 5100000)
+	if signalWithMTF.Confidence <= signalBase.Confidence {
+		t.Fatalf("expected MTF-aligned confidence (%.4f) > base confidence (%.4f)", signalWithMTF.Confidence, signalBase.Confidence)
+	}
+}
+
+func TestStrategyEngine_MTF_NilHigherTFFallsBack(t *testing.T) {
+	// nil higherTF → behaves same as Evaluate()
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(55.0),
+		Histogram: ptr(3.0),
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY with nil higherTF, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_MTF_ContrarianNotFiltered(t *testing.T) {
+	// Contrarian signals are NOT filtered by higher TF (they're intentionally counter-trend)
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceContrarian, Reasoning: "oversold", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(4900000.0),
+		SMA50:     ptr(5000000.0),
+		RSI14:     ptr(25.0),
+		Histogram: ptr(-3.0),
+	}
+	higherTF := &entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(4800000.0), // downtrend on higher TF
+		SMA50:    ptr(5000000.0),
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 4900000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected contrarian BUY even with higher TF downtrend, got %s", signal.Action)
+	}
+}
+
 func TestStrategyEngine_Confidence_HoldIsZero(t *testing.T) {
 	// HOLD signals should have 0.0 confidence
 	resolver := &mockStanceResolver{
