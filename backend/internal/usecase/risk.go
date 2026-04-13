@@ -18,18 +18,20 @@ type RiskStatus struct {
 }
 
 type RiskManager struct {
-	config    entity.RiskConfig
-	mu        sync.RWMutex
-	balance   float64
-	dailyLoss float64
-	positions []entity.Position
-	manualStop bool
+	config         entity.RiskConfig
+	mu             sync.RWMutex
+	balance        float64
+	dailyLoss      float64
+	positions      []entity.Position
+	manualStop     bool
+	highWaterMarks map[int64]float64 // positionID → best price
 }
 
 func NewRiskManager(config entity.RiskConfig) *RiskManager {
 	return &RiskManager{
-		config:  config,
-		balance: config.InitialCapital,
+		config:         config,
+		balance:        config.InitialCapital,
+		highWaterMarks: make(map[int64]float64),
 	}
 }
 
@@ -134,10 +136,88 @@ func (rm *RiskManager) ResetDailyLoss() {
 	rm.dailyLoss = 0
 }
 
+// UpdateHighWaterMark updates the best price for a position.
+// For BUY positions: tracks highest price. For SELL positions: tracks lowest price.
+func (rm *RiskManager) UpdateHighWaterMark(positionID int64, currentPrice float64) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+
+	existing, ok := rm.highWaterMarks[positionID]
+	if !ok {
+		rm.highWaterMarks[positionID] = currentPrice
+		return
+	}
+
+	// Find position direction
+	var isBuy bool
+	for _, pos := range rm.positions {
+		if pos.ID == positionID {
+			isBuy = pos.OrderSide == entity.OrderSideBuy
+			break
+		}
+	}
+
+	if isBuy && currentPrice > existing {
+		rm.highWaterMarks[positionID] = currentPrice
+	} else if !isBuy && currentPrice < existing {
+		rm.highWaterMarks[positionID] = currentPrice
+	}
+}
+
+// CheckTrailingStop returns positions where price has reversed by StopLossPercent
+// from the high water mark. Only activates when the position is in profit.
+func (rm *RiskManager) CheckTrailingStop(symbolID int64, currentPrice float64) []entity.Position {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	var result []entity.Position
+	for _, pos := range rm.positions {
+		if pos.SymbolID != symbolID {
+			continue
+		}
+		hwm, ok := rm.highWaterMarks[pos.ID]
+		if !ok {
+			continue
+		}
+
+		if pos.OrderSide == entity.OrderSideBuy {
+			// Only activate if position has been in profit
+			if hwm <= pos.Price {
+				continue
+			}
+			trailLine := hwm * (1 - rm.config.StopLossPercent/100)
+			if currentPrice <= trailLine {
+				result = append(result, pos)
+			}
+		} else {
+			// Sell position: low water mark
+			if hwm >= pos.Price {
+				continue
+			}
+			trailLine := hwm * (1 + rm.config.StopLossPercent/100)
+			if currentPrice >= trailLine {
+				result = append(result, pos)
+			}
+		}
+	}
+	return result
+}
+
 func (rm *RiskManager) UpdatePositions(positions []entity.Position) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.positions = positions
+
+	// Clean up high water marks for closed positions
+	active := make(map[int64]bool, len(positions))
+	for _, pos := range positions {
+		active[pos.ID] = true
+	}
+	for id := range rm.highWaterMarks {
+		if !active[id] {
+			delete(rm.highWaterMarks, id)
+		}
+	}
 }
 
 func (rm *RiskManager) UpdateBalance(balance float64) {

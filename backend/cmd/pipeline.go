@@ -406,6 +406,37 @@ func (p *TradingPipeline) runStopLossMonitor(ctx context.Context) {
 				continue
 			}
 
+			// High water mark を更新
+			positions, posErr := p.restClient.GetPositions(ctx, snap.symbolID)
+			if posErr == nil {
+				for _, pos := range positions {
+					p.riskMgr.UpdateHighWaterMark(pos.ID, t.Last)
+				}
+			}
+
+			// Trailing stop チェック
+			trailTargets := p.riskMgr.CheckTrailingStop(t.SymbolID, t.Last)
+			for _, pos := range trailTargets {
+				slog.Info("pipeline: trailing stop triggered",
+					"positionID", pos.ID, "side", pos.OrderSide, "entryPrice", pos.Price, "currentPrice", t.Last)
+
+				clientOrderID := newAgentClientOrderID("trailstop")
+				result, err := p.orderExecutor.ClosePosition(ctx, clientOrderID, pos, t.Last)
+				if err != nil {
+					slog.Error("pipeline: trailing stop close failed", "error", err)
+					continue
+				}
+				if result.Executed {
+					slog.Info("pipeline: trailing stop closed", "orderID", result.OrderID)
+					closeSide := string(entity.OrderSideSell)
+					if pos.OrderSide == entity.OrderSideSell {
+						closeSide = string(entity.OrderSideBuy)
+					}
+					p.recordTrade(ctx, pos.SymbolID, result.OrderID, closeSide, "close", t.Last, pos.RemainingAmount, "trailing-stop", false)
+					p.persistRiskState(ctx)
+				}
+			}
+
 			targets := p.riskMgr.CheckStopLoss(t.SymbolID, t.Last)
 			for _, pos := range targets {
 				slog.Warn("pipeline: stop-loss triggered",

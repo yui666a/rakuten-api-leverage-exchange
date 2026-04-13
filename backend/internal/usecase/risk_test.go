@@ -230,3 +230,56 @@ func TestRiskManager_CheckTakeProfit_ZeroConfig_NeverTriggers(t *testing.T) {
 		t.Fatalf("expected 0 take-profit positions when disabled, got %d", len(tpPositions))
 	}
 }
+
+func TestRiskManager_TrailingStop_BuyPosition(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// Price went up to 5500000 then drops
+	rm.UpdateHighWaterMark(1, 5500000)
+	// Trail = 5500000 * 0.95 = 5225000. Price 5200000 < 5225000 → trigger
+	targets := rm.CheckTrailingStop(7, 5200000)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 trailing stop position, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_TrailingStop_NoTriggerAboveTrail(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	rm.UpdateHighWaterMark(1, 5500000)
+	// Trail = 5225000. Price 5300000 > 5225000 → no trigger
+	targets := rm.CheckTrailingStop(7, 5300000)
+	if len(targets) != 0 {
+		t.Fatalf("expected 0 trailing stop positions, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_TrailingStop_OnlyActivatesAfterProfit(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideBuy, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// No high water mark above entry → trailing stop should not activate
+	targets := rm.CheckTrailingStop(7, 4800000)
+	if len(targets) != 0 {
+		t.Fatalf("expected 0 — trailing stop should not activate before profit, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_TrailingStop_SellPosition(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	rm.UpdatePositions([]entity.Position{
+		{ID: 1, SymbolID: 7, OrderSide: entity.OrderSideSell, Price: 5000000, Amount: 0.001, RemainingAmount: 0.001},
+	})
+	// Sell: low water mark = 4500000
+	rm.UpdateHighWaterMark(1, 4500000)
+	// Trail = 4500000 * 1.05 = 4725000. Price 4750000 > 4725000 → trigger
+	targets := rm.CheckTrailingStop(7, 4750000)
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 trailing stop for sell position, got %d", len(targets))
+	}
+}
