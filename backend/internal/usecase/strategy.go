@@ -108,7 +108,7 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 
 	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
-		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.Histogram), nil
+		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram), nil
 	case entity.MarketStanceContrarian:
 		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram), nil
 	default:
@@ -121,10 +121,37 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 	}
 }
 
-func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, histogram *float64) *entity.Signal {
+func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64) *entity.Signal {
 	now := time.Now().Unix()
 
-	if sma20 > sma50 && rsi < 70 {
+	// Primary signal: EMA12/26 crossover (faster than SMA cross)
+	// Fallback to SMA20/50 when EMA is unavailable
+	var fastAboveSlow bool
+	var fastBelowSlow bool
+	useEMA := ema12 != nil && ema26 != nil
+
+	if useEMA {
+		fastAboveSlow = *ema12 > *ema26
+		fastBelowSlow = *ema12 < *ema26
+	} else {
+		fastAboveSlow = sma20 > sma50
+		fastBelowSlow = sma20 < sma50
+	}
+
+	// SMA filter: require SMA trend alignment when EMA is the primary signal
+	if useEMA {
+		smaAligned := (fastAboveSlow && sma20 >= sma50) || (fastBelowSlow && sma20 <= sma50)
+		if !smaAligned {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "trend follow: EMA cross but SMA not aligned",
+				Timestamp: now,
+			}
+		}
+	}
+
+	if fastAboveSlow && rsi < 70 {
 		// MACD histogram confirmation: skip buy if momentum is negative
 		if histogram != nil && *histogram < 0 {
 			return &entity.Signal{
@@ -134,19 +161,22 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				Timestamp: now,
 			}
 		}
-		reason := "trend follow: SMA20 > SMA50, RSI not overbought"
+		reason := "trend follow: EMA12 > EMA26, SMA aligned, RSI not overbought"
+		if !useEMA {
+			reason = "trend follow: SMA20 > SMA50, RSI not overbought"
+		}
 		if histogram != nil {
 			reason += ", MACD confirmed"
 		}
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionBuy,
-			Confidence: trendFollowConfidence(sma20, sma50, rsi, histogram, true),
+			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, true),
 			Reason:     reason,
 			Timestamp:  now,
 		}
 	}
-	if sma20 < sma50 && rsi > 30 {
+	if fastBelowSlow && rsi > 30 {
 		// MACD histogram confirmation: skip sell if momentum is positive
 		if histogram != nil && *histogram > 0 {
 			return &entity.Signal{
@@ -156,14 +186,17 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				Timestamp: now,
 			}
 		}
-		reason := "trend follow: SMA20 < SMA50, RSI not oversold"
+		reason := "trend follow: EMA12 < EMA26, SMA aligned, RSI not oversold"
+		if !useEMA {
+			reason = "trend follow: SMA20 < SMA50, RSI not oversold"
+		}
 		if histogram != nil {
 			reason += ", MACD confirmed"
 		}
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionSell,
-			Confidence: trendFollowConfidence(sma20, sma50, rsi, histogram, false),
+			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, false),
 			Reason:     reason,
 			Timestamp:  now,
 		}
@@ -177,27 +210,33 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 }
 
 // trendFollowConfidence computes a 0.0–1.0 confidence score for trend-follow signals.
-// Factors: SMA divergence strength (40%), RSI headroom (30%), MACD histogram agreement (30%).
-func trendFollowConfidence(sma20, sma50, rsi float64, histogram *float64, isBuy bool) float64 {
-	// SMA divergence: how strongly the cross is established (capped at 2%)
+// Factors: EMA/SMA divergence (30%), SMA trend strength (15%), RSI headroom (25%), MACD (30%).
+func trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *float64, isBuy bool) float64 {
+	// EMA divergence: how strongly the EMA cross is established
+	emaDivergence := 0.5
+	if ema12 != nil && ema26 != nil && *ema26 != 0 {
+		emaDivergence = math.Min(math.Abs(*ema12-*ema26)/math.Abs(*ema26)*100, 2.0) / 2.0
+	}
+
+	// SMA trend strength (capped at 2%)
 	smaDivergence := math.Min(math.Abs(sma20-sma50)/sma50*100, 2.0) / 2.0
 
 	// RSI headroom: distance from the overbought/oversold boundary
 	var rsiRoom float64
 	if isBuy {
-		rsiRoom = (70 - rsi) / 40 // 30→1.0, 70→0.0
+		rsiRoom = (70 - rsi) / 40
 	} else {
-		rsiRoom = (rsi - 30) / 40 // 70→1.0, 30→0.0
+		rsiRoom = (rsi - 30) / 40
 	}
 	rsiRoom = math.Max(0, math.Min(1, rsiRoom))
 
 	// MACD histogram confirmation
-	macdConfirm := 0.5 // neutral when histogram unavailable
+	macdConfirm := 0.5
 	if histogram != nil {
 		macdConfirm = math.Min(math.Abs(*histogram)/10, 1.0)
 	}
 
-	return smaDivergence*0.4 + rsiRoom*0.3 + macdConfirm*0.3
+	return emaDivergence*0.3 + smaDivergence*0.15 + rsiRoom*0.25 + macdConfirm*0.3
 }
 
 func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64) *entity.Signal {

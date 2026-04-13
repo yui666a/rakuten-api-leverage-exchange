@@ -379,7 +379,7 @@ func TestStrategyEngine_TrendFollow_NilHistogramStillTrades(t *testing.T) {
 }
 
 func TestStrategyEngine_Confidence_TrendFollowStrong(t *testing.T) {
-	// Strong uptrend: SMA divergence 2%, RSI 55, histogram +5 → high confidence
+	// Strong uptrend: EMA and SMA divergent, RSI 55, histogram +5 → high confidence
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -389,6 +389,8 @@ func TestStrategyEngine_Confidence_TrendFollowStrong(t *testing.T) {
 		SymbolID:  7,
 		SMA20:     ptr(5100000.0), // 2% above SMA50
 		SMA50:     ptr(5000000.0),
+		EMA12:     ptr(5120000.0), // ~2.4% above EMA26
+		EMA26:     ptr(5000000.0),
 		RSI14:     ptr(55.0),
 		Histogram: ptr(5.0),
 	}
@@ -397,19 +399,20 @@ func TestStrategyEngine_Confidence_TrendFollowStrong(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if signal.Action != entity.SignalActionBuy {
-		t.Fatalf("expected BUY, got %s", signal.Action)
+		t.Fatalf("expected BUY, got %s (reason: %s)", signal.Action, signal.Reason)
 	}
-	// SMA divergence: min(2.0, 2.0)/2.0 = 1.0 * 0.4 = 0.4
-	// RSI room: (70-55)/40 = 0.375 * 0.3 = 0.1125
+	// EMA divergence: min(2.4, 2.0)/2.0 = 1.0 * 0.3 = 0.3
+	// SMA divergence: min(2.0, 2.0)/2.0 = 1.0 * 0.15 = 0.15
+	// RSI room: (70-55)/40 = 0.375 * 0.25 = 0.09375
 	// MACD confirm: min(5/10, 1.0) = 0.5 * 0.3 = 0.15
-	// Total: 0.6625
-	if signal.Confidence < 0.6 || signal.Confidence > 0.75 {
-		t.Fatalf("expected confidence ~0.66, got %.4f", signal.Confidence)
+	// Total: ~0.69
+	if signal.Confidence < 0.6 || signal.Confidence > 0.8 {
+		t.Fatalf("expected confidence ~0.69, got %.4f", signal.Confidence)
 	}
 }
 
 func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
-	// Weak uptrend: SMA barely crossing (0.1% divergence), RSI 68, no histogram
+	// Weak uptrend: EMA/SMA barely crossing, RSI 68, no histogram
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -419,6 +422,8 @@ func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
 		SymbolID:  7,
 		SMA20:     ptr(5005000.0), // 0.1% above SMA50
 		SMA50:     ptr(5000000.0),
+		EMA12:     ptr(5003000.0), // 0.06% above EMA26
+		EMA26:     ptr(5000000.0),
 		RSI14:     ptr(68.0),
 		Histogram: nil,
 	}
@@ -427,14 +432,64 @@ func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if signal.Action != entity.SignalActionBuy {
-		t.Fatalf("expected BUY, got %s", signal.Action)
+		t.Fatalf("expected BUY, got %s (reason: %s)", signal.Action, signal.Reason)
 	}
-	// SMA divergence: min(0.1, 2.0)/2.0 = 0.05 * 0.4 = 0.02
-	// RSI room: (70-68)/40 = 0.05 * 0.3 = 0.015
+	// EMA divergence: min(0.06, 2.0)/2.0 = 0.03 * 0.3 = 0.009
+	// SMA divergence: min(0.1, 2.0)/2.0 = 0.05 * 0.15 = 0.0075
+	// RSI room: (70-68)/40 = 0.05 * 0.25 = 0.0125
 	// MACD confirm: nil → 0.5 * 0.3 = 0.15
-	// Total: 0.185
+	// Total: ~0.179
 	if signal.Confidence > 0.25 {
 		t.Fatalf("expected low confidence (<0.25), got %.4f", signal.Confidence)
+	}
+}
+
+func TestStrategyEngine_EMA_CrossWithSMAMisalignment(t *testing.T) {
+	// EMA12 > EMA26 (bullish) but SMA20 < SMA50 (SMA not aligned) → HOLD
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(4990000.0), // SMA still bearish
+		SMA50:     ptr(5000000.0),
+		EMA12:     ptr(5010000.0), // EMA already bullish
+		EMA26:     ptr(5000000.0),
+		RSI14:     ptr(55.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5010000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD when EMA crossed but SMA not aligned, got %s (reason: %s)", signal.Action, signal.Reason)
+	}
+}
+
+func TestStrategyEngine_EMA_FallbackToSMAWhenNil(t *testing.T) {
+	// EMA nil → falls back to SMA-only evaluation
+	resolver := &mockStanceResolver{
+		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000.0),
+		SMA50:     ptr(5000000.0),
+		EMA12:     nil, // no EMA data
+		EMA26:     nil,
+		RSI14:     ptr(55.0),
+		Histogram: ptr(3.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY with SMA fallback, got %s", signal.Action)
 	}
 }
 
