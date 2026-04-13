@@ -37,8 +37,17 @@ func validateRiskConfig(cfg entity.RiskConfig) error {
 	if cfg.StopLossPercent <= 0 {
 		return fmt.Errorf("stopLossPercent must be positive")
 	}
+	if cfg.TakeProfitPercent < 0 {
+		return fmt.Errorf("takeProfitPercent must be non-negative")
+	}
 	if cfg.InitialCapital <= 0 {
 		return fmt.Errorf("initialCapital must be positive")
+	}
+	if cfg.MaxConsecutiveLosses < 0 {
+		return fmt.Errorf("maxConsecutiveLosses must be non-negative")
+	}
+	if cfg.CooldownMinutes < 0 {
+		return fmt.Errorf("cooldownMinutes must be non-negative")
 	}
 	return nil
 }
