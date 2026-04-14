@@ -135,6 +135,7 @@ func optimizeCommand(args []string) error {
 		sortBy         = fs.String("sort-by", "sharpe_ratio", "ranking metric (sharpe_ratio only)")
 		top            = fs.Int("top", 10, "top N results to print")
 		maxEvals       = fs.Int("max-evals", 10000, "max evaluated combinations")
+		workers        = fs.Int("workers", 8, "number of parallel workers")
 		seed           = fs.Int64("seed", 0, "random seed for sampling")
 	)
 	var params paramFlags
@@ -182,6 +183,7 @@ func optimizeCommand(args []string) error {
 		MaxEvals: *maxEvals,
 		TopN:     *top,
 		Seed:     *seed,
+		Workers:  *workers,
 	})
 	if err != nil {
 		return err

@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"sort"
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"golang.org/x/sync/errgroup"
 )
 
 type ParamRange struct {
@@ -22,6 +24,7 @@ type OptimizeConfig struct {
 	MaxEvals int
 	TopN     int
 	Seed     int64
+	Workers  int
 }
 
 type OptimizationResult struct {
@@ -53,6 +56,9 @@ func (o *Optimizer) Optimize(ctx context.Context, base RunInput, ranges []ParamR
 	if cfg.Seed == 0 {
 		cfg.Seed = time.Now().UnixNano()
 	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = runtime.GOMAXPROCS(0)
+	}
 
 	grid, err := buildGrid(ranges)
 	if err != nil {
@@ -67,17 +73,30 @@ func (o *Optimizer) Optimize(ctx context.Context, base RunInput, ranges []ParamR
 		selected = sampleCombos(grid, cfg.MaxEvals, cfg.Seed)
 	}
 
-	results := make([]OptimizationResult, 0, len(selected))
-	for _, combo := range selected {
-		candidate := applyParams(base, combo)
-		result, err := o.runner.Run(ctx, candidate)
-		if err != nil {
-			return nil, err
-		}
-		results = append(results, OptimizationResult{
-			Params:  combo,
-			Summary: result.Summary,
+	results := make([]OptimizationResult, len(selected))
+	sem := make(chan struct{}, cfg.Workers)
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i, combo := range selected {
+		i := i
+		combo := cloneParams(combo)
+		sem <- struct{}{}
+		g.Go(func() error {
+			defer func() { <-sem }()
+			candidate := applyParams(base, combo)
+			result, err := o.runner.Run(gctx, candidate)
+			if err != nil {
+				return err
+			}
+			results[i] = OptimizationResult{
+				Params:  combo,
+				Summary: result.Summary,
+			}
+			return nil
 		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
 	}
 
 	sort.Slice(results, func(i, j int) bool {
@@ -171,6 +190,14 @@ func applyParams(base RunInput, params map[string]float64) RunInput {
 		}
 	}
 	return out
+}
+
+func cloneParams(src map[string]float64) map[string]float64 {
+	dst := make(map[string]float64, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func round(v float64) float64 {
