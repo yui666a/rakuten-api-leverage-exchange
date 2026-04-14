@@ -1,4 +1,4 @@
-package backtest
+package eventengine
 
 import (
 	"context"
@@ -78,5 +78,15 @@ func TestEventBus_FIFOAndPriority(t *testing.T) {
 		if logs[i] != want[i] {
 			t.Fatalf("log[%d] mismatch: got=%s want=%s full=%v", i, logs[i], want[i], logs)
 		}
+	}
+}
+
+func TestEventEngine_NilBus(t *testing.T) {
+	engine := NewEventEngine(nil)
+	err := engine.Run(context.Background(), []entity.Event{
+		testEvent{typ: "a", id: "x", ts: 1},
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for nil bus, got: %v", err)
 	}
 }

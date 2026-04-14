@@ -10,6 +10,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
 type RunInput struct {
@@ -88,7 +89,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		TradeAmount: input.TradeAmount,
 	}
 
-	bus := NewEventBus()
+	bus := eventengine.NewEventBus()
 	bus.Register(entity.EventTypeCandle, 5, tickGenerator)
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
@@ -102,7 +103,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		return nil, fmt.Errorf("no primary candles in requested range")
 	}
 
-	engine := NewEventEngine(bus)
+	engine := eventengine.NewEventEngine(bus)
 	events := mergeCandleEvents(
 		primaryCandles,
 		higherCandles,
@@ -215,11 +216,11 @@ func (a *simExecutorAdapter) Open(symbolID int64, side entity.OrderSide, signalP
 	return a.sim.Open(symbolID, side, signalPrice, amount, reason, timestamp)
 }
 
-func (a *simExecutorAdapter) Positions() []SimPosition {
+func (a *simExecutorAdapter) Positions() []eventengine.Position {
 	raw := a.sim.Positions()
-	out := make([]SimPosition, 0, len(raw))
+	out := make([]eventengine.Position, 0, len(raw))
 	for _, p := range raw {
-		out = append(out, SimPosition{
+		out = append(out, eventengine.Position{
 			PositionID:     p.PositionID,
 			SymbolID:       p.SymbolID,
 			Side:           p.Side,
