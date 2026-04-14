@@ -83,3 +83,17 @@ func TestSimExecutor_OpenClose_AppliesCarryingAndSpread(t *testing.T) {
 		t.Fatalf("expected profitable close balance > initial, got %f", sim.Balance())
 	}
 }
+
+func TestSimExecutor_EquityIncludesUnrealizedPnL(t *testing.T) {
+	sim := NewSimExecutor(SimConfig{
+		InitialBalance: 100000,
+	})
+	entryTS := time.Date(2026, 4, 14, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := sim.Open(7, entity.OrderSideBuy, 100, 1, "entry", entryTS); err != nil {
+		t.Fatalf("open error: %v", err)
+	}
+	eq := sim.Equity(map[int64]float64{7: 120})
+	if eq <= 100000 {
+		t.Fatalf("expected equity above initial with unrealized gain, got %f", eq)
+	}
+}

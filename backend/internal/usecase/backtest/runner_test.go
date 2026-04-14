@@ -96,4 +96,7 @@ func TestBacktestRunner_Run(t *testing.T) {
 	if result.Summary.FinalBalance <= 0 {
 		t.Fatalf("final balance must be positive: %f", result.Summary.FinalBalance)
 	}
+	if len(result.ID) != 26 {
+		t.Fatalf("expected ULID length 26, got %d id=%s", len(result.ID), result.ID)
+	}
 }
