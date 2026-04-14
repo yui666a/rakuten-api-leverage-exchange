@@ -2,13 +2,22 @@ package handler
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	_ "modernc.org/sqlite"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	btinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
+	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 )
 
@@ -79,3 +88,227 @@ func httptestGet(handler gin.HandlerFunc, route, reqPath string) *httptest.Respo
 	r.ServeHTTP(w, req)
 	return w
 }
+
+// --- Integration test: Run -> List -> Get ---
+
+func setupIntegrationDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:?_pragma=foreign_keys%3don")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := database.RunMigrations(db); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+	return db
+}
+
+func writeTempCSV(t *testing.T, dir string, cf csvinfra.CandleFile) string {
+	t.Helper()
+	path := filepath.Join(dir, "candles.csv")
+	if err := csvinfra.SaveCandles(path, cf); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+	return path
+}
+
+func generateTestCandles(n int) []entity.Candle {
+	candles := make([]entity.Candle, 0, n)
+	baseTime := int64(1_770_000_000_000)
+	price := 15_000_000.0
+	for i := 0; i < n; i++ {
+		price += math.Sin(float64(i)/5.0) * 20000
+		ts := baseTime + int64(i)*15*60*1000
+		candles = append(candles, entity.Candle{
+			Open:   price - 5000,
+			High:   price + 10000,
+			Low:    price - 10000,
+			Close:  price,
+			Volume: 1.5,
+			Time:   ts,
+		})
+	}
+	return candles
+}
+
+func TestBacktestHandler_Integration_RunListGet(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	runner := bt.NewBacktestRunner()
+	h := NewBacktestHandler(runner, repo)
+
+	tmpDir := t.TempDir()
+	candles := generateTestCandles(100)
+	csvPath := writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "BTC_JPY",
+		SymbolID: 7,
+		Interval: "PT15M",
+		Candles:  candles,
+	})
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+	router.GET("/api/v1/backtest/results", h.ListResults)
+	router.GET("/api/v1/backtest/results/:id", h.GetResult)
+
+	// Step 1: Run backtest
+	body := `{"data":"` + csvPath + `","initialBalance":100000}`
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(body))
+	runReq.Header.Set("Content-Type", "application/json")
+	runW := httptest.NewRecorder()
+	router.ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusOK {
+		t.Fatalf("Run: expected 200, got %d: %s", runW.Code, runW.Body.String())
+	}
+
+	var runResult entity.BacktestResult
+	if err := json.Unmarshal(runW.Body.Bytes(), &runResult); err != nil {
+		t.Fatalf("unmarshal run result: %v", err)
+	}
+	if runResult.ID == "" {
+		t.Fatal("Run: expected non-empty result ID")
+	}
+	if runResult.Summary.InitialBalance != 100000 {
+		t.Fatalf("Run: expected initial balance 100000, got %v", runResult.Summary.InitialBalance)
+	}
+
+	// Step 2: List results
+	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/backtest/results?limit=10&offset=0", nil)
+	listW := httptest.NewRecorder()
+	router.ServeHTTP(listW, listReq)
+
+	if listW.Code != http.StatusOK {
+		t.Fatalf("List: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+
+	var listResp struct {
+		Results []entity.BacktestResult `json:"results"`
+	}
+	if err := json.Unmarshal(listW.Body.Bytes(), &listResp); err != nil {
+		t.Fatalf("unmarshal list result: %v", err)
+	}
+	if len(listResp.Results) != 1 {
+		t.Fatalf("List: expected 1 result, got %d", len(listResp.Results))
+	}
+	if listResp.Results[0].ID != runResult.ID {
+		t.Fatalf("List: ID mismatch: %s != %s", listResp.Results[0].ID, runResult.ID)
+	}
+
+	// Step 3: Get result by ID
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/backtest/results/"+runResult.ID, nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+
+	if getW.Code != http.StatusOK {
+		t.Fatalf("Get: expected 200, got %d: %s", getW.Code, getW.Body.String())
+	}
+
+	var getResult entity.BacktestResult
+	if err := json.Unmarshal(getW.Body.Bytes(), &getResult); err != nil {
+		t.Fatalf("unmarshal get result: %v", err)
+	}
+	if getResult.ID != runResult.ID {
+		t.Fatalf("Get: ID mismatch: %s != %s", getResult.ID, runResult.ID)
+	}
+	if getResult.Summary.TotalReturn != runResult.Summary.TotalReturn {
+		t.Fatalf("Get: TotalReturn mismatch: %v != %v", getResult.Summary.TotalReturn, runResult.Summary.TotalReturn)
+	}
+}
+
+func TestBacktestHandler_Integration_RunWithRiskParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	runner := bt.NewBacktestRunner()
+	h := NewBacktestHandler(runner, repo)
+
+	tmpDir := t.TempDir()
+	candles := generateTestCandles(100)
+	csvPath := writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "BTC_JPY",
+		SymbolID: 7,
+		Interval: "PT15M",
+		Candles:  candles,
+	})
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+
+	body := `{"data":"` + csvPath + `","initialBalance":100000,"stopLossPercent":3,"takeProfitPercent":8}`
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(body))
+	runReq.Header.Set("Content-Type", "application/json")
+	runW := httptest.NewRecorder()
+	router.ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusOK {
+		t.Fatalf("Run with risk params: expected 200, got %d: %s", runW.Code, runW.Body.String())
+	}
+
+	var result entity.BacktestResult
+	if err := json.Unmarshal(runW.Body.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if result.ID == "" {
+		t.Fatal("expected non-empty result ID")
+	}
+}
+
+func TestBacktestHandler_Integration_GetNotFound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	router := gin.New()
+	router.GET("/api/v1/backtest/results/:id", h.GetResult)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/backtest/results/nonexistent-id", nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+
+	if getW.Code != http.StatusNotFound {
+		t.Fatalf("Get nonexistent: expected 404, got %d", getW.Code)
+	}
+}
+
+func TestBacktestHandler_Integration_RunInvalidJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(`{invalid`))
+	runReq.Header.Set("Content-Type", "application/json")
+	runW := httptest.NewRecorder()
+	router.ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusBadRequest {
+		t.Fatalf("invalid JSON: expected 400, got %d", runW.Code)
+	}
+}
+
+func TestBacktestHandler_Integration_RunMissingData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(`{"initialBalance":100000}`))
+	runReq.Header.Set("Content-Type", "application/json")
+	runW := httptest.NewRecorder()
+	router.ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusBadRequest {
+		t.Fatalf("missing data: expected 400, got %d", runW.Code)
+	}
+}
+
