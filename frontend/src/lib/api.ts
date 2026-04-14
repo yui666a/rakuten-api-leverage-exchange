@@ -178,6 +178,65 @@ export type RealtimeEventMessage =
   | { type: 'orderbook'; symbolId: number; data: RealtimeOrderbook }
   | { type: 'market_trades'; symbolId: number; data: RealtimeMarketTrades }
 
+// --- Backtest types ---
+
+export type BacktestTrade = {
+  tradeId: number
+  symbolId: number
+  entryTime: number
+  exitTime: number
+  side: string
+  entryPrice: number
+  exitPrice: number
+  amount: number
+  pnl: number
+  pnlPercent: number
+  carryingCost: number
+  spreadCost: number
+  reasonEntry: string
+  reasonExit: string
+}
+
+export type BacktestResult = {
+  id: string
+  createdAt: number
+  config: {
+    symbol: string
+    symbolId: number
+    primaryInterval: string
+    higherTfInterval: string
+    fromTimestamp: number
+    toTimestamp: number
+    initialBalance: number
+    spreadPercent: number
+    dailyCarryCost: number
+    slippagePercent: number
+  }
+  summary: {
+    periodFrom: number
+    periodTo: number
+    initialBalance: number
+    finalBalance: number
+    totalReturn: number
+    totalTrades: number
+    winTrades: number
+    lossTrades: number
+    winRate: number
+    profitFactor: number
+    maxDrawdown: number
+    maxDrawdownBalance: number
+    sharpeRatio: number
+    avgHoldSeconds: number
+    totalCarryingCost: number
+    totalSpreadCost: number
+  }
+  trades?: BacktestTrade[]
+}
+
+export type BacktestResultListResponse = {
+  results: BacktestResult[]
+}
+
 export async function fetchApi<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`)
   if (!res.ok) {
