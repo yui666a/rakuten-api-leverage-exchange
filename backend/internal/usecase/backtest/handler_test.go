@@ -7,6 +7,7 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
 func TestIndicatorHandler_NoFutureHigherTFLeak(t *testing.T) {
@@ -235,12 +236,12 @@ func TestRiskHandler_EmitsApprovedSignalEvent(t *testing.T) {
 }
 
 type fakeTickRiskExecutor struct {
-	positions []SimPosition
+	positions []eventengine.Position
 	closedIDs []int64
 }
 
-func (f *fakeTickRiskExecutor) Positions() []SimPosition {
-	out := make([]SimPosition, len(f.positions))
+func (f *fakeTickRiskExecutor) Positions() []eventengine.Position {
+	out := make([]eventengine.Position, len(f.positions))
 	copy(out, f.positions)
 	return out
 }
@@ -277,7 +278,7 @@ func (f *fakeTickRiskExecutor) SelectSLTPExit(side entity.OrderSide, stopLossPri
 
 func (f *fakeTickRiskExecutor) Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error) {
 	f.closedIDs = append(f.closedIDs, positionID)
-	filtered := make([]SimPosition, 0, len(f.positions))
+	filtered := make([]eventengine.Position, 0, len(f.positions))
 	for _, p := range f.positions {
 		if p.PositionID != positionID {
 			filtered = append(filtered, p)
@@ -298,7 +299,7 @@ func (f *fakeTickRiskExecutor) Close(positionID int64, signalPrice float64, reas
 
 func TestTickRiskHandler_WorstCaseStopLossOnBothHit(t *testing.T) {
 	exec := &fakeTickRiskExecutor{
-		positions: []SimPosition{
+		positions: []eventengine.Position{
 			{
 				PositionID: 1,
 				SymbolID:   7,

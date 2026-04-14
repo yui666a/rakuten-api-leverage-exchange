@@ -1,4 +1,4 @@
-package backtest
+package eventengine
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
 
-// EventEngine drives deterministic event dispatch for backtests.
+// EventEngine drives deterministic event dispatch.
 type EventEngine struct {
 	bus *EventBus
 }

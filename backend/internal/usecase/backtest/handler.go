@@ -11,6 +11,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
 // TickGeneratorHandler creates deterministic synthetic in-bar ticks from primary candles.
@@ -242,18 +243,9 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 	}, nil
 }
 
-type SimPosition struct {
-	PositionID     int64
-	SymbolID       int64
-	Side           entity.OrderSide
-	EntryPrice     float64
-	Amount         float64
-	EntryTimestamp int64
-}
-
 // TickRiskExecutor exposes minimum close-related operations for tick-driven risk checks.
 type TickRiskExecutor interface {
-	Positions() []SimPosition
+	Positions() []eventengine.Position
 	SelectSLTPExit(side entity.OrderSide, stopLossPrice, takeProfitPrice, barLow, barHigh float64) (float64, string, bool)
 	Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error)
 }
@@ -504,7 +496,7 @@ func intervalDurationMillis(interval string) (int64, error) {
 	return 0, fmt.Errorf("unsupported interval: %s", interval)
 }
 
-func calcSLTP(pos SimPosition, stopLossPercent, takeProfitPercent float64) (stopLossPrice float64, takeProfitPrice float64) {
+func calcSLTP(pos eventengine.Position, stopLossPercent, takeProfitPercent float64) (stopLossPrice float64, takeProfitPrice float64) {
 	switch pos.Side {
 	case entity.OrderSideSell:
 		stopLossPrice = pos.EntryPrice * (1 + stopLossPercent/100.0)
