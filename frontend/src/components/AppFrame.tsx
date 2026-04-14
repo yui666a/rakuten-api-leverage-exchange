@@ -12,6 +12,7 @@ const navItems = [
   { to: '/', label: 'ダッシュボード' },
   { to: '/settings', label: '設定' },
   { to: '/history', label: '履歴' },
+  { to: '/backtest', label: 'バックテスト' },
 ] as const
 
 export function AppFrame({ title, subtitle, children }: AppFrameProps) {
