@@ -10,13 +10,13 @@ import (
 )
 
 type RiskStatus struct {
-	Balance       float64           `json:"balance"`
-	DailyLoss     float64           `json:"dailyLoss"`
-	TotalPosition float64           `json:"totalPosition"`
-	TradingHalted bool              `json:"tradingHalted"`
-	ManuallyStopped bool            `json:"manuallyStopped"`
-	CurrentATR    float64           `json:"currentAtr"`
-	Config        entity.RiskConfig `json:"config"`
+	Balance         float64           `json:"balance"`
+	DailyLoss       float64           `json:"dailyLoss"`
+	TotalPosition   float64           `json:"totalPosition"`
+	TradingHalted   bool              `json:"tradingHalted"`
+	ManuallyStopped bool              `json:"manuallyStopped"`
+	CurrentATR      float64           `json:"currentAtr"`
+	Config          entity.RiskConfig `json:"config"`
 }
 
 type RiskManager struct {
@@ -41,6 +41,15 @@ func NewRiskManager(config entity.RiskConfig) *RiskManager {
 }
 
 func (rm *RiskManager) CheckOrder(ctx context.Context, proposal entity.OrderProposal) entity.RiskCheckResult {
+	return rm.CheckOrderAt(ctx, time.Now(), proposal)
+}
+
+// CheckOrderAt evaluates a proposal at caller-supplied time (for deterministic backtests).
+func (rm *RiskManager) CheckOrderAt(ctx context.Context, now time.Time, proposal entity.OrderProposal) entity.RiskCheckResult {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	if proposal.IsClose {
 		return entity.RiskCheckResult{Approved: true}
 	}
@@ -57,7 +66,7 @@ func (rm *RiskManager) CheckOrder(ctx context.Context, proposal entity.OrderProp
 		}
 	}
 
-	if rm.config.MaxConsecutiveLosses > 0 && !rm.cooldownUntil.IsZero() && time.Now().Before(rm.cooldownUntil) {
+	if rm.config.MaxConsecutiveLosses > 0 && !rm.cooldownUntil.IsZero() && now.Before(rm.cooldownUntil) {
 		return entity.RiskCheckResult{
 			Approved: false,
 			Reason:   fmt.Sprintf("cooldown: %d consecutive losses, trading paused until %s", rm.consecutiveLosses, rm.cooldownUntil.Format("15:04")),
@@ -152,11 +161,20 @@ func (rm *RiskManager) ResetDailyLoss() {
 // RecordConsecutiveLoss increments the consecutive loss counter.
 // If the counter reaches MaxConsecutiveLosses, a cooldown period is activated.
 func (rm *RiskManager) RecordConsecutiveLoss() {
+	rm.RecordConsecutiveLossAt(time.Now())
+}
+
+// RecordConsecutiveLossAt increments loss counter at caller-supplied time.
+func (rm *RiskManager) RecordConsecutiveLossAt(now time.Time) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.consecutiveLosses++
 	if rm.config.MaxConsecutiveLosses > 0 && rm.consecutiveLosses >= rm.config.MaxConsecutiveLosses {
-		rm.cooldownUntil = time.Now().Add(time.Duration(rm.config.CooldownMinutes) * time.Minute)
+		rm.cooldownUntil = now.Add(time.Duration(rm.config.CooldownMinutes) * time.Minute)
 	}
 }
 

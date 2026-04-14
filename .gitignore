@@ -46,6 +46,8 @@ package-lock.json
 # Database
 data/
 *.db
+backend/results/
+results/
 
 # Backend
 go.sum
