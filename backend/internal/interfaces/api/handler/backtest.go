@@ -26,15 +26,21 @@ func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResul
 }
 
 type runBacktestRequest struct {
-	DataPath       string  `json:"data" binding:"required"`
-	DataHTFPath    string  `json:"dataHtf"`
-	From           string  `json:"from"`
-	To             string  `json:"to"`
-	InitialBalance float64 `json:"initialBalance"`
-	Spread         float64 `json:"spread"`
-	CarryingCost   float64 `json:"carryingCost"`
-	Slippage       float64 `json:"slippage"`
-	TradeAmount    float64 `json:"tradeAmount"`
+	DataPath             string  `json:"data" binding:"required"`
+	DataHTFPath          string  `json:"dataHtf"`
+	From                 string  `json:"from"`
+	To                   string  `json:"to"`
+	InitialBalance       float64 `json:"initialBalance"`
+	Spread               float64 `json:"spread"`
+	CarryingCost         float64 `json:"carryingCost"`
+	Slippage             float64 `json:"slippage"`
+	TradeAmount          float64 `json:"tradeAmount"`
+	StopLossPercent      float64 `json:"stopLossPercent"`
+	TakeProfitPercent    float64 `json:"takeProfitPercent"`
+	MaxPositionAmount    float64 `json:"maxPositionAmount"`
+	MaxDailyLoss         float64 `json:"maxDailyLoss"`
+	MaxConsecutiveLosses int     `json:"maxConsecutiveLosses"`
+	CooldownMinutes      int     `json:"cooldownMinutes"`
 }
 
 func (h *BacktestHandler) Run(c *gin.Context) {
@@ -59,6 +65,18 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	}
 	if req.TradeAmount <= 0 {
 		req.TradeAmount = 0.01
+	}
+	if req.StopLossPercent <= 0 {
+		req.StopLossPercent = 5
+	}
+	if req.TakeProfitPercent <= 0 {
+		req.TakeProfitPercent = 10
+	}
+	if req.MaxPositionAmount <= 0 {
+		req.MaxPositionAmount = 1_000_000_000
+	}
+	if req.MaxDailyLoss <= 0 {
+		req.MaxDailyLoss = 1_000_000_000
 	}
 
 	primary, err := csvinfra.LoadCandles(req.DataPath)
@@ -116,13 +134,13 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
 		RiskConfig: entity.RiskConfig{
-			MaxPositionAmount:    1_000_000_000,
-			MaxDailyLoss:         1_000_000_000,
-			StopLossPercent:      5,
-			TakeProfitPercent:    10,
+			MaxPositionAmount:    req.MaxPositionAmount,
+			MaxDailyLoss:         req.MaxDailyLoss,
+			StopLossPercent:      req.StopLossPercent,
+			TakeProfitPercent:    req.TakeProfitPercent,
 			InitialCapital:       req.InitialBalance,
-			MaxConsecutiveLosses: 0,
-			CooldownMinutes:      0,
+			MaxConsecutiveLosses: req.MaxConsecutiveLosses,
+			CooldownMinutes:      req.CooldownMinutes,
 		},
 	})
 	if err != nil {
