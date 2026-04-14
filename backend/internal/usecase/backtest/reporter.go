@@ -10,6 +10,11 @@ import (
 
 type SummaryReporter struct{}
 
+type EquityPoint struct {
+	Timestamp int64
+	Equity    float64
+}
+
 func NewSummaryReporter() *SummaryReporter {
 	return &SummaryReporter{}
 }
@@ -18,6 +23,7 @@ func (r *SummaryReporter) BuildSummary(
 	config entity.BacktestConfig,
 	finalBalance float64,
 	trades []entity.BacktestTradeRecord,
+	equityPoints []EquityPoint,
 ) entity.BacktestSummary {
 	totalTrades := len(trades)
 	winTrades := 0
@@ -27,10 +33,6 @@ func (r *SummaryReporter) BuildSummary(
 	carryingCost := 0.0
 	spreadCost := 0.0
 	holdSecondsTotal := int64(0)
-
-	balance := config.InitialBalance
-	equityCurve := []float64{balance}
-	equityTimes := []int64{config.FromTimestamp}
 
 	for _, tr := range trades {
 		if tr.PnL >= 0 {
@@ -45,10 +47,6 @@ func (r *SummaryReporter) BuildSummary(
 		if tr.ExitTime > tr.EntryTime {
 			holdSecondsTotal += (tr.ExitTime - tr.EntryTime) / 1000
 		}
-
-		balance += tr.PnL
-		equityCurve = append(equityCurve, balance)
-		equityTimes = append(equityTimes, tr.ExitTime)
 	}
 
 	winRate := 0.0
@@ -64,8 +62,8 @@ func (r *SummaryReporter) BuildSummary(
 		avgHold = holdSecondsTotal / int64(totalTrades)
 	}
 
-	maxDDRatio, maxDDBalance := calcMaxDrawdown(equityCurve)
-	sharpe := calcSharpe(config.InitialBalance, trades)
+	maxDDRatio, maxDDBalance := calcMaxDrawdown(equityPoints)
+	sharpe := calcSharpe(equityPoints)
 
 	return entity.BacktestSummary{
 		PeriodFrom:         config.FromTimestamp,
@@ -94,14 +92,21 @@ func calcTotalReturn(initialBalance, finalBalance float64) float64 {
 	return (finalBalance - initialBalance) / initialBalance
 }
 
-func calcMaxDrawdown(equity []float64) (ratio float64, trough float64) {
-	if len(equity) == 0 {
+func calcMaxDrawdown(points []EquityPoint) (ratio float64, trough float64) {
+	if len(points) == 0 {
 		return 0, 0
 	}
-	peak := equity[0]
+	sorted := make([]EquityPoint, len(points))
+	copy(sorted, points)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Timestamp < sorted[j].Timestamp
+	})
+
+	peak := sorted[0].Equity
 	maxDD := 0.0
-	troughBalance := equity[0]
-	for _, v := range equity {
+	troughBalance := sorted[0].Equity
+	for _, p := range sorted {
+		v := p.Equity
 		if v > peak {
 			peak = v
 		}
@@ -117,26 +122,23 @@ func calcMaxDrawdown(equity []float64) (ratio float64, trough float64) {
 	return maxDD, troughBalance
 }
 
-func calcSharpe(initialBalance float64, trades []entity.BacktestTradeRecord) float64 {
-	if initialBalance <= 0 {
-		return 0
-	}
-	if len(trades) == 0 {
+func calcSharpe(points []EquityPoint) float64 {
+	if len(points) < 2 {
 		return 0
 	}
 
-	sorted := make([]entity.BacktestTradeRecord, len(trades))
-	copy(sorted, trades)
+	sorted := make([]EquityPoint, len(points))
+	copy(sorted, points)
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].ExitTime < sorted[j].ExitTime
+		return sorted[i].Timestamp < sorted[j].Timestamp
 	})
 
+	loc, _ := time.LoadLocation("Asia/Tokyo")
 	dailyBalance := make(map[string]float64)
-	balance := initialBalance
-	for _, tr := range sorted {
-		balance += tr.PnL
-		key := time.UnixMilli(tr.ExitTime).UTC().Format("2006-01-02")
-		dailyBalance[key] = balance
+	for _, p := range sorted {
+		key := time.UnixMilli(p.Timestamp).In(loc).Format("2006-01-02")
+		// keep the last snapshot of the day as daily close equity
+		dailyBalance[key] = p.Equity
 	}
 	if len(dailyBalance) < 2 {
 		return 0

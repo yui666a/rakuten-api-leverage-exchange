@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -32,6 +33,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "backtest run failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "optimize":
+		if err := optimizeCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "backtest optimize failed: %v\n", err)
+			os.Exit(1)
+		}
 	case "download":
 		if err := downloadCommand(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "backtest download failed: %v\n", err)
@@ -46,6 +52,7 @@ func main() {
 func usage() {
 	fmt.Println("Usage:")
 	fmt.Println("  go run ./cmd/backtest run --data <primary.csv> [--data-htf <htf.csv>] [flags]")
+	fmt.Println("  go run ./cmd/backtest optimize --data <primary.csv> --param \"stop_loss_percent=1:10:1\" [flags]")
 	fmt.Println("  go run ./cmd/backtest download ...")
 }
 
@@ -70,66 +77,22 @@ func runCommand(args []string) error {
 		return fmt.Errorf("--data is required")
 	}
 
-	primary, err := csvinfra.LoadCandles(*dataPath)
-	if err != nil {
-		return fmt.Errorf("load primary csv: %w", err)
-	}
-	var higherCandles []entity.Candle
-	if *dataHTFPath != "" {
-		htf, err := csvinfra.LoadCandles(*dataHTFPath)
-		if err != nil {
-			return fmt.Errorf("load higher tf csv: %w", err)
-		}
-		higherCandles = htf.Candles
-	}
-
-	fromTs, err := parseDateStart(*fromDate)
+	input, err := buildRunInput(
+		*dataPath,
+		*dataHTFPath,
+		*fromDate,
+		*toDate,
+		*initialBalance,
+		*spread,
+		*carryingCost,
+		*slippage,
+		*tradeAmount,
+	)
 	if err != nil {
 		return err
 	}
-	toTs, err := parseDateEnd(*toDate)
-	if err != nil {
-		return err
-	}
-	if fromTs == 0 && len(primary.Candles) > 0 {
-		fromTs = primary.Candles[0].Time
-	}
-	if toTs == 0 && len(primary.Candles) > 0 {
-		toTs = primary.Candles[len(primary.Candles)-1].Time
-	}
-
-	cfg := entity.BacktestConfig{
-		Symbol:           primary.Symbol,
-		SymbolID:         primary.SymbolID,
-		PrimaryInterval:  primary.Interval,
-		HigherTFInterval: "PT1H",
-		FromTimestamp:    fromTs,
-		ToTimestamp:      toTs,
-		InitialBalance:   *initialBalance,
-		SpreadPercent:    *spread,
-		DailyCarryCost:   *carryingCost,
-		SlippagePercent:  *slippage,
-	}
-	if len(higherCandles) == 0 {
-		cfg.HigherTFInterval = ""
-	}
-
 	runner := bt.NewBacktestRunner()
-	result, err := runner.Run(context.Background(), bt.RunInput{
-		Config:         cfg,
-		TradeAmount:    *tradeAmount,
-		PrimaryCandles: primary.Candles,
-		HigherCandles:  higherCandles,
-		RiskConfig: entity.RiskConfig{
-			MaxPositionAmount:    1_000_000_000,
-			MaxDailyLoss:         1_000_000_000,
-			StopLossPercent:      5,
-			TakeProfitPercent:    10,
-			InitialCapital:       *initialBalance,
-			MaxConsecutiveLosses: 0,
-			CooldownMinutes:      0,
-		},
-	})
+	result, err := runner.Run(context.Background(), input)
 	if err != nil {
 		return err
 	}
@@ -146,6 +109,96 @@ func runCommand(args []string) error {
 		fmt.Printf("trades csv: %s\n", tradesPath)
 	}
 
+	return nil
+}
+
+type paramFlags []string
+
+func (p *paramFlags) String() string { return strings.Join(*p, ",") }
+func (p *paramFlags) Set(v string) error {
+	*p = append(*p, v)
+	return nil
+}
+
+func optimizeCommand(args []string) error {
+	fs := flag.NewFlagSet("optimize", flag.ContinueOnError)
+	var (
+		dataPath       = fs.String("data", "", "primary timeframe CSV path")
+		dataHTFPath    = fs.String("data-htf", "", "higher timeframe CSV path")
+		fromDate       = fs.String("from", "", "start date (YYYY-MM-DD)")
+		toDate         = fs.String("to", "", "end date (YYYY-MM-DD)")
+		initialBalance = fs.Float64("initial-balance", 100000, "initial balance in JPY")
+		spread         = fs.Float64("spread", 0.1, "spread percent")
+		carryingCost   = fs.Float64("carrying-cost", 0.04, "daily carrying cost percent")
+		slippage       = fs.Float64("slippage", 0, "slippage percent")
+		tradeAmount    = fs.Float64("trade-amount", 0.01, "trade amount")
+		sortBy         = fs.String("sort-by", "sharpe_ratio", "ranking metric (sharpe_ratio only)")
+		top            = fs.Int("top", 10, "top N results to print")
+		maxEvals       = fs.Int("max-evals", 10000, "max evaluated combinations")
+		seed           = fs.Int64("seed", 0, "random seed for sampling")
+	)
+	var params paramFlags
+	fs.Var(&params, "param", `parameter range: "name=min:max:step"`)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dataPath == "" {
+		return fmt.Errorf("--data is required")
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("at least one --param is required")
+	}
+	if *sortBy != "sharpe_ratio" {
+		return fmt.Errorf("--sort-by currently supports only sharpe_ratio")
+	}
+
+	baseInput, err := buildRunInput(
+		*dataPath,
+		*dataHTFPath,
+		*fromDate,
+		*toDate,
+		*initialBalance,
+		*spread,
+		*carryingCost,
+		*slippage,
+		*tradeAmount,
+	)
+	if err != nil {
+		return err
+	}
+
+	ranges := make([]bt.ParamRange, 0, len(params))
+	for _, spec := range params {
+		r, err := parseParamRange(spec)
+		if err != nil {
+			return err
+		}
+		ranges = append(ranges, r)
+	}
+
+	optimizer := bt.NewOptimizer(bt.NewBacktestRunner())
+	results, err := optimizer.Optimize(context.Background(), baseInput, ranges, bt.OptimizeConfig{
+		MaxEvals: *maxEvals,
+		TopN:     *top,
+		Seed:     *seed,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("evaluated top %d results\n", len(results))
+	for i, r := range results {
+		fmt.Printf(
+			"%d) sharpe=%.4f maxDD=%.2f%% return=%+.2f%% trades=%d params=%v\n",
+			i+1,
+			r.Summary.SharpeRatio,
+			r.Summary.MaxDrawdown*100,
+			r.Summary.TotalReturn*100,
+			r.Summary.TotalTrades,
+			r.Params,
+		)
+	}
 	return nil
 }
 
@@ -303,6 +356,96 @@ func mergeCandles(existing, incoming []entity.Candle) []entity.Candle {
 		return 0
 	})
 	return out
+}
+
+func buildRunInput(
+	dataPath, dataHTFPath, fromDate, toDate string,
+	initialBalance, spread, carryingCost, slippage, tradeAmount float64,
+) (bt.RunInput, error) {
+	primary, err := csvinfra.LoadCandles(dataPath)
+	if err != nil {
+		return bt.RunInput{}, fmt.Errorf("load primary csv: %w", err)
+	}
+	var higherCandles []entity.Candle
+	if dataHTFPath != "" {
+		htf, err := csvinfra.LoadCandles(dataHTFPath)
+		if err != nil {
+			return bt.RunInput{}, fmt.Errorf("load higher tf csv: %w", err)
+		}
+		higherCandles = htf.Candles
+	}
+
+	fromTs, err := parseDateStart(fromDate)
+	if err != nil {
+		return bt.RunInput{}, err
+	}
+	toTs, err := parseDateEnd(toDate)
+	if err != nil {
+		return bt.RunInput{}, err
+	}
+	if fromTs == 0 && len(primary.Candles) > 0 {
+		fromTs = primary.Candles[0].Time
+	}
+	if toTs == 0 && len(primary.Candles) > 0 {
+		toTs = primary.Candles[len(primary.Candles)-1].Time
+	}
+
+	cfg := entity.BacktestConfig{
+		Symbol:           primary.Symbol,
+		SymbolID:         primary.SymbolID,
+		PrimaryInterval:  primary.Interval,
+		HigherTFInterval: "PT1H",
+		FromTimestamp:    fromTs,
+		ToTimestamp:      toTs,
+		InitialBalance:   initialBalance,
+		SpreadPercent:    spread,
+		DailyCarryCost:   carryingCost,
+		SlippagePercent:  slippage,
+	}
+	if len(higherCandles) == 0 {
+		cfg.HigherTFInterval = ""
+	}
+
+	return bt.RunInput{
+		Config:         cfg,
+		TradeAmount:    tradeAmount,
+		PrimaryCandles: primary.Candles,
+		HigherCandles:  higherCandles,
+		RiskConfig: entity.RiskConfig{
+			MaxPositionAmount:    1_000_000_000,
+			MaxDailyLoss:         1_000_000_000,
+			StopLossPercent:      5,
+			TakeProfitPercent:    10,
+			InitialCapital:       initialBalance,
+			MaxConsecutiveLosses: 0,
+			CooldownMinutes:      0,
+		},
+	}, nil
+}
+
+func parseParamRange(spec string) (bt.ParamRange, error) {
+	parts := strings.SplitN(spec, "=", 2)
+	if len(parts) != 2 {
+		return bt.ParamRange{}, fmt.Errorf("invalid --param format: %s", spec)
+	}
+	name := strings.TrimSpace(parts[0])
+	rangeParts := strings.Split(parts[1], ":")
+	if len(rangeParts) != 3 {
+		return bt.ParamRange{}, fmt.Errorf("invalid --param range format: %s", spec)
+	}
+	min, err := strconv.ParseFloat(strings.TrimSpace(rangeParts[0]), 64)
+	if err != nil {
+		return bt.ParamRange{}, fmt.Errorf("invalid min in --param %s: %w", spec, err)
+	}
+	max, err := strconv.ParseFloat(strings.TrimSpace(rangeParts[1]), 64)
+	if err != nil {
+		return bt.ParamRange{}, fmt.Errorf("invalid max in --param %s: %w", spec, err)
+	}
+	step, err := strconv.ParseFloat(strings.TrimSpace(rangeParts[2]), 64)
+	if err != nil {
+		return bt.ParamRange{}, fmt.Errorf("invalid step in --param %s: %w", spec, err)
+	}
+	return bt.ParamRange{Name: name, Min: min, Max: max, Step: step}, nil
 }
 
 func parseDateStart(v string) (int64, error) {

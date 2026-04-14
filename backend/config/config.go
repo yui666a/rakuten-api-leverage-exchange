@@ -12,6 +12,7 @@ type Config struct {
 	Risk     RiskConfig
 	LLM      LLMConfig
 	Trading  TradingConfig
+	Backtest BacktestConfig
 }
 
 type TradingConfig struct {
@@ -35,6 +36,10 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	Path string
+}
+
+type BacktestConfig struct {
+	RetentionDays int // keep backtest results for N days (default: 180)
 }
 
 type RiskConfig struct {
@@ -91,6 +96,9 @@ func Load() *Config {
 			PipelineIntervalSec:  getEnvInt("PIPELINE_INTERVAL_SEC", 60),
 			StateSyncIntervalSec: getEnvInt("STATE_SYNC_INTERVAL_SEC", 15),
 			MinConfidence:        getEnvFloat("TRADE_MIN_CONFIDENCE", 0.3),
+		},
+		Backtest: BacktestConfig{
+			RetentionDays: getEnvInt("BACKTEST_RETENTION_DAYS", 180),
 		},
 	}
 }

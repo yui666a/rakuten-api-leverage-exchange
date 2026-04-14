@@ -96,28 +96,54 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
 
+	primaryCandles := filterCandlesByRange(input.PrimaryCandles, input.Config.FromTimestamp, input.Config.ToTimestamp)
+	higherCandles := filterCandlesByRange(input.HigherCandles, input.Config.FromTimestamp, input.Config.ToTimestamp)
+	if len(primaryCandles) == 0 {
+		return nil, fmt.Errorf("no primary candles in requested range")
+	}
+
 	engine := NewEventEngine(bus)
 	events := mergeCandleEvents(
-		filterCandlesByRange(input.PrimaryCandles, input.Config.FromTimestamp, input.Config.ToTimestamp),
-		filterCandlesByRange(input.HigherCandles, input.Config.FromTimestamp, input.Config.ToTimestamp),
+		primaryCandles,
+		higherCandles,
 		input.Config.PrimaryInterval,
 		input.Config.HigherTFInterval,
 		input.Config.SymbolID,
 	)
+	equityPoints := make([]EquityPoint, 0, len(primaryCandles)+1)
+	equityPoints = append(equityPoints, EquityPoint{
+		Timestamp: input.Config.FromTimestamp,
+		Equity:    input.Config.InitialBalance,
+	})
 
-	if err := engine.Run(ctx, events); err != nil {
-		return nil, err
+	for _, ev := range events {
+		if err := engine.Run(ctx, []entity.Event{ev}); err != nil {
+			return nil, err
+		}
+		candleEvent, ok := ev.(entity.CandleEvent)
+		if !ok || candleEvent.Interval != input.Config.PrimaryInterval {
+			continue
+		}
+		equityPoints = append(equityPoints, EquityPoint{
+			Timestamp: candleEvent.Timestamp,
+			Equity:    sim.Equity(map[int64]float64{input.Config.SymbolID: candleEvent.Candle.Close}),
+		})
 	}
 
-	lastCandle := input.PrimaryCandles[len(input.PrimaryCandles)-1]
+	lastCandle := primaryCandles[len(primaryCandles)-1]
 	for _, pos := range sim.Positions() {
 		_, _, _ = sim.Close(pos.PositionID, lastCandle.Close, "end_of_test", lastCandle.Time)
 	}
 
 	trades := sim.ClosedTrades()
-	summary := r.reporter.BuildSummary(input.Config, sim.Balance(), trades)
+
+	summary := r.reporter.BuildSummary(input.Config, sim.Balance(), trades, equityPoints)
+	id, err := NewULID()
+	if err != nil {
+		return nil, err
+	}
 	result := &entity.BacktestResult{
-		ID:        fmt.Sprintf("bt-%d", time.Now().UnixMilli()),
+		ID:        id,
 		CreatedAt: time.Now().Unix(),
 		Config:    input.Config,
 		Summary:   summary,

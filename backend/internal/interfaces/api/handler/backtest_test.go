@@ -51,6 +51,17 @@ func TestBacktestHandler_GetResult_NotFound(t *testing.T) {
 	}
 }
 
+func TestBacktestHandler_ListResults_InvalidSort(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &mockBacktestResultRepo{}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	w := httptestGet(h.ListResults, "/backtest/results", "/backtest/results?sort=created_at:asc")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
 func httptestRequestWithParam(handler gin.HandlerFunc, route, paramKey, paramValue string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := gin.New()

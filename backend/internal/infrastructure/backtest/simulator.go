@@ -211,6 +211,20 @@ func (s *SimExecutor) ClosedTrades() []entity.BacktestTradeRecord {
 	return out
 }
 
+// Equity returns mark-to-market equity (realized balance + unrealized PnL).
+// If a symbol price is not supplied, position entry price is used (unrealized=0).
+func (s *SimExecutor) Equity(markPriceBySymbol map[int64]float64) float64 {
+	equity := s.balance
+	for _, pos := range s.positions {
+		markPrice := pos.EntryPrice
+		if p, ok := markPriceBySymbol[pos.SymbolID]; ok && p > 0 {
+			markPrice = p
+		}
+		equity += s.calcPnL(pos, markPrice)
+	}
+	return equity
+}
+
 func (s *SimExecutor) entryFillPrice(side entity.OrderSide, signalPrice float64) float64 {
 	adjust := (s.config.SpreadPercent / 100.0 / 2.0) + (s.config.SlippagePercent / 100.0)
 	switch side {

@@ -12,6 +12,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	backtestinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
@@ -78,6 +79,7 @@ func main() {
 
 	// --- Risk State Restore ---
 	restoreRiskState(context.Background(), riskStateRepo, riskMgr)
+	runBacktestRetentionCleanup(context.Background(), backtestResultRepo, cfg.Backtest.RetentionDays)
 
 	// --- Trading Pipeline ---
 	pipeline := NewTradingPipeline(
@@ -177,6 +179,7 @@ func main() {
 
 	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID, symbolSwitchCh)
 	go startDailyLossReset(ctx, riskMgr)
+	go startBacktestRetentionCleanup(ctx, backtestResultRepo, cfg.Backtest.RetentionDays)
 	// 残高・ポジションの定期同期は auto-trading の start/stop とは独立して常時回す。
 	// これにより自動売買停止中でも画面の残高が楽天の実残高に追随し、起動直後に 20010
 	// で失敗したケースも 15 秒ごとに再試行される。
@@ -504,4 +507,44 @@ func bootstrapCandles(
 
 	slog.Info("bootstrapped candles", "count", len(candles), "symbolID", symbolID, "interval", interval)
 	return nil
+}
+
+func startBacktestRetentionCleanup(ctx context.Context, repo repository.BacktestResultRepository, retentionDays int) {
+	if repo == nil {
+		return
+	}
+	if retentionDays <= 0 {
+		retentionDays = 180
+	}
+
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runBacktestRetentionCleanup(ctx, repo, retentionDays)
+		}
+	}
+}
+
+func runBacktestRetentionCleanup(ctx context.Context, repo repository.BacktestResultRepository, retentionDays int) {
+	if repo == nil {
+		return
+	}
+	if retentionDays <= 0 {
+		retentionDays = 180
+	}
+
+	cutoff := time.Now().AddDate(0, 0, -retentionDays).Unix()
+	deleted, err := repo.DeleteOlderThan(ctx, cutoff)
+	if err != nil {
+		slog.Warn("backtest retention cleanup failed", "error", err, "retentionDays", retentionDays)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("backtest retention cleanup completed", "deleted", deleted, "retentionDays", retentionDays)
+	}
 }

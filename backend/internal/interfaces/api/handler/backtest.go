@@ -160,6 +160,10 @@ func (h *BacktestHandler) ListResults(c *gin.Context) {
 		}
 		offset = parsed
 	}
+	if sort := c.Query("sort"); sort != "" && sort != "created_at:desc" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "sort must be created_at:desc"})
+		return
+	}
 
 	results, err := h.repo.List(c.Request.Context(), repository.BacktestResultFilter{
 		Limit:  limit,
