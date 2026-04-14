@@ -38,6 +38,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "backtest optimize failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "refine":
+		if err := refineCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "backtest refine failed: %v\n", err)
+			os.Exit(1)
+		}
 	case "download":
 		if err := downloadCommand(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "backtest download failed: %v\n", err)
@@ -53,6 +58,7 @@ func usage() {
 	fmt.Println("Usage:")
 	fmt.Println("  go run ./cmd/backtest run --data <primary.csv> [--data-htf <htf.csv>] [flags]")
 	fmt.Println("  go run ./cmd/backtest optimize --data <primary.csv> --param \"stop_loss_percent=1:10:1\" [flags]")
+	fmt.Println("  go run ./cmd/backtest refine --data <primary.csv> --param \"stop_loss_percent=1:10:1\" [--top 5] [--step-div 4] [flags]")
 	fmt.Println("  go run ./cmd/backtest download ...")
 }
 
@@ -209,6 +215,125 @@ func optimizeCommand(args []string) error {
 			r.Params,
 		)
 	}
+	return nil
+}
+
+func refineCommand(args []string) error {
+	fs := flag.NewFlagSet("refine", flag.ContinueOnError)
+	var (
+		dataPath       = fs.String("data", "", "primary timeframe CSV path")
+		dataHTFPath    = fs.String("data-htf", "", "higher timeframe CSV path")
+		fromDate       = fs.String("from", "", "start date (YYYY-MM-DD)")
+		toDate         = fs.String("to", "", "end date (YYYY-MM-DD)")
+		initialBalance = fs.Float64("initial-balance", 100000, "initial balance in JPY")
+		spread         = fs.Float64("spread", 0.1, "spread percent")
+		carryingCost   = fs.Float64("carrying-cost", 0.04, "daily carrying cost percent")
+		slippage       = fs.Float64("slippage", 0, "slippage percent")
+		tradeAmount    = fs.Float64("trade-amount", 0.01, "trade amount")
+		stopLoss       = fs.Float64("stop-loss", 5, "stop loss percent")
+		takeProfit     = fs.Float64("take-profit", 10, "take profit percent")
+		coarseTop      = fs.Int("top", 10, "top N results from coarse search")
+		coarseMaxEvals = fs.Int("max-evals", 10000, "max evaluated combinations for coarse search")
+		coarseWorkers  = fs.Int("workers", 8, "number of parallel workers")
+		coarseSeed     = fs.Int64("seed", 0, "random seed for sampling")
+		refineTopN     = fs.Int("refine-top", 5, "top N coarse results to refine around")
+		refineStepDiv  = fs.Float64("step-div", 4, "divide original step by this for finer grid")
+		refineMaxEvals = fs.Int("refine-max-evals", 5000, "max evaluations for refinement phase")
+	)
+	var params paramFlags
+	fs.Var(&params, "param", `parameter range: "name=min:max:step"`)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dataPath == "" {
+		return fmt.Errorf("--data is required")
+	}
+	if len(params) == 0 {
+		return fmt.Errorf("at least one --param is required")
+	}
+
+	baseInput, err := buildRunInput(
+		*dataPath,
+		*dataHTFPath,
+		*fromDate,
+		*toDate,
+		*initialBalance,
+		*spread,
+		*carryingCost,
+		*slippage,
+		*tradeAmount,
+		*stopLoss,
+		*takeProfit,
+	)
+	if err != nil {
+		return err
+	}
+
+	ranges := make([]bt.ParamRange, 0, len(params))
+	for _, spec := range params {
+		r, err := parseParamRange(spec)
+		if err != nil {
+			return err
+		}
+		ranges = append(ranges, r)
+	}
+
+	optimizer := bt.NewOptimizer(bt.NewBacktestRunner())
+
+	fmt.Println("=== Phase 2a: Coarse Search ===")
+	coarseResults, err := optimizer.Optimize(context.Background(), baseInput, ranges, bt.OptimizeConfig{
+		MaxEvals: *coarseMaxEvals,
+		TopN:     *coarseTop,
+		Seed:     *coarseSeed,
+		Workers:  *coarseWorkers,
+	})
+	if err != nil {
+		return fmt.Errorf("coarse search: %w", err)
+	}
+
+	fmt.Printf("coarse search: top %d results\n", len(coarseResults))
+	for i, r := range coarseResults {
+		fmt.Printf(
+			"  %d) sharpe=%.4f maxDD=%.2f%% return=%+.2f%% trades=%d params=%v\n",
+			i+1,
+			r.Summary.SharpeRatio,
+			r.Summary.MaxDrawdown*100,
+			r.Summary.TotalReturn*100,
+			r.Summary.TotalTrades,
+			r.Params,
+		)
+	}
+
+	fmt.Println("\n=== Phase 2b: Refinement (Local Neighborhood Search) ===")
+	refinedResults, err := optimizer.Refine(context.Background(), baseInput, coarseResults, ranges, bt.RefineConfig{
+		TopN:     *refineTopN,
+		StepDiv:  *refineStepDiv,
+		MaxEvals: *refineMaxEvals,
+		Workers:  *coarseWorkers,
+	})
+	if err != nil {
+		return fmt.Errorf("refinement: %w", err)
+	}
+
+	topPrint := len(refinedResults)
+	if topPrint > *coarseTop {
+		topPrint = *coarseTop
+	}
+	fmt.Printf("refined: top %d results\n", topPrint)
+	for i := 0; i < topPrint; i++ {
+		r := refinedResults[i]
+		fmt.Printf(
+			"  %d) sharpe=%.4f maxDD=%.2f%% return=%+.2f%% trades=%d params=%v\n",
+			i+1,
+			r.Summary.SharpeRatio,
+			r.Summary.MaxDrawdown*100,
+			r.Summary.TotalReturn*100,
+			r.Summary.TotalTrades,
+			r.Params,
+		)
+	}
+
 	return nil
 }
 

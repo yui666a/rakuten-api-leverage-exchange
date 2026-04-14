@@ -203,3 +203,144 @@ func cloneParams(src map[string]float64) map[string]float64 {
 func round(v float64) float64 {
 	return math.Round(v*1e9) / 1e9
 }
+
+// --- Phase 2b: Local Neighborhood Refinement ---
+
+type RefineConfig struct {
+	TopN     int     // how many top coarse results to refine around
+	StepDiv  float64 // divide original step by this for finer grid
+	MaxEvals int     // max evaluations for refinement phase
+	Workers  int
+}
+
+func (o *Optimizer) Refine(ctx context.Context, base RunInput, coarseResults []OptimizationResult, originalRanges []ParamRange, cfg RefineConfig) ([]OptimizationResult, error) {
+	if len(coarseResults) == 0 {
+		return nil, fmt.Errorf("coarse results are required for refinement")
+	}
+	if len(originalRanges) == 0 {
+		return nil, fmt.Errorf("original ranges are required for refinement")
+	}
+	if cfg.TopN <= 0 {
+		cfg.TopN = 5
+	}
+	if cfg.StepDiv <= 0 {
+		cfg.StepDiv = 4.0
+	}
+	if cfg.MaxEvals <= 0 {
+		cfg.MaxEvals = 5000
+	}
+	if cfg.Workers <= 0 {
+		cfg.Workers = runtime.GOMAXPROCS(0)
+	}
+
+	topN := cfg.TopN
+	if topN > len(coarseResults) {
+		topN = len(coarseResults)
+	}
+
+	var allCombos []map[string]float64
+	for i := 0; i < topN; i++ {
+		neighborRanges := buildNeighborhoodRanges(coarseResults[i].Params, originalRanges, cfg.StepDiv)
+		grid, err := buildGrid(neighborRanges)
+		if err != nil {
+			return nil, fmt.Errorf("build neighborhood grid for result %d: %w", i, err)
+		}
+		allCombos = append(allCombos, grid...)
+	}
+
+	allCombos = deduplicateCombos(allCombos)
+	if len(allCombos) == 0 {
+		return nil, fmt.Errorf("no refinement candidates generated")
+	}
+
+	selected := allCombos
+	if len(selected) > cfg.MaxEvals {
+		selected = sampleCombos(allCombos, cfg.MaxEvals, time.Now().UnixNano())
+	}
+
+	results := make([]OptimizationResult, len(selected))
+	sem := make(chan struct{}, cfg.Workers)
+	g, gctx := errgroup.WithContext(ctx)
+
+	for i, combo := range selected {
+		i := i
+		combo := cloneParams(combo)
+		sem <- struct{}{}
+		g.Go(func() error {
+			defer func() { <-sem }()
+			candidate := applyParams(base, combo)
+			result, err := o.runner.Run(gctx, candidate)
+			if err != nil {
+				return err
+			}
+			results[i] = OptimizationResult{
+				Params:  combo,
+				Summary: result.Summary,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Summary.SharpeRatio == results[j].Summary.SharpeRatio {
+			return results[i].Summary.MaxDrawdown < results[j].Summary.MaxDrawdown
+		}
+		return results[i].Summary.SharpeRatio > results[j].Summary.SharpeRatio
+	})
+
+	if cfg.TopN > 0 && len(results) > cfg.TopN {
+		results = results[:cfg.TopN]
+	}
+	return results, nil
+}
+
+func buildNeighborhoodRanges(center map[string]float64, originalRanges []ParamRange, stepDiv float64) []ParamRange {
+	out := make([]ParamRange, 0, len(originalRanges))
+	for _, orig := range originalRanges {
+		cv, ok := center[orig.Name]
+		if !ok {
+			out = append(out, orig)
+			continue
+		}
+		fineStep := orig.Step / stepDiv
+		lo := math.Max(orig.Min, cv-orig.Step)
+		hi := math.Min(orig.Max, cv+orig.Step)
+		out = append(out, ParamRange{
+			Name: orig.Name,
+			Min:  round(lo),
+			Max:  round(hi),
+			Step: round(fineStep),
+		})
+	}
+	return out
+}
+
+func deduplicateCombos(combos []map[string]float64) []map[string]float64 {
+	seen := make(map[string]struct{}, len(combos))
+	out := make([]map[string]float64, 0, len(combos))
+	for _, combo := range combos {
+		key := comboKey(combo)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, combo)
+	}
+	return out
+}
+
+func comboKey(params map[string]float64) string {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b []byte
+	for _, k := range keys {
+		b = append(b, []byte(fmt.Sprintf("%s=%.9f;", k, params[k]))...)
+	}
+	return string(b)
+}
