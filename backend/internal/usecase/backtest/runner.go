@@ -68,7 +68,15 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		DailyCarryingCost: input.Config.DailyCarryCost,
 		SlippagePercent:   input.Config.SlippagePercent,
 	})
+	simAdapter := &simExecutorAdapter{sim: sim}
 
+	tickGenerator := &TickGeneratorHandler{PrimaryInterval: input.Config.PrimaryInterval}
+	tickRiskHandler := NewTickRiskHandler(
+		input.Config.PrimaryInterval,
+		simAdapter,
+		riskCfg.StopLossPercent,
+		riskCfg.TakeProfitPercent,
+	)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
 	strategyHandler := &StrategyHandler{Engine: strategyEngine}
 	riskHandler := &RiskHandler{
@@ -76,12 +84,14 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		TradeAmount: input.TradeAmount,
 	}
 	executionHandler := &ExecutionHandler{
-		Executor:    sim,
+		Executor:    simAdapter,
 		TradeAmount: input.TradeAmount,
 	}
 
 	bus := NewEventBus()
+	bus.Register(entity.EventTypeCandle, 5, tickGenerator)
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
+	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
@@ -169,4 +179,36 @@ func mergeCandleEvents(primary, higher []entity.Candle, primaryInterval, higherI
 	}
 
 	return events
+}
+
+type simExecutorAdapter struct {
+	sim *infra.SimExecutor
+}
+
+func (a *simExecutorAdapter) Open(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64) (entity.OrderEvent, error) {
+	return a.sim.Open(symbolID, side, signalPrice, amount, reason, timestamp)
+}
+
+func (a *simExecutorAdapter) Positions() []SimPosition {
+	raw := a.sim.Positions()
+	out := make([]SimPosition, 0, len(raw))
+	for _, p := range raw {
+		out = append(out, SimPosition{
+			PositionID:     p.PositionID,
+			SymbolID:       p.SymbolID,
+			Side:           p.Side,
+			EntryPrice:     p.EntryPrice,
+			Amount:         p.Amount,
+			EntryTimestamp: p.EntryTimestamp,
+		})
+	}
+	return out
+}
+
+func (a *simExecutorAdapter) SelectSLTPExit(side entity.OrderSide, stopLossPrice, takeProfitPrice, barLow, barHigh float64) (float64, string, bool) {
+	return a.sim.SelectSLTPExit(side, stopLossPrice, takeProfitPrice, barLow, barHigh)
+}
+
+func (a *simExecutorAdapter) Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error) {
+	return a.sim.Close(positionID, signalPrice, reason, timestamp)
 }

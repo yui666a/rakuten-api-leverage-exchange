@@ -42,10 +42,13 @@ func (e IndicatorEvent) EventTimestamp() int64 { return e.Timestamp }
 // TickEvent represents synthetic in-bar ticks for SL/TP simulation.
 type TickEvent struct {
 	SymbolID   int64
+	Interval   string
 	Price      float64
 	Timestamp  int64
 	TickType   string
 	ParentTime int64
+	BarLow     float64
+	BarHigh    float64
 }
 
 func (e TickEvent) EventType() string     { return EventTypeTick }
