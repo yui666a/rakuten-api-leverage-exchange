@@ -4,12 +4,101 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
+
+// TickGeneratorHandler creates deterministic synthetic in-bar ticks from primary candles.
+type TickGeneratorHandler struct {
+	PrimaryInterval string
+}
+
+func (h *TickGeneratorHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
+	candleEvent, ok := event.(entity.CandleEvent)
+	if !ok {
+		return nil, nil
+	}
+	if h.PrimaryInterval == "" || candleEvent.Interval != h.PrimaryInterval {
+		return nil, nil
+	}
+
+	durationMs, err := intervalDurationMillis(candleEvent.Interval)
+	if err != nil {
+		return nil, err
+	}
+	intervalStart := candleEvent.Candle.Time - durationMs
+
+	t1 := intervalStart + durationMs/4
+	t2 := intervalStart + durationMs/2
+	t3 := intervalStart + durationMs*3/4
+	t4 := candleEvent.Candle.Time
+
+	openPrice := candleEvent.Candle.Open
+	highPrice := candleEvent.Candle.High
+	lowPrice := candleEvent.Candle.Low
+	closePrice := candleEvent.Candle.Close
+
+	prices := []struct {
+		typ string
+		val float64
+		ts  int64
+	}{
+		{typ: "open", val: openPrice, ts: t1},
+	}
+
+	if closePrice >= openPrice {
+		prices = append(prices,
+			struct {
+				typ string
+				val float64
+				ts  int64
+			}{typ: "high", val: highPrice, ts: t2},
+			struct {
+				typ string
+				val float64
+				ts  int64
+			}{typ: "low", val: lowPrice, ts: t3},
+		)
+	} else {
+		prices = append(prices,
+			struct {
+				typ string
+				val float64
+				ts  int64
+			}{typ: "low", val: lowPrice, ts: t2},
+			struct {
+				typ string
+				val float64
+				ts  int64
+			}{typ: "high", val: highPrice, ts: t3},
+		)
+	}
+	prices = append(prices, struct {
+		typ string
+		val float64
+		ts  int64
+	}{typ: "close", val: closePrice, ts: t4})
+
+	events := make([]entity.Event, 0, len(prices))
+	for _, p := range prices {
+		events = append(events, entity.TickEvent{
+			SymbolID:   candleEvent.SymbolID,
+			Interval:   candleEvent.Interval,
+			Price:      p.val,
+			Timestamp:  p.ts,
+			TickType:   p.typ,
+			ParentTime: candleEvent.Candle.Time,
+			BarLow:     candleEvent.Candle.Low,
+			BarHigh:    candleEvent.Candle.High,
+		})
+	}
+	return events, nil
+}
 
 // IndicatorHandler calculates indicator snapshots from buffered candles.
 // Buffers are maintained oldest-first to keep indicator calculations path-correct.
@@ -153,6 +242,134 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 	}, nil
 }
 
+type SimPosition struct {
+	PositionID     int64
+	SymbolID       int64
+	Side           entity.OrderSide
+	EntryPrice     float64
+	Amount         float64
+	EntryTimestamp int64
+}
+
+// TickRiskExecutor exposes minimum close-related operations for tick-driven risk checks.
+type TickRiskExecutor interface {
+	Positions() []SimPosition
+	SelectSLTPExit(side entity.OrderSide, stopLossPrice, takeProfitPrice, barLow, barHigh float64) (float64, string, bool)
+	Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error)
+}
+
+// TickRiskHandler evaluates SL/TP/TrailingStop on synthetic ticks.
+type TickRiskHandler struct {
+	PrimaryInterval   string
+	Executor          TickRiskExecutor
+	StopLossPercent   float64
+	TakeProfitPercent float64
+	highWaterMarks    map[int64]float64
+}
+
+func NewTickRiskHandler(primaryInterval string, executor TickRiskExecutor, stopLossPercent, takeProfitPercent float64) *TickRiskHandler {
+	return &TickRiskHandler{
+		PrimaryInterval:   primaryInterval,
+		Executor:          executor,
+		StopLossPercent:   stopLossPercent,
+		TakeProfitPercent: takeProfitPercent,
+		highWaterMarks:    make(map[int64]float64),
+	}
+}
+
+func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
+	tickEvent, ok := event.(entity.TickEvent)
+	if !ok {
+		return nil, nil
+	}
+	if h.PrimaryInterval != "" && tickEvent.Interval != h.PrimaryInterval {
+		return nil, nil
+	}
+	if h.Executor == nil {
+		return nil, fmt.Errorf("tick risk executor is nil")
+	}
+
+	positions := h.Executor.Positions()
+	active := make(map[int64]bool, len(positions))
+	emitted := make([]entity.Event, 0)
+
+	for _, pos := range positions {
+		if pos.SymbolID != tickEvent.SymbolID {
+			continue
+		}
+		active[pos.PositionID] = true
+
+		// TP/SL: decide with bar range and worst-case policy.
+		if h.StopLossPercent > 0 && h.TakeProfitPercent > 0 {
+			stopLossPrice, takeProfitPrice := calcSLTP(pos, h.StopLossPercent, h.TakeProfitPercent)
+			exitPrice, reason, hit := h.Executor.SelectSLTPExit(
+				pos.Side,
+				stopLossPrice,
+				takeProfitPrice,
+				tickEvent.BarLow,
+				tickEvent.BarHigh,
+			)
+			if hit {
+				orderEvent, _, err := h.Executor.Close(pos.PositionID, exitPrice, reason, tickEvent.Timestamp)
+				if err != nil {
+					return nil, err
+				}
+				emitted = append(emitted, orderEvent)
+				delete(h.highWaterMarks, pos.PositionID)
+				continue
+			}
+		}
+
+		// Trailing stop: use stop-loss distance for reversal distance.
+		best, ok := h.highWaterMarks[pos.PositionID]
+		if !ok {
+			best = pos.EntryPrice
+		}
+		if pos.Side == entity.OrderSideBuy {
+			if tickEvent.Price > best {
+				best = tickEvent.Price
+			}
+		} else {
+			if tickEvent.Price < best {
+				best = tickEvent.Price
+			}
+		}
+		h.highWaterMarks[pos.PositionID] = best
+
+		distance := pos.EntryPrice * h.StopLossPercent / 100.0
+		if distance <= 0 {
+			continue
+		}
+		if pos.Side == entity.OrderSideBuy {
+			if best > pos.EntryPrice && best-tickEvent.Price >= distance {
+				orderEvent, _, err := h.Executor.Close(pos.PositionID, tickEvent.Price, "trailing_stop", tickEvent.Timestamp)
+				if err != nil {
+					return nil, err
+				}
+				emitted = append(emitted, orderEvent)
+				delete(h.highWaterMarks, pos.PositionID)
+			}
+		} else {
+			if best < pos.EntryPrice && tickEvent.Price-best >= distance {
+				orderEvent, _, err := h.Executor.Close(pos.PositionID, tickEvent.Price, "trailing_stop", tickEvent.Timestamp)
+				if err != nil {
+					return nil, err
+				}
+				emitted = append(emitted, orderEvent)
+				delete(h.highWaterMarks, pos.PositionID)
+			}
+		}
+	}
+
+	for positionID := range h.highWaterMarks {
+		if !active[positionID] {
+			delete(h.highWaterMarks, positionID)
+		}
+	}
+
+	return emitted, nil
+}
+
 // SignalExecutor opens simulated orders from approved signals.
 type SignalExecutor interface {
 	Open(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64) (entity.OrderEvent, error)
@@ -263,4 +480,38 @@ func floatToPtr(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+func intervalDurationMillis(interval string) (int64, error) {
+	if !strings.HasPrefix(interval, "PT") {
+		return 0, fmt.Errorf("unsupported interval: %s", interval)
+	}
+	body := strings.TrimPrefix(interval, "PT")
+	if strings.HasSuffix(body, "M") {
+		n, err := strconv.Atoi(strings.TrimSuffix(body, "M"))
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid minute interval: %s", interval)
+		}
+		return int64(n) * int64(time.Minute/time.Millisecond), nil
+	}
+	if strings.HasSuffix(body, "H") {
+		n, err := strconv.Atoi(strings.TrimSuffix(body, "H"))
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid hour interval: %s", interval)
+		}
+		return int64(n) * int64(time.Hour/time.Millisecond), nil
+	}
+	return 0, fmt.Errorf("unsupported interval: %s", interval)
+}
+
+func calcSLTP(pos SimPosition, stopLossPercent, takeProfitPercent float64) (stopLossPrice float64, takeProfitPrice float64) {
+	switch pos.Side {
+	case entity.OrderSideSell:
+		stopLossPrice = pos.EntryPrice * (1 + stopLossPercent/100.0)
+		takeProfitPrice = pos.EntryPrice * (1 - takeProfitPercent/100.0)
+	default:
+		stopLossPrice = pos.EntryPrice * (1 - stopLossPercent/100.0)
+		takeProfitPrice = pos.EntryPrice * (1 + takeProfitPercent/100.0)
+	}
+	return stopLossPrice, takeProfitPrice
 }

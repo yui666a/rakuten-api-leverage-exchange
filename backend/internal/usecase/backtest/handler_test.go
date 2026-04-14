@@ -98,6 +98,40 @@ func TestStrategyHandler_UsesIndicatorTimestamp(t *testing.T) {
 	}
 }
 
+func TestTickGeneratorHandler_SequenceAndTimestamps(t *testing.T) {
+	handler := &TickGeneratorHandler{PrimaryInterval: "PT15M"}
+	c := entity.CandleEvent{
+		SymbolID:  7,
+		Interval:  "PT15M",
+		Timestamp: 15 * 60 * 1000,
+		Candle: entity.Candle{
+			Open: 100, High: 110, Low: 90, Close: 105, Time: 15 * 60 * 1000,
+		},
+	}
+	events, err := handler.Handle(context.Background(), c)
+	if err != nil {
+		t.Fatalf("handle error: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 ticks, got %d", len(events))
+	}
+
+	t1 := events[0].(entity.TickEvent)
+	t2 := events[1].(entity.TickEvent)
+	t3 := events[2].(entity.TickEvent)
+	t4 := events[3].(entity.TickEvent)
+
+	if t1.TickType != "open" || t2.TickType != "high" || t3.TickType != "low" || t4.TickType != "close" {
+		t.Fatalf("unexpected tick order: %s %s %s %s", t1.TickType, t2.TickType, t3.TickType, t4.TickType)
+	}
+	if t1.Timestamp != 15*60*1000/4 {
+		t.Fatalf("unexpected t1 timestamp: %d", t1.Timestamp)
+	}
+	if t4.Timestamp != c.Candle.Time {
+		t.Fatalf("unexpected t4 timestamp: %d", t4.Timestamp)
+	}
+}
+
 func floatPtr(v float64) *float64 { return &v }
 
 type fakeSignalExecutor struct {
@@ -197,5 +231,103 @@ func TestRiskHandler_EmitsApprovedSignalEvent(t *testing.T) {
 	}
 	if _, ok := events[0].(entity.ApprovedSignalEvent); !ok {
 		t.Fatalf("expected ApprovedSignalEvent, got %T", events[0])
+	}
+}
+
+type fakeTickRiskExecutor struct {
+	positions []SimPosition
+	closedIDs []int64
+}
+
+func (f *fakeTickRiskExecutor) Positions() []SimPosition {
+	out := make([]SimPosition, len(f.positions))
+	copy(out, f.positions)
+	return out
+}
+
+func (f *fakeTickRiskExecutor) SelectSLTPExit(side entity.OrderSide, stopLossPrice, takeProfitPrice, barLow, barHigh float64) (float64, string, bool) {
+	switch side {
+	case entity.OrderSideBuy:
+		slHit := barLow <= stopLossPrice
+		tpHit := barHigh >= takeProfitPrice
+		if slHit && tpHit {
+			return stopLossPrice, "stop_loss", true
+		}
+		if slHit {
+			return stopLossPrice, "stop_loss", true
+		}
+		if tpHit {
+			return takeProfitPrice, "take_profit", true
+		}
+	case entity.OrderSideSell:
+		slHit := barHigh >= stopLossPrice
+		tpHit := barLow <= takeProfitPrice
+		if slHit && tpHit {
+			return stopLossPrice, "stop_loss", true
+		}
+		if slHit {
+			return stopLossPrice, "stop_loss", true
+		}
+		if tpHit {
+			return takeProfitPrice, "take_profit", true
+		}
+	}
+	return 0, "", false
+}
+
+func (f *fakeTickRiskExecutor) Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error) {
+	f.closedIDs = append(f.closedIDs, positionID)
+	filtered := make([]SimPosition, 0, len(f.positions))
+	for _, p := range f.positions {
+		if p.PositionID != positionID {
+			filtered = append(filtered, p)
+		}
+	}
+	f.positions = filtered
+	return entity.OrderEvent{
+		OrderID:   1,
+		SymbolID:  7,
+		Side:      "BUY",
+		Action:    "close",
+		Price:     signalPrice,
+		Amount:    0.01,
+		Reason:    reason,
+		Timestamp: timestamp,
+	}, nil, nil
+}
+
+func TestTickRiskHandler_WorstCaseStopLossOnBothHit(t *testing.T) {
+	exec := &fakeTickRiskExecutor{
+		positions: []SimPosition{
+			{
+				PositionID: 1,
+				SymbolID:   7,
+				Side:       entity.OrderSideBuy,
+				EntryPrice: 100,
+				Amount:     0.01,
+			},
+		},
+	}
+	handler := NewTickRiskHandler("PT15M", exec, 5, 5)
+
+	events, err := handler.Handle(context.Background(), entity.TickEvent{
+		SymbolID:   7,
+		Interval:   "PT15M",
+		Price:      100,
+		Timestamp:  1000,
+		TickType:   "high",
+		ParentTime: 2000,
+		BarLow:     94,  // stop-loss hit
+		BarHigh:    106, // take-profit hit
+	})
+	if err != nil {
+		t.Fatalf("handle error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 order event, got %d", len(events))
+	}
+	order := events[0].(entity.OrderEvent)
+	if order.Reason != "stop_loss" {
+		t.Fatalf("expected stop_loss by worst-case, got %s", order.Reason)
 	}
 }
