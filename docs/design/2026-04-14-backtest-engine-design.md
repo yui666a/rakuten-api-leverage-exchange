@@ -2,7 +2,7 @@
 
 - **作成日**: 2026-04-14
 - **更新日**: 2026-04-15
-- **ステータス**: In Progress（Phase 1 実装済み + 仕上げ中）
+- **ステータス**: Done（Phase 1 + Phase 2 完了）
 
 ## 概要
 
@@ -28,10 +28,10 @@
 
 | 区分 | 進捗 | 補足 |
 |---|---|---|
-| Phase 1 コア機能 | ✅ ほぼ完了 | EventEngine / SimExecutor / CLI run / API保存取得まで実装済み |
-| Phase 1 仕上げ | 🔄 進行中 | API入力契約の最終固定・統合テスト強化が残り |
-| Phase 2a 粗探索 | ✅ 実装済み | `cmd/backtest optimize` + `--workers` 並列評価あり |
-| Phase 2b 局所探索 | ⏳ 未実装 | 上位N近傍グリッド再探索は未着手 |
+| Phase 1 コア機能 | ✅ 完了 | EventEngine / SimExecutor / CLI run / API保存取得まで実装済み |
+| Phase 1 仕上げ | ✅ 完了 | API入力契約固定（リスクパラメータ公開）・統合テスト強化済み |
+| Phase 2a 粗探索 | ✅ 完了 | `cmd/backtest optimize` + `--workers` 並列評価あり |
+| Phase 2b 局所探索 | ✅ 完了 | `cmd/backtest refine` + `Optimizer.Refine()` 実装済み |
 
 ### 0.2 実装済み
 
@@ -43,11 +43,12 @@
   - Sharpe: 日次終値（JST）ベース
   - MaxDD: 15分足クローズ時の評価資産カーブ
 - CLI
-  - `backtest run`
+  - `backtest run`（`--stop-loss` / `--take-profit` 対応）
   - `backtest download`（`--from` / `--update`）
-  - `backtest optimize`（パラメータ探索、`--workers` 並列）
+  - `backtest optimize`（パラメータ探索、`--workers` 並列、`--stop-loss` / `--take-profit`）
+  - `backtest refine`（粗探索→局所近傍探索の一括実行）
 - API
-  - `POST /api/v1/backtest/run`
+  - `POST /api/v1/backtest/run`（リスクパラメータ指定可能）
   - `GET /api/v1/backtest/results`
   - `GET /api/v1/backtest/results/:id`
 - SQLite 永続化
@@ -56,12 +57,13 @@
 - Retention
   - `BACKTEST_RETENTION_DAYS`（既定 180）
   - 起動時 + 24時間ごとの期限切れ削除
-
-### 0.3 未完了（次アクション）
-
-- `POST /backtest/run` の入力仕様を最終固定（CSVパス方式を維持するか再定義するか）
-- API統合テストの強化（`run -> list -> get` 一連のE2E）
-- Phase 2b: 上位N近傍グリッド探索の追加
+- Phase 2b 局所探索
+  - `Optimizer.Refine()`: 上位N件の近傍を細粒度グリッドで再探索
+  - `buildNeighborhoodRanges()`: ±1ステップ範囲 × stepDiv分割
+  - `deduplicateCombos()`: 重複パラメータ組み合わせ除去
+- テスト
+  - API統合テスト（Run→List→Get E2E、リスクパラメータ指定、404、不正入力）
+  - Refine統合テスト、近傍レンジ生成、クランプ、重複除去
 
 ## 設計方針
 
