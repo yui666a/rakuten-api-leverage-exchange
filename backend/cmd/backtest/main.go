@@ -68,6 +68,8 @@ func runCommand(args []string) error {
 		carryingCost   = fs.Float64("carrying-cost", 0.04, "daily carrying cost percent")
 		slippage       = fs.Float64("slippage", 0, "slippage percent")
 		tradeAmount    = fs.Float64("trade-amount", 0.01, "trade amount")
+		stopLoss       = fs.Float64("stop-loss", 5, "stop loss percent")
+		takeProfit     = fs.Float64("take-profit", 10, "take profit percent")
 		outputDir      = fs.String("output", "", "output directory for trades/result")
 	)
 	if err := fs.Parse(args); err != nil {
@@ -87,6 +89,8 @@ func runCommand(args []string) error {
 		*carryingCost,
 		*slippage,
 		*tradeAmount,
+		*stopLoss,
+		*takeProfit,
 	)
 	if err != nil {
 		return err
@@ -132,6 +136,8 @@ func optimizeCommand(args []string) error {
 		carryingCost   = fs.Float64("carrying-cost", 0.04, "daily carrying cost percent")
 		slippage       = fs.Float64("slippage", 0, "slippage percent")
 		tradeAmount    = fs.Float64("trade-amount", 0.01, "trade amount")
+		stopLoss       = fs.Float64("stop-loss", 5, "stop loss percent")
+		takeProfit     = fs.Float64("take-profit", 10, "take profit percent")
 		sortBy         = fs.String("sort-by", "sharpe_ratio", "ranking metric (sharpe_ratio only)")
 		top            = fs.Int("top", 10, "top N results to print")
 		maxEvals       = fs.Int("max-evals", 10000, "max evaluated combinations")
@@ -164,6 +170,8 @@ func optimizeCommand(args []string) error {
 		*carryingCost,
 		*slippage,
 		*tradeAmount,
+		*stopLoss,
+		*takeProfit,
 	)
 	if err != nil {
 		return err
@@ -363,6 +371,7 @@ func mergeCandles(existing, incoming []entity.Candle) []entity.Candle {
 func buildRunInput(
 	dataPath, dataHTFPath, fromDate, toDate string,
 	initialBalance, spread, carryingCost, slippage, tradeAmount float64,
+	stopLossPercent, takeProfitPercent float64,
 ) (bt.RunInput, error) {
 	primary, err := csvinfra.LoadCandles(dataPath)
 	if err != nil {
@@ -416,8 +425,8 @@ func buildRunInput(
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:    1_000_000_000,
 			MaxDailyLoss:         1_000_000_000,
-			StopLossPercent:      5,
-			TakeProfitPercent:    10,
+			StopLossPercent:      stopLossPercent,
+			TakeProfitPercent:    takeProfitPercent,
 			InitialCapital:       initialBalance,
 			MaxConsecutiveLosses: 0,
 			CooldownMinutes:      0,
