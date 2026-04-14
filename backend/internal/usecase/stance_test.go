@@ -376,3 +376,45 @@ func TestRuleBasedStanceResolver_RepoDeleteError_LoggedNotPanicked(t *testing.T)
 		t.Fatalf("expected Delete to be called, got %d", repo.deleteCalled)
 	}
 }
+
+func TestRuleBasedStanceResolver_ResolveAt_UsesInjectedTimeForExpiry(t *testing.T) {
+	resolver := NewRuleBasedStanceResolver(nil)
+	resolver.SetOverride(entity.MarketStanceContrarian, "manual", 2*time.Minute)
+
+	early := resolver.ResolveAt(context.Background(), entity.IndicatorSet{
+		SMA20: ptr(5100000),
+		SMA50: ptr(5000000),
+		RSI14: ptr(50.0),
+	}, time.Now().Add(1*time.Minute))
+	if early.Source != "override" {
+		t.Fatalf("expected override before expiry, got %s", early.Source)
+	}
+
+	late := resolver.ResolveAt(context.Background(), entity.IndicatorSet{
+		SMA20: ptr(5100000),
+		SMA50: ptr(5000000),
+		RSI14: ptr(50.0),
+	}, time.Now().Add(3*time.Minute))
+	if late.Source != "rule-based" {
+		t.Fatalf("expected rule-based after expiry, got %s", late.Source)
+	}
+}
+
+func TestRuleBasedStanceResolverWithOptions_DisableOverride(t *testing.T) {
+	resolver := NewRuleBasedStanceResolverWithOptions(nil, RuleBasedStanceResolverOptions{
+		DisableOverride: true,
+	})
+	resolver.SetOverride(entity.MarketStanceContrarian, "manual", 5*time.Minute)
+
+	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+		SMA20: ptr(5100000),
+		SMA50: ptr(5000000),
+		RSI14: ptr(50.0),
+	})
+	if result.Source != "rule-based" {
+		t.Fatalf("expected rule-based when override disabled, got %s", result.Source)
+	}
+	if resolver.GetOverride() != nil {
+		t.Fatal("expected no active override when override disabled")
+	}
+}

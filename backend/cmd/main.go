@@ -12,10 +12,12 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	backtestinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 )
 
 func main() {
@@ -52,8 +54,10 @@ func main() {
 	indicatorCalc := usecase.NewIndicatorCalculator(marketDataRepo)
 	stanceOverrideRepo := database.NewStanceOverrideRepo(db)
 	clientOrderRepo := database.NewClientOrderRepo(db)
+	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+	backtestRunner := backtestuc.NewBacktestRunner()
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount:     cfg.Risk.MaxPositionAmount,
 		MaxDailyLoss:          cfg.Risk.MaxDailyLoss,
@@ -147,6 +151,8 @@ func main() {
 		Pipeline:            pipeline,
 		RESTClient:          restClient,
 		ClientOrderRepo:     clientOrderRepo,
+		BacktestRunner:      backtestRunner,
+		BacktestResultRepo:  backtestResultRepo,
 		OnSymbolSwitch:      onSymbolSwitch,
 		DailyPnLCalculator:  dailyPnLCalc,
 	})
@@ -340,9 +346,9 @@ type rawMarketTradesResponse struct {
 }
 
 type rawOrderbook struct {
-	SymbolID  int64               `json:"symbolId"`
-	Asks      []rawOrderbookEntry `json:"asks"`
-	Bids      []rawOrderbookEntry `json:"bids"`
+	SymbolID  int64                `json:"symbolId"`
+	Asks      []rawOrderbookEntry  `json:"asks"`
+	Bids      []rawOrderbookEntry  `json:"bids"`
 	BestAsk   entity.StringFloat64 `json:"bestAsk"`
 	BestBid   entity.StringFloat64 `json:"bestBid"`
 	MidPrice  entity.StringFloat64 `json:"midPrice"`

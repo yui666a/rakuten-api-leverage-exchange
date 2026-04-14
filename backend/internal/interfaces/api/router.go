@@ -7,6 +7,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api/handler"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 )
 
 // PipelineController はTrading Pipelineの開始/停止・銘柄切替を制御するインターフェース。
@@ -31,6 +32,8 @@ type Dependencies struct {
 	RESTClient          *rakuten.RESTClient
 	ClientOrderRepo     repository.ClientOrderRepository
 	DailyPnLCalculator  *usecase.DailyPnLCalculator
+	BacktestRunner      *backtestuc.BacktestRunner
+	BacktestResultRepo  repository.BacktestResultRepository
 	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
 	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
 	OnSymbolSwitch func(oldID, newID int64)
@@ -121,6 +124,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.OrderExecutor != nil && deps.ClientOrderRepo != nil {
 		orderHandler := handler.NewOrderHandler(deps.OrderExecutor, deps.ClientOrderRepo)
 		v1.POST("/orders", orderHandler.CreateOrder)
+	}
+
+	if deps.BacktestRunner != nil && deps.BacktestResultRepo != nil {
+		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo)
+		v1.POST("/backtest/run", backtestHandler.Run)
+		v1.GET("/backtest/results", backtestHandler.ListResults)
+		v1.GET("/backtest/results/:id", backtestHandler.GetResult)
 	}
 
 	return r

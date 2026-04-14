@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
@@ -455,5 +456,29 @@ func TestRiskManager_ATR_DisabledUsesPercent(t *testing.T) {
 	targets = rm.CheckStopLoss(7, 4750000) // exactly 5%
 	if len(targets) != 1 {
 		t.Fatalf("expected trigger at 5%%, got %d", len(targets))
+	}
+}
+
+func TestRiskManager_CheckOrderAt_UsesInjectedTimeForCooldown(t *testing.T) {
+	rm := NewRiskManager(defaultRiskConfig())
+	base := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC)
+
+	rm.RecordConsecutiveLossAt(base)
+	rm.RecordConsecutiveLossAt(base)
+	rm.RecordConsecutiveLossAt(base)
+
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000,
+	}
+
+	blocked := rm.CheckOrderAt(context.Background(), base.Add(29*time.Minute), proposal)
+	if blocked.Approved {
+		t.Fatal("order should be rejected before injected cooldown end")
+	}
+
+	allowed := rm.CheckOrderAt(context.Background(), base.Add(31*time.Minute), proposal)
+	if !allowed.Approved {
+		t.Fatalf("order should be approved after injected cooldown end: %s", allowed.Reason)
 	}
 }

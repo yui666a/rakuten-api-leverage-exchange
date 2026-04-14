@@ -23,6 +23,7 @@ type StanceResult struct {
 // StanceResolver はマーケットスタンスを解決するインターフェース。
 type StanceResolver interface {
 	Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult
+	ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult
 }
 
 type stanceOverride struct {
@@ -32,20 +33,39 @@ type stanceOverride struct {
 	ExpiresAt time.Time
 }
 
+// RuleBasedStanceResolverOptions controls override behavior.
+type RuleBasedStanceResolverOptions struct {
+	// DisableOverride forces resolver to always use rule-based result.
+	DisableOverride bool
+	// DisablePersistence prevents loading/saving/deleting override records.
+	DisablePersistence bool
+}
+
 // RuleBasedStanceResolver はルールベースでマーケットスタンスを解決する。
 type RuleBasedStanceResolver struct {
 	mu       sync.RWMutex
 	override *stanceOverride
 	repo     repository.StanceOverrideRepository
+	options  RuleBasedStanceResolverOptions
 }
 
 // NewRuleBasedStanceResolver はRuleBasedStanceResolverを生成する。
 // repoがnon-nilの場合、起動時にDBからオーバーライドを復元する。
 func NewRuleBasedStanceResolver(repo repository.StanceOverrideRepository) *RuleBasedStanceResolver {
-	r := &RuleBasedStanceResolver{
-		repo: repo,
+	return NewRuleBasedStanceResolverWithOptions(repo, RuleBasedStanceResolverOptions{})
+}
+
+// NewRuleBasedStanceResolverWithOptions creates resolver with explicit options.
+func NewRuleBasedStanceResolverWithOptions(repo repository.StanceOverrideRepository, options RuleBasedStanceResolverOptions) *RuleBasedStanceResolver {
+	if options.DisablePersistence {
+		repo = nil
 	}
-	if repo != nil {
+
+	r := &RuleBasedStanceResolver{
+		repo:    repo,
+		options: options,
+	}
+	if repo != nil && !options.DisableOverride {
 		record, err := repo.Load(context.Background())
 		if err == nil && record != nil {
 			setAt := time.Unix(record.SetAt, 0)
@@ -71,7 +91,18 @@ func NewRuleBasedStanceResolver(repo repository.StanceOverrideRepository) *RuleB
 // Resolve はインジケータに基づいてマーケットスタンスを解決する。
 // オーバーライドが有効な場合はそれを優先する。
 func (r *RuleBasedStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult {
-	now := time.Now()
+	return r.ResolveAt(ctx, indicators, time.Now())
+}
+
+// ResolveAt resolves stance at caller-supplied time (for deterministic backtests).
+func (r *RuleBasedStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	if r.options.DisableOverride {
+		return r.applyRules(indicators, now)
+	}
 
 	// オーバーライドチェック
 	r.mu.RLock()
@@ -162,6 +193,10 @@ const (
 // SetOverride はスタンスオーバーライドを設定する。
 // TTLは1分〜1440分(24時間)の範囲にクランプされる。
 func (r *RuleBasedStanceResolver) SetOverride(stance entity.MarketStance, reasoning string, ttl time.Duration) {
+	if r.options.DisableOverride {
+		return
+	}
+
 	if ttl < minOverrideTTL {
 		ttl = minOverrideTTL
 	}
@@ -195,6 +230,9 @@ func (r *RuleBasedStanceResolver) SetOverride(stance entity.MarketStance, reason
 
 // ClearOverride はスタンスオーバーライドをクリアする。
 func (r *RuleBasedStanceResolver) ClearOverride() {
+	if r.options.DisableOverride {
+		return
+	}
 	r.clearOverrideInternal()
 }
 
@@ -212,6 +250,10 @@ func (r *RuleBasedStanceResolver) clearOverrideInternal() {
 
 // GetOverride は現在有効なオーバーライドを返す。期限切れの場合はnilを返す。
 func (r *RuleBasedStanceResolver) GetOverride() *StanceResult {
+	if r.options.DisableOverride {
+		return nil
+	}
+
 	r.mu.RLock()
 	override := r.override
 	r.mu.RUnlock()

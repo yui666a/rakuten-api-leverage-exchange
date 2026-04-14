@@ -125,6 +125,55 @@ func RunMigrations(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_client_orders_created
 			ON client_orders(created_at)`,
+
+		`CREATE TABLE IF NOT EXISTS backtest_results (
+			id TEXT PRIMARY KEY,
+			created_at INTEGER NOT NULL,
+			symbol TEXT NOT NULL,
+			symbol_id INTEGER NOT NULL,
+			primary_interval TEXT NOT NULL,
+			higher_tf_interval TEXT NOT NULL DEFAULT '',
+			from_ts INTEGER NOT NULL,
+			to_ts INTEGER NOT NULL,
+			initial_balance REAL NOT NULL,
+			final_balance REAL NOT NULL,
+			total_return REAL NOT NULL,
+			total_trades INTEGER NOT NULL,
+			win_trades INTEGER NOT NULL,
+			loss_trades INTEGER NOT NULL,
+			win_rate REAL NOT NULL,
+			profit_factor REAL NOT NULL,
+			max_drawdown REAL NOT NULL,
+			max_drawdown_balance REAL NOT NULL,
+			sharpe_ratio REAL NOT NULL,
+			avg_hold_seconds INTEGER NOT NULL,
+			total_carrying_cost REAL NOT NULL,
+			total_spread_cost REAL NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_results_created
+			ON backtest_results(created_at DESC, id DESC)`,
+
+		`CREATE TABLE IF NOT EXISTS backtest_trades (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			result_id TEXT NOT NULL,
+			trade_id INTEGER NOT NULL,
+			symbol_id INTEGER NOT NULL,
+			entry_time INTEGER NOT NULL,
+			exit_time INTEGER NOT NULL,
+			side TEXT NOT NULL,
+			entry_price REAL NOT NULL,
+			exit_price REAL NOT NULL,
+			amount REAL NOT NULL,
+			pnl REAL NOT NULL,
+			pnl_percent REAL NOT NULL,
+			carrying_cost REAL NOT NULL,
+			spread_cost REAL NOT NULL,
+			reason_entry TEXT NOT NULL DEFAULT '',
+			reason_exit TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(result_id) REFERENCES backtest_results(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_trades_result
+			ON backtest_trades(result_id, trade_id)`,
 	}
 
 	for _, m := range migrations {

@@ -25,12 +25,23 @@ func NewStrategyEngine(stanceResolver StanceResolver) *StrategyEngine {
 // Contrarianシグナルは意図的に逆張りなのでフィルタしない。
 // ボラティリティフィルター: BBバンド幅が非常に狭い(squeeze)場合、Trend Followシグナルを抑制する。
 func (e *StrategyEngine) EvaluateWithHigherTF(ctx context.Context, indicators entity.IndicatorSet, higherTF *entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
-	signal, err := e.Evaluate(ctx, indicators, lastPrice)
+	return e.EvaluateWithHigherTFAt(ctx, indicators, higherTF, lastPrice, time.Now())
+}
+
+// EvaluateWithHigherTFAt is a deterministic variant for backtests.
+func (e *StrategyEngine) EvaluateWithHigherTFAt(
+	ctx context.Context,
+	indicators entity.IndicatorSet,
+	higherTF *entity.IndicatorSet,
+	lastPrice float64,
+	now time.Time,
+) (*entity.Signal, error) {
+	signal, err := e.EvaluateAt(ctx, indicators, lastPrice, now)
 	if err != nil || signal.Action == entity.SignalActionHold {
 		return signal, err
 	}
 
-	result := e.stanceResolver.Resolve(ctx, indicators)
+	result := e.resolveAt(ctx, indicators, now)
 
 	// Volatility filter: squeeze detection for trend-follow signals
 	// BBBandwidth < 0.02 (2%) indicates very low volatility / consolidation
@@ -90,17 +101,27 @@ func (e *StrategyEngine) EvaluateWithHigherTF(ctx context.Context, indicators en
 // Evaluate はテクニカル指標と現在価格から売買シグナルを生成する。
 // 指標データが不足している場合はHOLDを返す。
 func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) (*entity.Signal, error) {
+	return e.EvaluateAt(ctx, indicators, lastPrice, time.Now())
+}
+
+// EvaluateAt is a deterministic variant for backtests.
+func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) (*entity.Signal, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	nowUnix := now.Unix()
+
 	// 指標チェックを先に行い、不要な処理を防ぐ
 	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
 			Action:    entity.SignalActionHold,
 			Reason:    "insufficient indicator data",
-			Timestamp: time.Now().Unix(),
+			Timestamp: nowUnix,
 		}, nil
 	}
 
-	result := e.stanceResolver.Resolve(ctx, indicators)
+	result := e.resolveAt(ctx, indicators, now)
 
 	sma20 := *indicators.SMA20
 	sma50 := *indicators.SMA50
@@ -108,21 +129,24 @@ func (e *StrategyEngine) Evaluate(ctx context.Context, indicators entity.Indicat
 
 	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
-		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram), nil
+		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceContrarian:
-		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram), nil
+		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix), nil
 	default:
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
 			Action:    entity.SignalActionHold,
 			Reason:    "stance is HOLD",
-			Timestamp: time.Now().Unix(),
+			Timestamp: nowUnix,
 		}, nil
 	}
 }
 
-func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64) *entity.Signal {
-	now := time.Now().Unix()
+func (e *StrategyEngine) resolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
+	return e.stanceResolver.ResolveAt(ctx, indicators, now)
+}
+
+func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64, nowUnix int64) *entity.Signal {
 
 	// Primary signal: EMA12/26 crossover (faster than SMA cross)
 	// Fallback to SMA20/50 when EMA is unavailable
@@ -146,7 +170,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
 				Reason:    "trend follow: EMA cross but SMA not aligned",
-				Timestamp: now,
+				Timestamp: nowUnix,
 			}
 		}
 	}
@@ -158,7 +182,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
 				Reason:    "trend follow: MACD histogram negative, skipping buy",
-				Timestamp: now,
+				Timestamp: nowUnix,
 			}
 		}
 		reason := "trend follow: EMA12 > EMA26, SMA aligned, RSI not overbought"
@@ -173,7 +197,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 			Action:     entity.SignalActionBuy,
 			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, true),
 			Reason:     reason,
-			Timestamp:  now,
+			Timestamp:  nowUnix,
 		}
 	}
 	if fastBelowSlow && rsi > 30 {
@@ -183,7 +207,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
 				Reason:    "trend follow: MACD histogram positive, skipping sell",
-				Timestamp: now,
+				Timestamp: nowUnix,
 			}
 		}
 		reason := "trend follow: EMA12 < EMA26, SMA aligned, RSI not oversold"
@@ -198,14 +222,14 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 			Action:     entity.SignalActionSell,
 			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, false),
 			Reason:     reason,
-			Timestamp:  now,
+			Timestamp:  nowUnix,
 		}
 	}
 	return &entity.Signal{
 		SymbolID:  symbolID,
 		Action:    entity.SignalActionHold,
 		Reason:    "trend follow: no clear signal",
-		Timestamp: now,
+		Timestamp: nowUnix,
 	}
 }
 
@@ -239,8 +263,7 @@ func trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *f
 	return emaDivergence*0.3 + smaDivergence*0.15 + rsiRoom*0.25 + macdConfirm*0.3
 }
 
-func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64) *entity.Signal {
-	now := time.Now().Unix()
+func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64, nowUnix int64) *entity.Signal {
 
 	if rsi < 30 {
 		// Skip contrarian buy if MACD momentum is still strongly negative
@@ -249,7 +272,7 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
 				Reason:    "contrarian: RSI oversold but MACD momentum still strongly negative",
-				Timestamp: now,
+				Timestamp: nowUnix,
 			}
 		}
 		reason := "contrarian: RSI oversold, expecting bounce"
@@ -261,7 +284,7 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 			Action:     entity.SignalActionBuy,
 			Confidence: contrarianConfidence(rsi, histogram, true),
 			Reason:     reason,
-			Timestamp:  now,
+			Timestamp:  nowUnix,
 		}
 	}
 	if rsi > 70 {
@@ -271,7 +294,7 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
 				Reason:    "contrarian: RSI overbought but MACD momentum still strongly positive",
-				Timestamp: now,
+				Timestamp: nowUnix,
 			}
 		}
 		reason := "contrarian: RSI overbought, expecting pullback"
@@ -283,14 +306,14 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 			Action:     entity.SignalActionSell,
 			Confidence: contrarianConfidence(rsi, histogram, false),
 			Reason:     reason,
-			Timestamp:  now,
+			Timestamp:  nowUnix,
 		}
 	}
 	return &entity.Signal{
 		SymbolID:  symbolID,
 		Action:    entity.SignalActionHold,
 		Reason:    "contrarian: RSI in neutral zone",
-		Timestamp: now,
+		Timestamp: nowUnix,
 	}
 }
 

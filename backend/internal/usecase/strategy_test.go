@@ -16,6 +16,10 @@ func (m *mockStanceResolver) Resolve(ctx context.Context, indicators entity.Indi
 	return m.result
 }
 
+func (m *mockStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
+	return m.result
+}
+
 func TestStrategyEngine_TrendFollow_BuySignal(t *testing.T) {
 	// TREND_FOLLOW: SMA20 > SMA50 かつ RSI < 70 → BUY
 	resolver := &mockStanceResolver{
@@ -452,12 +456,12 @@ func TestStrategyEngine_EMA_CrossWithSMAMisalignment(t *testing.T) {
 	engine := NewStrategyEngine(resolver)
 
 	indicators := entity.IndicatorSet{
-		SymbolID:  7,
-		SMA20:     ptr(4990000.0), // SMA still bearish
-		SMA50:     ptr(5000000.0),
-		EMA12:     ptr(5010000.0), // EMA already bullish
-		EMA26:     ptr(5000000.0),
-		RSI14:     ptr(55.0),
+		SymbolID: 7,
+		SMA20:    ptr(4990000.0), // SMA still bearish
+		SMA50:    ptr(5000000.0),
+		EMA12:    ptr(5010000.0), // EMA already bullish
+		EMA26:    ptr(5000000.0),
+		RSI14:    ptr(55.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5010000)
 	if err != nil {
@@ -772,5 +776,64 @@ func TestStrategyEngine_Confidence_HoldIsZero(t *testing.T) {
 	}
 	if signal.Confidence != 0.0 {
 		t.Fatalf("expected confidence 0.0 for HOLD, got %.4f", signal.Confidence)
+	}
+}
+
+func TestStrategyEngine_EvaluateAt_UsesInjectedTimestamp(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+	at := time.Date(2026, 4, 14, 12, 30, 0, 0, time.UTC)
+
+	signal, err := engine.EvaluateAt(context.Background(), entity.IndicatorSet{SymbolID: 7}, 5000000, at)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Timestamp != at.Unix() {
+		t.Fatalf("expected timestamp %d, got %d", at.Unix(), signal.Timestamp)
+	}
+}
+
+func TestStrategyEngine_EvaluateWithHigherTFAt_UsesInjectedTimestampForMTFHold(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+	at := time.Date(2026, 4, 14, 13, 45, 0, 0, time.UTC)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:  7,
+		SMA20:     ptr(5100000),
+		SMA50:     ptr(5000000),
+		EMA12:     ptr(101),
+		EMA26:     ptr(100),
+		RSI14:     ptr(55),
+		Histogram: ptr(2),
+	}
+	higherTF := &entity.IndicatorSet{
+		SMA20: ptr(5000000),
+		SMA50: ptr(5100000), // downtrend blocks buy
+	}
+
+	signal, err := engine.EvaluateWithHigherTFAt(context.Background(), indicators, higherTF, 5100000, at)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD by MTF filter, got %s", signal.Action)
+	}
+	if signal.Timestamp != at.Unix() {
+		t.Fatalf("expected timestamp %d, got %d", at.Unix(), signal.Timestamp)
 	}
 }
