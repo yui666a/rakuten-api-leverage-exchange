@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { AppFrame } from '../components/AppFrame'
 import { useBacktestResults, useBacktestResult } from '../hooks/useBacktest'
+import { EquityCurveChart } from '../components/EquityCurveChart'
 import type { BacktestResult, BacktestTrade } from '../lib/api'
 
 export const Route = createFileRoute('/backtest')({ component: BacktestPage })
@@ -207,6 +208,22 @@ function DetailPanel({ result }: { result: BacktestResult }) {
           value={`\u00a5${summary.totalSpreadCost.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
         />
       </div>
+
+      {/* Equity curve */}
+      {result.trades && result.trades.length > 0 && (
+        <div className="mt-6">
+          <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Equity Curve</p>
+          <h3 className="mt-2 text-lg font-semibold text-white">資産推移</h3>
+          <div className="mt-3 h-[400px]">
+            <EquityCurveChart
+              trades={result.trades}
+              initialBalance={result.summary.initialBalance}
+              periodFrom={result.config.fromTimestamp}
+              periodTo={result.config.toTimestamp}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Trades table */}
       {result.trades && result.trades.length > 0 && (
