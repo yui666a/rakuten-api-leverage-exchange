@@ -34,6 +34,20 @@
 - Git: Conventional Commits (`feat:`, `fix:`, `refactor:`, `docs:`)。feature ブランチは `feat/xxx`。
 - `.env` や API キーは絶対にコミットしない。
 
+## Git Strategy
+
+- GitHub Flow を採用する。
+- `main` ブランチへの取り込みは Pull Request 経由で行う。
+- PR の変更内容は一意にする（「ついでにリファクタ」禁止）。
+- 1つの機能完成に複数PRが必要な場合、PRを Stack（数珠つなぎ）してよい。
+- コミットは作業完了時の1コミットにまとめず、適切な粒度で分ける。
+
+## Coding Strategy
+
+- このプロダクトは個人開発であり、既存システム互換の維持を最優先にはしない。
+- バグ/エラーを発見した場合、症状のみを抑える最小工数の応急処置ではなく、設計負債を残しにくい修正を優先する。
+- 修正時は局所対処より、責務分離・依存関係・拡張性を含めた設計の整合性を重視する。
+
 ## Architecture
 
 - Clean Architecture: domain → usecase → infrastructure → interfaces の依存方向を厳守。
