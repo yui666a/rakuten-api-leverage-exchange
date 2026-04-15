@@ -17,5 +17,8 @@ type IndicatorSet struct {
 	BBLower        *float64 `json:"bbLower"`
 	BBBandwidth    *float64 `json:"bbBandwidth"`
 	ATR14          *float64 `json:"atr14"`
+	VolumeSMA20    *float64 `json:"volumeSma20"`   // 出来高20期間SMA
+	VolumeRatio    *float64 `json:"volumeRatio"`   // 最新出来高 / VolumeSMA20
+	RecentSqueeze  *bool    `json:"recentSqueeze"` // 直近5本以内に BBBandwidth < 0.02
 	Timestamp      int64    `json:"timestamp"`
 }

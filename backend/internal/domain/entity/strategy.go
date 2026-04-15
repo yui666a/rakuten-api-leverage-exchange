@@ -7,6 +7,7 @@ const (
 	MarketStanceTrendFollow MarketStance = "TREND_FOLLOW"
 	MarketStanceContrarian  MarketStance = "CONTRARIAN"
 	MarketStanceHold        MarketStance = "HOLD"
+	MarketStanceBreakout    MarketStance = "BREAKOUT"
 )
 
 // StrategyAdvice はLLM Serviceが返す戦略アドバイス。
