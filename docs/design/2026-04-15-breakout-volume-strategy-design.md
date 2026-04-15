@@ -1,7 +1,7 @@
 # ボリンジャーバンド・ブレイクアウト戦略 + 出来高分析 設計書
 
 **日付:** 2026-04-15
-**ステータス:** 承認済み
+**ステータス:** 承認済み（レビュー反映 v2）
 
 ## Goal
 
@@ -62,29 +62,50 @@ VolumeRatio  *float64 `json:"volumeRatio"`  // 最新出来高 / VolumeSMA20
 
 ### 新しいルール（BREAKOUT 追加）
 
+BREAKOUT 判定は「現在スクイーズ中」ではなく「直近でスクイーズが発生していた」状態からのブレイクアウトを検出する。これにより、スクイーズ中のバンド突破だけでなく、スクイーズ解消直後（帯域拡大が始まった瞬間）のブレイクアウトも捕捉できる。
+
+**「最近のスクイーズ」の定義:** `RecentSqueeze` は IndicatorCalculator が計算する bool 値で、直近5本のキャンドルのうち少なくとも1本で BBBandwidth < 0.02 だった場合に true となる。
+
 ```
-1. RSI < 25 or RSI > 75                              → CONTRARIAN（変更なし）
-2. BBBandwidth < 0.02（スクイーズ中）:
-   a. lastPrice > BBUpper かつ VolumeRatio ≥ 1.5      → BREAKOUT
-   b. lastPrice < BBLower かつ VolumeRatio ≥ 1.5      → BREAKOUT
-   c. それ以外                                        → HOLD（変更なし）
-3. SMA20 ≈ SMA50（乖離 < 0.1%）                      → HOLD（変更なし）
-4. それ以外                                           → TREND_FOLLOW（変更なし）
+1. RSI < 25 or RSI > 75                                         → CONTRARIAN（変更なし）
+2. RecentSqueeze == true:
+   a. lastPrice > BBUpper かつ VolumeRatio ≥ 1.5                 → BREAKOUT
+   b. lastPrice < BBLower かつ VolumeRatio ≥ 1.5                 → BREAKOUT
+   c. それ以外（スクイーズ中だがブレイクアウト未発生）              → HOLD（変更なし）
+3. SMA20 ≈ SMA50（乖離 < 0.1%）                                 → HOLD（変更なし）
+4. それ以外                                                      → TREND_FOLLOW（変更なし）
 ```
+
+### IndicatorSet への追加フィールド（RecentSqueeze 用）
+
+```go
+RecentSqueeze *bool `json:"recentSqueeze"` // 直近5本以内に BBBandwidth < 0.02 だったか
+```
+
+これは `IndicatorCalculator.Calculate()` で計算する。直近5本分の BBBandwidth を求め、いずれかが閾値以下なら true。
 
 ### シグネチャ変更
 
-`ResolveAt` に `lastPrice float64` パラメータを追加する。BB ブレイクアウト判定に現在価格が必要なため。
+`StanceResolver` インターフェースと `RuleBasedStanceResolver` の両メソッドに `lastPrice float64` パラメータを追加する。
 
 ```go
-// Before
+// StanceResolver interface — Before
+Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult
 ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult
 
-// After
+// StanceResolver interface — After
+Resolve(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) StanceResult
 ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult
 ```
 
-呼び出し元（strategy.go, pipeline, backtest handler）を修正する。
+### 呼び出し元の修正
+
+| 呼び出し元 | 対応 |
+|---|---|
+| `usecase/strategy.go` の `resolveAt` | `lastPrice` を引数に追加して渡す（既にパラメータとして持っている） |
+| `interfaces/api/handler/strategy.go` の `GetStrategy` | 現在 `Resolve(ctx, emptyIndicators)` で呼んでおり、価格情報なし。`lastPrice: 0` を渡す（BREAKOUT 判定には BB/Volume が必要なので、価格 0 + 指標 nil の組み合わせでは BREAKOUT にならない） |
+| `strategy_test.go` の `mockStanceResolver` | `Resolve`/`ResolveAt` のシグネチャを更新（`lastPrice` を受け取るが無視） |
+| `stance_test.go` | 既存テストの `Resolve` 呼び出しに `lastPrice: 0` を追加（BB フィールドが nil なので挙動は変わらない） |
 
 ---
 
@@ -125,9 +146,9 @@ ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64
 
 1. EvaluateAt でシグナル生成（HOLD ならここで return）
 2. **低出来高フィルター** ← 新規
-3. BB スクイーズフィルター（TREND_FOLLOW のみ）→ Stance Resolver 側に移動するため削除
+3. BB スクイーズフィルター（TREND_FOLLOW のみ）→ Stance Resolver 側に移動するため **削除**
 4. BB position による Contrarian confidence ブースト（変更なし）
-5. MTF フィルター（変更なし）
+5. **MTF フィルター — BREAKOUT は例外扱い**（後述）
 
 ### BB スクイーズフィルターの責務移動
 
@@ -137,31 +158,64 @@ ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64
 - Strategy Engine はシグナル生成に専念すべき
 - Stance Resolver がスクイーズ + ブレイクアウト判定を一箇所で行う方が整合性が高い
 
+### MTF フィルターと BREAKOUT の関係
+
+BREAKOUT は CONTRARIAN と同様に MTF フィルターの **例外扱い** とする。理由:
+
+- ブレイクアウトは強いモメンタム転換であり、上位足のトレンドに逆行するブレイクアウトこそがトレンド転換の初動
+- MTF でブロックすると、BREAKOUT Stance の存在意義が大幅に削がれる
+- CONTRARIAN が既に例外扱いされている前例がある
+
+具体的には、`EvaluateWithHigherTFAt` の MTF フィルター部分で：
+```go
+// Contrarian and Breakout signals are intentionally allowed against higher TF
+if result.Stance == entity.MarketStanceContrarian || result.Stance == entity.MarketStanceBreakout {
+    return signal, nil
+}
+```
+
 ---
 
 ## 5. 変更ファイル一覧
 
+### コア変更
+
 | ファイル | 変更内容 |
 |---|---|
-| `entity/indicator.go` | `VolumeSMA20`, `VolumeRatio` フィールド追加 |
+| `entity/indicator.go` | `VolumeSMA20`, `VolumeRatio`, `RecentSqueeze` フィールド追加 |
 | `entity/strategy.go` | `MarketStanceBreakout` 定数追加 |
 | `infrastructure/indicator/volume.go` | **新規** — `VolumeSMA`, `VolumeRatio` 計算関数 |
 | `infrastructure/indicator/volume_test.go` | **新規** — Volume インジケーターのテスト |
-| `usecase/indicator.go` | Volume インジケーター計算を追加 |
-| `usecase/stance.go` | BREAKOUT 判定ルール追加、`ResolveAt` に `lastPrice` パラメータ追加 |
-| `usecase/strategy.go` | `evaluateBreakout` + `breakoutConfidence` 追加、低出来高フィルター追加、BB スクイーズフィルター削除 |
-| `usecase/stance_test.go` | BREAKOUT Stance のテスト |
-| `usecase/strategy_test.go` | BREAKOUT シグナル + 低出来高フィルターのテスト |
+| `usecase/indicator.go` | Volume インジケーター計算 + RecentSqueeze 計算を追加 |
+| `usecase/stance.go` | `StanceResolver` インターフェース + `RuleBasedStanceResolver` に `lastPrice` 追加、BREAKOUT 判定ルール追加 |
+| `usecase/strategy.go` | `evaluateBreakout` + `breakoutConfidence` 追加、低出来高フィルター追加、BB スクイーズフィルター削除、MTF の BREAKOUT 例外追加 |
 
-### 呼び出し元の修正（ResolveAt シグネチャ変更に伴う）
+### テスト
+
+| ファイル | 変更内容 |
+|---|---|
+| `infrastructure/indicator/volume_test.go` | **新規** — VolumeSMA / VolumeRatio のユニットテスト |
+| `usecase/stance_test.go` | BREAKOUT Stance テスト追加 + 既存テストの `Resolve` 呼び出しに `lastPrice` 追加 |
+| `usecase/strategy_test.go` | BREAKOUT シグナルテスト + 低出来高フィルターテスト + `mockStanceResolver` のシグネチャ更新 |
+
+### 呼び出し元の修正（シグネチャ変更に伴う）
 
 | ファイル | 変更内容 |
 |---|---|
 | `usecase/strategy.go` | `resolveAt` に `lastPrice` を渡す |
-| `usecase/backtest/handler.go` | バックテストからの `ResolveAt` 呼び出しに `lastPrice` を渡す（呼んでいる場合） |
+| `interfaces/api/handler/strategy.go` | `Resolve` に `lastPrice: 0` を渡す + `SetStrategy` のバリデーションに `BREAKOUT` を追加 |
+| `interfaces/api/handler/handler_test.go` | SetStrategy のバリデーションテスト更新（BREAKOUT を有効な値として追加） |
+
+### バックテスト対応
+
+| ファイル | 変更内容 |
+|---|---|
+| `usecase/backtest/handler.go` | 指標計算に Volume 指標（VolumeSMA20, VolumeRatio, RecentSqueeze）を追加。BREAKOUT Stance でのシグナル生成が実運用と同等に動作するようにする |
+| `usecase/backtest/handler_test.go` | バックテストでの BREAKOUT シグナル生成テスト |
 
 ### 既存ロジックへの影響
 
 - 既存の TREND_FOLLOW / CONTRARIAN の判定ロジック自体は変更なし
-- BB スクイーズフィルターの責務が strategy.go → stance.go に移動（動作は同等）
-- `ResolveAt` のシグネチャ変更は破壊的だが、呼び出し元は限定的
+- BB スクイーズフィルターの責務が strategy.go → stance.go に移動（TREND_FOLLOW に対する動作は同等）
+- `StanceResolver` インターフェースのシグネチャ変更は破壊的だが、実装は `RuleBasedStanceResolver` のみ、呼び出し元も限定的
+- MTF フィルターに BREAKOUT 例外を追加（CONTRARIAN の既存パターンと統一）
