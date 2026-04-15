@@ -2,7 +2,7 @@
 
 - **作成日**: 2026-04-14
 - **更新日**: 2026-04-15
-- **ステータス**: Done（Phase 1 + Phase 2 完了）
+- **ステータス**: Done（Phase 1 + Phase 2 + 将来スコープ 完了）
 
 ## 概要
 
@@ -500,4 +500,13 @@ backend/
 - `SL/TP priority mode` に `best-case` を追加（比較分析用）
 - ウォークフォワード分析（学習/検証分離）
 - モンテカルロシミュレーション
-- `EventEngine + LiveSource + RealExecutor` による本番置換
+- ~~`EventEngine + LiveSource + RealExecutor` による本番置換~~ → ✅ 実装済み（PR #78-#81）
+
+### 実装済み将来スコープ（2026-04-15）
+
+| 項目 | PR | 概要 |
+|---|---|---|
+| EventEngine 共通化 | #78 | `usecase/eventengine/` に EventBus/EventEngine/OrderExecutor を抽出 |
+| フロントエンド可視化 | #77, #79 | バックテスト結果一覧・詳細ページ + エクイティカーブチャート |
+| LiveSource + RealExecutor | #80 | リアルタイムティッカー→イベント変換 + 楽天API実注文ExecutorD |
+| イベント駆動パイプライン | #81 | 60秒ポーリング → EventEngine + LiveSource 駆動に置換 |
