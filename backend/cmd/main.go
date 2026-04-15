@@ -81,21 +81,20 @@ func main() {
 	restoreRiskState(context.Background(), riskStateRepo, riskMgr)
 	runBacktestRetentionCleanup(context.Background(), backtestResultRepo, cfg.Backtest.RetentionDays)
 
-	// --- Trading Pipeline ---
-	pipeline := NewTradingPipeline(
-		TradingPipelineConfig{
+	// --- Trading Pipeline (Event-Driven) ---
+	pipeline := NewEventDrivenPipeline(
+		EventDrivenPipelineConfig{
 			SymbolID:          symbolID,
-			Interval:          time.Duration(cfg.Trading.PipelineIntervalSec) * time.Second,
 			StateSyncInterval: time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
 			TradeAmount:       cfg.Trading.TradeAmount,
 			MinConfidence:     cfg.Trading.MinConfidence,
+			StopLossPercent:   cfg.Risk.StopLossPercent,
+			TakeProfitPercent: cfg.Risk.TakeProfitPercent,
 		},
 		restClient,
 		restClient, // SymbolFetcher
 		marketDataSvc,
-		indicatorCalc,
 		strategyEngine,
-		orderExecutor,
 		riskMgr,
 		tradeHistoryRepo,
 		riskStateRepo,
