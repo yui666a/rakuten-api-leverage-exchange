@@ -1,0 +1,2 @@
+[env]
+SESSION_COLLECTOR_ENABLED = "false"
