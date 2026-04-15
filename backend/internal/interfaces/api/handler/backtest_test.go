@@ -71,6 +71,65 @@ func TestBacktestHandler_ListResults_InvalidSort(t *testing.T) {
 	}
 }
 
+func TestBacktestHandler_CSVMeta_MissingData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &mockBacktestResultRepo{}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	w := httptestGet(h.CSVMeta, "/backtest/csv-meta", "/backtest/csv-meta")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestBacktestHandler_CSVMeta_OK(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &mockBacktestResultRepo{}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	tmpDir := t.TempDir()
+	csvPath := writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "LTC_JPY",
+		SymbolID: 10,
+		Interval: "PT15M",
+		Candles: []entity.Candle{
+			{Time: 3000, Open: 1, High: 2, Low: 0.5, Close: 1.5, Volume: 1},
+			{Time: 1000, Open: 1, High: 2, Low: 0.5, Close: 1.5, Volume: 1},
+			{Time: 2000, Open: 1, High: 2, Low: 0.5, Close: 1.5, Volume: 1},
+		},
+	})
+
+	w := httptestGet(h.CSVMeta, "/backtest/csv-meta", "/backtest/csv-meta?data="+csvPath)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data          string `json:"data"`
+		Symbol        string `json:"symbol"`
+		SymbolID      int64  `json:"symbolId"`
+		Interval      string `json:"interval"`
+		RowCount      int    `json:"rowCount"`
+		FromTimestamp int64  `json:"fromTimestamp"`
+		ToTimestamp   int64  `json:"toTimestamp"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal csv meta: %v", err)
+	}
+	if resp.Data != csvPath {
+		t.Fatalf("expected data path %s, got %s", csvPath, resp.Data)
+	}
+	if resp.Symbol != "LTC_JPY" || resp.SymbolID != 10 || resp.Interval != "PT15M" {
+		t.Fatalf("unexpected symbol meta: %+v", resp)
+	}
+	if resp.RowCount != 3 {
+		t.Fatalf("expected rowCount=3, got %d", resp.RowCount)
+	}
+	if resp.FromTimestamp != 1000 || resp.ToTimestamp != 3000 {
+		t.Fatalf("unexpected range: %d..%d", resp.FromTimestamp, resp.ToTimestamp)
+	}
+}
+
 func httptestRequestWithParam(handler gin.HandlerFunc, route, paramKey, paramValue string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := gin.New()
@@ -311,4 +370,3 @@ func TestBacktestHandler_Integration_RunMissingData(t *testing.T) {
 		t.Fatalf("missing data: expected 400, got %d", runW.Code)
 	}
 }
-

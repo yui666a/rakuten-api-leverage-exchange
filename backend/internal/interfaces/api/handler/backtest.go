@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -210,6 +211,45 @@ func (h *BacktestHandler) GetResult(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func (h *BacktestHandler) CSVMeta(c *gin.Context) {
+	dataPath := strings.TrimSpace(c.Query("data"))
+	if dataPath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "data query is required"})
+		return
+	}
+
+	file, err := csvinfra.LoadCandles(dataPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed to load csv: " + err.Error()})
+		return
+	}
+	if len(file.Candles) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "csv has no candles"})
+		return
+	}
+
+	fromTs := file.Candles[0].Time
+	toTs := file.Candles[0].Time
+	for _, candle := range file.Candles[1:] {
+		if candle.Time < fromTs {
+			fromTs = candle.Time
+		}
+		if candle.Time > toTs {
+			toTs = candle.Time
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"data":          dataPath,
+		"symbol":        file.Symbol,
+		"symbolId":      file.SymbolID,
+		"interval":      file.Interval,
+		"rowCount":      len(file.Candles),
+		"fromTimestamp": fromTs,
+		"toTimestamp":   toTs,
+	})
 }
 
 func parseBacktestDateStart(v string) (int64, error) {
