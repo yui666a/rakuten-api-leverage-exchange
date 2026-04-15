@@ -86,8 +86,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   }, [data])
 
   const [visible, setVisible] = useState<Record<MALineKey, boolean>>({
-    sma20: false,
-    sma50: false,
+    sma20: true,
+    sma50: true,
     ema12: false,
     ema26: false,
   })
