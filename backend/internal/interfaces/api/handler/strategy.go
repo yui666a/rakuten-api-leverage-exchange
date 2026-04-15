@@ -37,8 +37,8 @@ func (h *StrategyHandler) SetStrategy(c *gin.Context) {
 	}
 
 	stance := entity.MarketStance(req.Stance)
-	if stance != entity.MarketStanceTrendFollow && stance != entity.MarketStanceContrarian && stance != entity.MarketStanceHold {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "stance must be TREND_FOLLOW, CONTRARIAN, or HOLD"})
+	if stance != entity.MarketStanceTrendFollow && stance != entity.MarketStanceContrarian && stance != entity.MarketStanceHold && stance != entity.MarketStanceBreakout {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "stance must be TREND_FOLLOW, CONTRARIAN, HOLD, or BREAKOUT"})
 		return
 	}
 
