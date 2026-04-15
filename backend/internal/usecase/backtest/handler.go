@@ -464,6 +464,37 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 
 	result.ATR14 = floatToPtr(indicator.ATR(highs, lows, closes, 14))
 
+	// Volume indicators
+	volumes := make([]float64, n)
+	for i, c := range candles {
+		volumes[i] = c.Volume
+	}
+	volSMA := indicator.VolumeSMA(volumes, 20)
+	result.VolumeSMA20 = floatToPtr(volSMA)
+	if !math.IsNaN(volSMA) && volSMA > 0 && n > 0 {
+		vr := indicator.VolumeRatio(volumes[n-1], volSMA)
+		result.VolumeRatio = floatToPtr(vr)
+	}
+
+	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
+	if n >= 20 {
+		recentSqueeze := false
+		lookback := 5
+		if lookback > n-19 {
+			lookback = n - 19
+		}
+		for i := 0; i < lookback; i++ {
+			offset := n - 1 - i
+			windowCloses := closes[:offset+1]
+			_, _, _, bw := indicator.BollingerBands(windowCloses, 20, 2.0)
+			if !math.IsNaN(bw) && bw < 0.02 {
+				recentSqueeze = true
+				break
+			}
+		}
+		result.RecentSqueeze = &recentSqueeze
+	}
+
 	return result
 }
 
