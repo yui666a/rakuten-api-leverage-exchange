@@ -19,7 +19,7 @@ func NewStrategyHandler(stanceResolver *usecase.RuleBasedStanceResolver) *Strate
 
 func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 	indicators := entity.IndicatorSet{}
-	result := h.stanceResolver.Resolve(c.Request.Context(), indicators)
+	result := h.stanceResolver.Resolve(c.Request.Context(), indicators, 0)
 	c.JSON(http.StatusOK, result)
 }
 
@@ -37,8 +37,8 @@ func (h *StrategyHandler) SetStrategy(c *gin.Context) {
 	}
 
 	stance := entity.MarketStance(req.Stance)
-	if stance != entity.MarketStanceTrendFollow && stance != entity.MarketStanceContrarian && stance != entity.MarketStanceHold {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "stance must be TREND_FOLLOW, CONTRARIAN, or HOLD"})
+	if stance != entity.MarketStanceTrendFollow && stance != entity.MarketStanceContrarian && stance != entity.MarketStanceHold && stance != entity.MarketStanceBreakout {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "stance must be TREND_FOLLOW, CONTRARIAN, HOLD, or BREAKOUT"})
 		return
 	}
 

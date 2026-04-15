@@ -69,6 +69,37 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 
 	result.ATR14 = toPtr(indicator.ATR(highs, lows, prices, 14))
 
+	// Volume indicators
+	volumes := make([]float64, n)
+	for i, cd := range candles {
+		volumes[n-1-i] = cd.Volume
+	}
+	volSMA := indicator.VolumeSMA(volumes, 20)
+	result.VolumeSMA20 = toPtr(volSMA)
+	if !math.IsNaN(volSMA) && volSMA > 0 && n > 0 {
+		vr := indicator.VolumeRatio(volumes[n-1], volSMA)
+		result.VolumeRatio = toPtr(vr)
+	}
+
+	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
+	if n >= 20 {
+		recentSqueeze := false
+		lookback := 5
+		if lookback > n-19 {
+			lookback = n - 19
+		}
+		for i := 0; i < lookback; i++ {
+			offset := n - 1 - i
+			windowPrices := prices[:offset+1]
+			_, _, _, bw := indicator.BollingerBands(windowPrices, 20, 2.0)
+			if !math.IsNaN(bw) && bw < 0.02 {
+				recentSqueeze = true
+				break
+			}
+		}
+		result.RecentSqueeze = &recentSqueeze
+	}
+
 	return result, nil
 }
 

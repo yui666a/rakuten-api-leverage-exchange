@@ -910,7 +910,7 @@ func TestStrategyHandler_SetStrategy_InvalidStance(t *testing.T) {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
 	resp := decodeBody(t, w)
-	if resp["error"] != "stance must be TREND_FOLLOW, CONTRARIAN, or HOLD" {
+	if resp["error"] != "stance must be TREND_FOLLOW, CONTRARIAN, HOLD, or BREAKOUT" {
 		t.Fatalf("unexpected error: %v", resp["error"])
 	}
 }
