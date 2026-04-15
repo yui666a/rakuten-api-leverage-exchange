@@ -237,6 +237,34 @@ export type BacktestResultListResponse = {
   results: BacktestResult[]
 }
 
+export type BacktestCSVMeta = {
+  data: string
+  symbol: string
+  symbolId: number
+  interval: string
+  rowCount: number
+  fromTimestamp: number
+  toTimestamp: number
+}
+
+export type BacktestRunRequest = {
+  data: string
+  dataHtf?: string
+  from?: string
+  to?: string
+  initialBalance?: number
+  spread?: number
+  carryingCost?: number
+  slippage?: number
+  tradeAmount?: number
+  stopLossPercent?: number
+  takeProfitPercent?: number
+  maxPositionAmount?: number
+  maxDailyLoss?: number
+  maxConsecutiveLosses?: number
+  cooldownMinutes?: number
+}
+
 export async function fetchApi<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`)
   if (!res.ok) {

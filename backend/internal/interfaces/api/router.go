@@ -129,6 +129,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.BacktestRunner != nil && deps.BacktestResultRepo != nil {
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo)
 		v1.POST("/backtest/run", backtestHandler.Run)
+		v1.GET("/backtest/csv-meta", backtestHandler.CSVMeta)
 		v1.GET("/backtest/results", backtestHandler.ListResults)
 		v1.GET("/backtest/results/:id", backtestHandler.GetResult)
 	}
