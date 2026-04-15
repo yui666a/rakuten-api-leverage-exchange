@@ -43,13 +43,12 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 
 	result := e.resolveAt(ctx, indicators, lastPrice, now)
 
-	// Volatility filter: squeeze detection for trend-follow signals
-	// BBBandwidth < 0.02 (2%) indicates very low volatility / consolidation
-	if result.Stance == entity.MarketStanceTrendFollow && indicators.BBBandwidth != nil && *indicators.BBBandwidth < 0.02 {
+	// Low volume filter: reject all signals when volume is extremely low
+	if indicators.VolumeRatio != nil && *indicators.VolumeRatio < 0.3 {
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
 			Action:    entity.SignalActionHold,
-			Reason:    "volatility filter: Bollinger squeeze, trend signal unreliable",
+			Reason:    "volume filter: volume ratio too low, signal unreliable",
 			Timestamp: signal.Timestamp,
 		}, nil
 	}
@@ -57,10 +56,8 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 	// BB position can boost/penalize confidence for contrarian
 	if result.Stance == entity.MarketStanceContrarian && indicators.BBLower != nil && indicators.BBUpper != nil {
 		if signal.Action == entity.SignalActionBuy && lastPrice <= *indicators.BBLower {
-			// Price at/below lower band: extra confidence for buy
 			signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
 		} else if signal.Action == entity.SignalActionSell && lastPrice >= *indicators.BBUpper {
-			// Price at/above upper band: extra confidence for sell
 			signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
 		}
 	}
@@ -69,8 +66,8 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 		return signal, nil
 	}
 
-	// Contrarian signals are intentionally counter-trend; don't filter by higher TF
-	if result.Stance == entity.MarketStanceContrarian {
+	// Contrarian and Breakout signals are intentionally allowed against higher TF
+	if result.Stance == entity.MarketStanceContrarian || result.Stance == entity.MarketStanceBreakout {
 		return signal, nil
 	}
 
@@ -132,6 +129,8 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceContrarian:
 		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix), nil
+	case entity.MarketStanceBreakout:
+		return e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix), nil
 	default:
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
@@ -336,4 +335,88 @@ func contrarianConfidence(rsi float64, histogram *float64, isBuy bool) float64 {
 	}
 
 	return rsiExtreme*0.6 + macdNotAgainst*0.4
+}
+
+func (e *StrategyEngine) evaluateBreakout(symbolID int64, lastPrice float64, bbUpper, bbLower, bbMiddle, volumeRatio, histogram *float64, nowUnix int64) *entity.Signal {
+	if bbUpper == nil || bbLower == nil || bbMiddle == nil || volumeRatio == nil {
+		return &entity.Signal{
+			SymbolID:  symbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    "breakout: insufficient BB/volume data",
+			Timestamp: nowUnix,
+		}
+	}
+
+	if lastPrice > *bbUpper && *volumeRatio >= 1.5 {
+		// MACD histogram confirmation
+		if histogram != nil && *histogram < 0 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "breakout: MACD histogram negative, skipping buy",
+				Timestamp: nowUnix,
+			}
+		}
+		return &entity.Signal{
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionBuy,
+			Confidence: breakoutConfidence(lastPrice, *bbUpper, *bbMiddle, *volumeRatio, histogram, true),
+			Reason:     "breakout: price above BB upper with volume confirmation",
+			Timestamp:  nowUnix,
+		}
+	}
+
+	if lastPrice < *bbLower && *volumeRatio >= 1.5 {
+		if histogram != nil && *histogram > 0 {
+			return &entity.Signal{
+				SymbolID:  symbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "breakout: MACD histogram positive, skipping sell",
+				Timestamp: nowUnix,
+			}
+		}
+		return &entity.Signal{
+			SymbolID:   symbolID,
+			Action:     entity.SignalActionSell,
+			Confidence: breakoutConfidence(lastPrice, *bbLower, *bbMiddle, *volumeRatio, histogram, false),
+			Reason:     "breakout: price below BB lower with volume confirmation",
+			Timestamp:  nowUnix,
+		}
+	}
+
+	return &entity.Signal{
+		SymbolID:  symbolID,
+		Action:    entity.SignalActionHold,
+		Reason:    "breakout: no clear breakout signal",
+		Timestamp: nowUnix,
+	}
+}
+
+// breakoutConfidence computes a 0.0–1.0 confidence score for breakout signals.
+// Factors: volume strength (40%), breakout depth (30%), MACD confirmation (30%).
+func breakoutConfidence(lastPrice, bandEdge, bbMiddle, volumeRatio float64, histogram *float64, isBuy bool) float64 {
+	// Volume strength: (VolumeRatio - 1.0) / 2.0, capped at 1.0
+	volStrength := math.Min((volumeRatio-1.0)/2.0, 1.0)
+	if volStrength < 0 {
+		volStrength = 0
+	}
+
+	// Breakout depth: distance from band edge normalized by BBMiddle
+	var depth float64
+	if bbMiddle > 0 {
+		if isBuy {
+			depth = (lastPrice - bandEdge) / bbMiddle
+		} else {
+			depth = (bandEdge - lastPrice) / bbMiddle
+		}
+	}
+	depth = math.Max(0, math.Min(depth*50, 1.0)) // 2% deviation = 1.0
+
+	// MACD confirmation
+	macdConfirm := 0.5
+	if histogram != nil {
+		macdConfirm = math.Min(math.Abs(*histogram)/10, 1.0)
+	}
+
+	return volStrength*0.4 + depth*0.3 + macdConfirm*0.3
 }

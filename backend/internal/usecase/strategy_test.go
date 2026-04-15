@@ -668,8 +668,9 @@ func TestStrategyEngine_MTF_ContrarianNotFiltered(t *testing.T) {
 	}
 }
 
-func TestStrategyEngine_VolatilityFilter_SqueezeBlocksTrendFollow(t *testing.T) {
-	// BB bandwidth < 0.02 during trend follow → HOLD
+func TestStrategyEngine_SqueezeNowHandledByStance(t *testing.T) {
+	// BB squeeze filtering moved to StanceResolver; strategy.go no longer filters by BBBandwidth.
+	// When StanceResolver returns TREND_FOLLOW, strategy should evaluate normally regardless of BBBandwidth.
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -681,17 +682,15 @@ func TestStrategyEngine_VolatilityFilter_SqueezeBlocksTrendFollow(t *testing.T) 
 		SMA50:       ptr(5000000.0),
 		RSI14:       ptr(55.0),
 		Histogram:   ptr(3.0),
-		BBBandwidth: ptr(0.015), // squeeze
+		BBBandwidth: ptr(0.015), // squeeze - but no longer filtered here
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if signal.Action != entity.SignalActionHold {
-		t.Fatalf("expected HOLD during BB squeeze, got %s", signal.Action)
-	}
-	if signal.Reason != "volatility filter: Bollinger squeeze, trend signal unreliable" {
-		t.Fatalf("unexpected reason: %s", signal.Reason)
+	// Squeeze filtering is now in StanceResolver, so TREND_FOLLOW should still produce a signal
+	if signal.Action == entity.SignalActionHold {
+		t.Fatalf("expected non-HOLD since squeeze filter moved to StanceResolver, got HOLD: %s", signal.Reason)
 	}
 }
 
@@ -835,5 +834,182 @@ func TestStrategyEngine_EvaluateWithHigherTFAt_UsesInjectedTimestampForMTFHold(t
 	}
 	if signal.Timestamp != at.Unix() {
 		t.Fatalf("expected timestamp %d, got %d", at.Unix(), signal.Timestamp)
+	}
+}
+
+func TestStrategyEngine_Breakout_BuySignal(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceBreakout,
+			Reasoning: "BB breakout upward with volume confirmation",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5000000),
+		SMA50:       ptr(4900000),
+		RSI14:       ptr(55.0),
+		BBUpper:     ptr(5100000),
+		BBMiddle:    ptr(5000000),
+		BBLower:     ptr(4900000),
+		VolumeRatio: ptr(2.0),
+		Histogram:   ptr(5.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5200000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY for upward breakout, got %s", signal.Action)
+	}
+	if signal.Confidence <= 0 {
+		t.Fatal("expected positive confidence")
+	}
+}
+
+func TestStrategyEngine_Breakout_SellSignal(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceBreakout,
+			Reasoning: "BB breakout downward with volume confirmation",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5000000),
+		SMA50:       ptr(5100000),
+		RSI14:       ptr(45.0),
+		BBUpper:     ptr(5100000),
+		BBMiddle:    ptr(5000000),
+		BBLower:     ptr(4900000),
+		VolumeRatio: ptr(1.8),
+		Histogram:   ptr(-5.0),
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 4800000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionSell {
+		t.Fatalf("expected SELL for downward breakout, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_Breakout_HoldWhenMACDAgainst(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceBreakout,
+			Reasoning: "BB breakout upward",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5000000),
+		SMA50:       ptr(4900000),
+		RSI14:       ptr(55.0),
+		BBUpper:     ptr(5100000),
+		BBMiddle:    ptr(5000000),
+		BBLower:     ptr(4900000),
+		VolumeRatio: ptr(2.0),
+		Histogram:   ptr(-5.0), // MACD against buy
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5200000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD when MACD against breakout buy, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_Breakout_MissingBBData_Hold(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceBreakout,
+			Reasoning: "BB breakout",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(5000000),
+		SMA50:    ptr(4900000),
+		RSI14:    ptr(55.0),
+		// BB fields nil
+	}
+	signal, err := engine.Evaluate(context.Background(), indicators, 5200000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD when BB data missing for breakout, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_LowVolume_FiltersSignal(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID:    7,
+		SMA20:       ptr(5100000),
+		SMA50:       ptr(5000000),
+		RSI14:       ptr(55.0),
+		VolumeRatio: ptr(0.2), // Very low volume
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionHold {
+		t.Fatalf("expected HOLD for low volume, got %s", signal.Action)
+	}
+}
+
+func TestStrategyEngine_LowVolume_NilRatio_NoFilter(t *testing.T) {
+	resolver := &mockStanceResolver{
+		result: StanceResult{
+			Stance:    entity.MarketStanceTrendFollow,
+			Reasoning: "uptrend",
+			Source:    "rule-based",
+			UpdatedAt: time.Now().Unix(),
+		},
+	}
+	engine := NewStrategyEngine(resolver)
+
+	indicators := entity.IndicatorSet{
+		SymbolID: 7,
+		SMA20:    ptr(5100000),
+		SMA50:    ptr(5000000),
+		RSI14:    ptr(55.0),
+		// VolumeRatio nil → フィルターは適用されない
+	}
+	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if signal.Action != entity.SignalActionBuy {
+		t.Fatalf("expected BUY when VolumeRatio is nil (no filter), got %s", signal.Action)
 	}
 }
