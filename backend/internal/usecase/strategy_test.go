@@ -12,11 +12,11 @@ type mockStanceResolver struct {
 	result StanceResult
 }
 
-func (m *mockStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult {
+func (m *mockStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) StanceResult {
 	return m.result
 }
 
-func (m *mockStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
+func (m *mockStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult {
 	return m.result
 }
 

@@ -22,8 +22,8 @@ type StanceResult struct {
 
 // StanceResolver はマーケットスタンスを解決するインターフェース。
 type StanceResolver interface {
-	Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult
-	ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult
+	Resolve(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) StanceResult
+	ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult
 }
 
 type stanceOverride struct {
@@ -90,18 +90,18 @@ func NewRuleBasedStanceResolverWithOptions(repo repository.StanceOverrideReposit
 
 // Resolve はインジケータに基づいてマーケットスタンスを解決する。
 // オーバーライドが有効な場合はそれを優先する。
-func (r *RuleBasedStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet) StanceResult {
-	return r.ResolveAt(ctx, indicators, time.Now())
+func (r *RuleBasedStanceResolver) Resolve(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) StanceResult {
+	return r.ResolveAt(ctx, indicators, lastPrice, time.Now())
 }
 
 // ResolveAt resolves stance at caller-supplied time (for deterministic backtests).
-func (r *RuleBasedStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
+func (r *RuleBasedStanceResolver) ResolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult {
 	if now.IsZero() {
 		now = time.Now()
 	}
 
 	if r.options.DisableOverride {
-		return r.applyRules(indicators, now)
+		return r.applyRules(indicators, lastPrice, now)
 	}
 
 	// オーバーライドチェック
@@ -125,10 +125,10 @@ func (r *RuleBasedStanceResolver) ResolveAt(ctx context.Context, indicators enti
 	}
 
 	// ルールベース判定
-	return r.applyRules(indicators, now)
+	return r.applyRules(indicators, lastPrice, now)
 }
 
-func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, now time.Time) StanceResult {
+func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult {
 	// 1. インジケータ不足チェック
 	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
 		return StanceResult{
@@ -143,7 +143,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, now
 	sma50 := *indicators.SMA50
 	rsi := *indicators.RSI14
 
-	// 2. RSI極端値 → CONTRARIAN
+	// 2. RSI極端値 → CONTRARIAN（最優先）
 	if rsi < 25 {
 		return StanceResult{
 			Stance:    entity.MarketStanceContrarian,
@@ -161,9 +161,39 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, now
 		}
 	}
 
-	// 3. SMA収束 → HOLD
+	// 3. RecentSqueeze → BREAKOUT or HOLD
+	if indicators.RecentSqueeze != nil && *indicators.RecentSqueeze {
+		if indicators.BBUpper != nil && indicators.BBLower != nil && indicators.VolumeRatio != nil {
+			volRatio := *indicators.VolumeRatio
+			if lastPrice > *indicators.BBUpper && volRatio >= 1.5 {
+				return StanceResult{
+					Stance:    entity.MarketStanceBreakout,
+					Reasoning: "BB breakout upward with volume confirmation",
+					Source:    "rule-based",
+					UpdatedAt: now.Unix(),
+				}
+			}
+			if lastPrice < *indicators.BBLower && volRatio >= 1.5 {
+				return StanceResult{
+					Stance:    entity.MarketStanceBreakout,
+					Reasoning: "BB breakout downward with volume confirmation",
+					Source:    "rule-based",
+					UpdatedAt: now.Unix(),
+				}
+			}
+		}
+		// スクイーズ中だがブレイクアウト未発生
+		return StanceResult{
+			Stance:    entity.MarketStanceHold,
+			Reasoning: "BB squeeze without breakout",
+			Source:    "rule-based",
+			UpdatedAt: now.Unix(),
+		}
+	}
+
+	// 4. SMA収束 → HOLD
 	divergence := math.Abs(sma20-sma50) / sma50
-	if divergence < 0.001 { // 0.1%
+	if divergence < 0.001 {
 		return StanceResult{
 			Stance:    entity.MarketStanceHold,
 			Reasoning: "SMA converged",
@@ -172,7 +202,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, now
 		}
 	}
 
-	// 4. それ以外 → TREND_FOLLOW
+	// 5. それ以外 → TREND_FOLLOW
 	reasoning := "SMA uptrend"
 	if sma20 < sma50 {
 		reasoning = "SMA downtrend"

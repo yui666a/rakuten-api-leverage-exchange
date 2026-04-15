@@ -41,7 +41,7 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 		return signal, err
 	}
 
-	result := e.resolveAt(ctx, indicators, now)
+	result := e.resolveAt(ctx, indicators, lastPrice, now)
 
 	// Volatility filter: squeeze detection for trend-follow signals
 	// BBBandwidth < 0.02 (2%) indicates very low volatility / consolidation
@@ -121,7 +121,7 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 		}, nil
 	}
 
-	result := e.resolveAt(ctx, indicators, now)
+	result := e.resolveAt(ctx, indicators, lastPrice, now)
 
 	sma20 := *indicators.SMA20
 	sma50 := *indicators.SMA50
@@ -142,8 +142,8 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 	}
 }
 
-func (e *StrategyEngine) resolveAt(ctx context.Context, indicators entity.IndicatorSet, now time.Time) StanceResult {
-	return e.stanceResolver.ResolveAt(ctx, indicators, now)
+func (e *StrategyEngine) resolveAt(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult {
+	return e.stanceResolver.ResolveAt(ctx, indicators, lastPrice, now)
 }
 
 func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64, nowUnix int64) *entity.Signal {

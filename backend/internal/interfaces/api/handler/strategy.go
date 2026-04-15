@@ -19,7 +19,7 @@ func NewStrategyHandler(stanceResolver *usecase.RuleBasedStanceResolver) *Strate
 
 func (h *StrategyHandler) GetStrategy(c *gin.Context) {
 	indicators := entity.IndicatorSet{}
-	result := h.stanceResolver.Resolve(c.Request.Context(), indicators)
+	result := h.stanceResolver.Resolve(c.Request.Context(), indicators, 0)
 	c.JSON(http.StatusOK, result)
 }
 
