@@ -209,5 +209,44 @@ func RunMigrations(db *sql.DB) error {
 		return fmt.Errorf("create idx_client_orders_status: %w", err)
 	}
 
+	// PDCA メタデータを backtest_results に追加する。
+	// `parent_result_id` はルートノード=NULL のため、`ALTER TABLE ADD COLUMN ... REFERENCES` を
+	// 既存行に対して冪等に実行できる (nullable かつ default NULL)。
+	// `ON DELETE SET NULL` で親削除時に子を再ルート化し、履歴を保持する。
+	backtestPDCAColumns := []struct {
+		name string
+		def  string
+	}{
+		{"profile_name", "profile_name TEXT NOT NULL DEFAULT ''"},
+		{"pdca_cycle_id", "pdca_cycle_id TEXT NOT NULL DEFAULT ''"},
+		{"hypothesis", "hypothesis TEXT NOT NULL DEFAULT ''"},
+		{"parent_result_id", "parent_result_id TEXT DEFAULT NULL REFERENCES backtest_results(id) ON DELETE SET NULL"},
+		{"biweekly_win_rate", "biweekly_win_rate REAL NOT NULL DEFAULT 0"},
+	}
+	for _, col := range backtestPDCAColumns {
+		if err := addColumnIfNotExists(db, "backtest_results", col.name, col.def); err != nil {
+			return fmt.Errorf("backtest_results alter: %w", err)
+		}
+	}
+
+	// PDCA 関連カラムの検索を高速化する部分インデックス。NULL/空文字列を除外して
+	// インデックスサイズを抑える (大半の既存行は空文字列/NULL)。
+	pdcaIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
+			ON backtest_results(parent_result_id)
+			WHERE parent_result_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_results_profile
+			ON backtest_results(profile_name)
+			WHERE profile_name != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_results_pdca_cycle
+			ON backtest_results(pdca_cycle_id)
+			WHERE pdca_cycle_id != ''`,
+	}
+	for _, stmt := range pdcaIndexes {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create pdca index: %w", err)
+		}
+	}
+
 	return nil
 }
