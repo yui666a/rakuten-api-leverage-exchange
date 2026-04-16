@@ -143,7 +143,7 @@ type StrategyProfile struct {
     Indicators  IndicatorConfig     `json:"indicators"`
     StanceRules StanceRulesConfig   `json:"stance_rules"`
     SignalRules SignalRulesConfig    `json:"signal_rules"`
-    Risk        StrategyRiskConfig  `json:"risk"`
+    Risk        StrategyRiskConfig  `json:"strategy_risk"`
     HTFFilter   HTFFilterConfig     `json:"htf_filter"`
 }
 
@@ -199,6 +199,14 @@ type HTFFilterConfig struct {
     BlockCounterTrend bool    `json:"block_counter_trend"`
     AlignmentBoost    float64 `json:"alignment_boost"`
 }
+
+type StrategyRiskConfig struct {
+    StopLossPercent      float64 `json:"stop_loss_percent"`
+    TakeProfitPercent    float64 `json:"take_profit_percent"`
+    StopLossATRMultiplier float64 `json:"stop_loss_atr_multiplier"`
+    MaxPositionAmount    float64 `json:"max_position_amount"`
+    MaxDailyLoss         float64 `json:"max_daily_loss"`
+}
 ```
 
 ---
@@ -222,10 +230,11 @@ Do:
   3. go run ./cmd/backtest run --profile profiles/experiment_... を実行
 
 Check:
-  1. 結果を前回と比較
-     - MaxDD ≤ 20% (必須制約)
-     - 2週間区間勝率 → 80%目標
-     - Total Return 改善
+  1. 結果を前回と比較 (目的関数で評価)
+     - [必須制約] MaxDD ≤ 20% — 超過した場合は即 reject
+     - [主目的] Total Return 最大化
+     - [副目的] 2週間スライド勝率 → 80%目標
+     - [参考] Sharpe Ratio, ProfitFactor
 
 Act:
   1. 改善 → 採用、次の仮説へ
@@ -288,13 +297,38 @@ docs/pdca/
 
 ### 5.1 DBスキーマ追加
 
-既存の `backtest_results` テーブルに以下のカラムを追加:
+既存の `backtest_results` テーブルに以下のカラムを追加する。
+現行の `addColumnIfNotExists` 補助関数（`database/migrations.go`）を使い、冪等に実行する。
+
+```go
+// migrations.go の RunMigrations 末尾に追加
+backtestPDCAColumns := []struct {
+    name string
+    def  string
+}{
+    {"profile_name", "profile_name TEXT NOT NULL DEFAULT ''"},
+    {"pdca_cycle_id", "pdca_cycle_id TEXT NOT NULL DEFAULT ''"},
+    {"hypothesis", "hypothesis TEXT NOT NULL DEFAULT ''"},
+    {"parent_result_id", "parent_result_id TEXT NOT NULL DEFAULT ''"},
+}
+for _, col := range backtestPDCAColumns {
+    if err := addColumnIfNotExists(db, "backtest_results", col.name, col.def); err != nil {
+        return fmt.Errorf("backtest_results alter: %w", err)
+    }
+}
+```
+
+`parent_result_id` にはインデックスを作成し、系譜追跡のクエリ性能を確保する。
+SQLite では FK 制約の実効性が限定的なため、アプリケーション層で参照整合性を検証する。
 
 ```sql
-ALTER TABLE backtest_results ADD COLUMN profile_name TEXT DEFAULT '';
-ALTER TABLE backtest_results ADD COLUMN pdca_cycle_id TEXT DEFAULT '';
-ALTER TABLE backtest_results ADD COLUMN hypothesis TEXT DEFAULT '';
-ALTER TABLE backtest_results ADD COLUMN parent_result_id TEXT DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
+    ON backtest_results(parent_result_id)
+    WHERE parent_result_id != '';
+
+CREATE INDEX IF NOT EXISTS idx_backtest_results_profile
+    ON backtest_results(profile_name)
+    WHERE profile_name != '';
 ```
 
 ### 5.2 API レスポンス拡張
@@ -311,11 +345,32 @@ type BacktestResult struct {
 }
 ```
 
-### 5.3 フロントエンド一覧表示
+### 5.3 一覧 API のフィルタ拡張
+
+既存の `BacktestResultFilter` (現在は `Limit`/`Offset` のみ) にフィルタパラメータを追加する。
+
+```go
+// domain/repository/backtest_result.go
+type BacktestResultFilter struct {
+    Limit          int
+    Offset         int
+    ProfileName    string // 完全一致フィルタ (空文字 = フィルタなし)
+    PDCACycleID    string // 完全一致フィルタ
+    ParentResultID string // 系譜追跡用
+}
+```
+
+```
+GET /api/v1/backtest/results?limit=20&offset=0&profileName=ltc_aggressive_v3&pdcaCycleId=2026-04-16_cycle01
+```
+
+Repository 実装では追加カラムを `WHERE` 句に動的追加する。
+
+### 5.4 フロントエンド一覧表示
 
 バックテスト一覧にプロファイル名・PDCAサイクル番号を表示:
 
-- プロファイル名でフィルタ可能
+- プロファイル名でフィルタ可能 (ドロップダウン)
 - PDCAサイクルの結果は改善チェーン (parent_result_id) で系譜を辿れる
 - 実験結果と手動実行を視覚的に区別 (アイコン or バッジ)
 
@@ -344,11 +399,70 @@ PDCA Level 3 で新しいインジケーターを追加する際の変更箇所:
 
 ---
 
-## 7. CLI 拡張
+## 7. 評価関数 (目的関数)
 
-### 7.1 `--profile` フラグ追加
+### 7.1 PDCA用複合スコア
+
+現行の Optimizer は Sharpe Ratio 単一でソートしているが、PDCA では以下の複合評価を適用する。
+
+```go
+// PDCAの評価ロジック (Claude Code セッション内で判定)
+// 実装としては reporter.go の BacktestSummary に 2週間勝率フィールドを追加し、
+// CLI出力に含める。最終判定は Claude Code が行う。
+
+type PDCAEvaluation struct {
+    // 必須制約 — 1つでも違反したら reject
+    MaxDDConstraint     float64 // ≤ 0.20 (20%)
+
+    // 主目的 — 高いほど良い
+    TotalReturn         float64
+
+    // 副目的 — 高いほど良い (目標 0.80)
+    BiweeklyWinRate     float64 // 2週間スライドウィンドウ勝率の平均
+
+    // 参考指標
+    SharpeRatio         float64
+    ProfitFactor        float64
+    WinRate             float64
+}
+```
+
+### 7.2 2週間スライド勝率の計算
+
+バックテスト期間をタイムスタンプベースで2週間 (14日) のウィンドウに分割し、1日ずつスライドする。
+各ウィンドウ内のクローズ済みトレードから勝率を算出し、全ウィンドウの平均を取る。
+トレード数が0のウィンドウはスキップする。
+
+```
+期間: 2024-01-01 ～ 2024-12-31
+Window 1: 01/01 - 01/14 → 勝率 75%
+Window 2: 01/02 - 01/15 → 勝率 80%
+...
+BiweeklyWinRate = avg(全ウィンドウ)
+```
+
+### 7.3 BacktestSummary への追加フィールド
+
+```go
+type BacktestSummary struct {
+    // ... 既存フィールド
+    BiweeklyWinRate float64 // 2週間スライド勝率の平均
+}
+```
+
+---
+
+## 8. CLI 拡張
+
+### 8.1 `--profile` フラグ追加
+
+CLI および API でのパスは `backend/` ディレクトリからの相対パスとして解決する。
+これは既存の `--data` フラグ（例: `data/candles_*.csv`）と同じ規約に従う。
 
 ```bash
+# 実行ディレクトリ: backend/
+cd backend
+
 # プロファイル指定でバックテスト実行
 go run ./cmd/backtest run \
   --profile profiles/experiment_2026-04-16_01.json \
@@ -362,7 +476,7 @@ go run ./cmd/backtest optimize \
   ...
 ```
 
-### 7.2 API 拡張
+### 8.2 API 拡張
 
 ```
 POST /api/v1/backtest/run
@@ -374,7 +488,7 @@ POST /api/v1/backtest/run
 
 ---
 
-## 8. スコープ
+## 9. スコープ
 
 ### 今回実装するもの
 
@@ -388,6 +502,7 @@ POST /api/v1/backtest/run
 - バックテスト一覧画面にプロファイル名・PDCAサイクル情報の表示
 - production.json (現行パラメータの外出し)
 - docs/pdca/ 記録フォーマット
+- BiweeklyWinRate (2週間スライド勝率) の算出ロジック + BacktestSummary への追加
 
 ### 今回実装しないもの
 
