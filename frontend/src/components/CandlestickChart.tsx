@@ -10,7 +10,7 @@ type CandlestickChartProps = {
   symbolId: number
 }
 
-type MALineKey = 'sma20' | 'sma50' | 'ema12' | 'ema26'
+type MALineKey = 'sma20' | 'sma50' | 'sma100' | 'sma200' | 'ema12' | 'ema26'
 type BBKey = 'bb1' | 'bb2' | 'bb3'
 type BBLineKey = `${BBKey}Upper` | `${BBKey}Lower`
 type IchimokuLineKey = 'tenkan' | 'kijun' | 'senkouA' | 'senkouB' | 'chikou'
@@ -27,6 +27,8 @@ const INTERVAL_OPTIONS: { value: CandleInterval; label: string }[] = [
 const MA_CONFIG: Record<MALineKey, { label: string; color: string }> = {
   sma20: { label: 'SMA(20)', color: '#f5a623' },
   sma50: { label: 'SMA(50)', color: '#e74c8b' },
+  sma100: { label: 'SMA(100)', color: '#26a69a' },
+  sma200: { label: 'SMA(200)', color: '#ef5350' },
   ema12: { label: 'EMA(12)', color: '#00bfff' },
   ema26: { label: 'EMA(26)', color: '#a78bfa' },
 }
@@ -404,6 +406,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const [visible, setVisible] = useState<Record<MALineKey, boolean>>({
     sma20: true,
     sma50: true,
+    sma100: false,
+    sma200: false,
     ema12: false,
     ema26: false,
   })
@@ -531,6 +535,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       switch (key) {
         case 'sma20': return calcSMA(closes, 20)
         case 'sma50': return calcSMA(closes, 50)
+        case 'sma100': return calcSMA(closes, 100)
+        case 'sma200': return calcSMA(closes, 200)
         case 'ema12': return calcEMA(closes, 12)
         case 'ema26': return calcEMA(closes, 26)
       }
