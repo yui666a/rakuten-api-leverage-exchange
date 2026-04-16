@@ -33,12 +33,63 @@ type stanceOverride struct {
 	ExpiresAt time.Time
 }
 
-// RuleBasedStanceResolverOptions controls override behavior.
+// RuleBasedStanceResolverOptions controls override behavior and the
+// rule-based classification thresholds. Zero-valued numeric thresholds are
+// replaced with the legacy defaults by applyStanceResolverDefaults so
+// existing callers (which construct the options without thresholds) keep
+// producing bit-identical stances.
 type RuleBasedStanceResolverOptions struct {
 	// DisableOverride forces resolver to always use rule-based result.
 	DisableOverride bool
 	// DisablePersistence prevents loading/saving/deleting override records.
 	DisablePersistence bool
+
+	// Rule thresholds (see applyStanceResolverDefaults for defaults).
+	RSIOversold             float64 // RSI below which → CONTRARIAN; default 25
+	RSIOverbought           float64 // RSI above which → CONTRARIAN; default 75
+	SMAConvergenceThreshold float64 // |sma20-sma50|/sma50 below which → HOLD; default 0.001
+	BreakoutVolumeRatio     float64 // volume ratio for BREAKOUT stance; default 1.5
+
+	// defaulted tracks whether applyStanceResolverDefaults has already been
+	// called so we don't re-apply defaults to explicitly-zero inputs.
+	defaulted bool
+}
+
+// defaultStanceResolverOptions returns the legacy hard-coded configuration
+// preserved exactly as it was before profile-driven overrides were threaded
+// through the resolver.
+func defaultStanceResolverOptions() RuleBasedStanceResolverOptions {
+	return RuleBasedStanceResolverOptions{
+		RSIOversold:             25,
+		RSIOverbought:           75,
+		SMAConvergenceThreshold: 0.001,
+		BreakoutVolumeRatio:     1.5,
+		defaulted:               true,
+	}
+}
+
+// applyStanceResolverDefaults fills zero-valued numeric fields with legacy
+// constants, leaving the DisableOverride / DisablePersistence booleans
+// untouched (those are genuine boolean flags, not thresholds).
+func (o RuleBasedStanceResolverOptions) applyStanceResolverDefaults() RuleBasedStanceResolverOptions {
+	if o.defaulted {
+		return o
+	}
+	d := defaultStanceResolverOptions()
+	if o.RSIOversold == 0 {
+		o.RSIOversold = d.RSIOversold
+	}
+	if o.RSIOverbought == 0 {
+		o.RSIOverbought = d.RSIOverbought
+	}
+	if o.SMAConvergenceThreshold == 0 {
+		o.SMAConvergenceThreshold = d.SMAConvergenceThreshold
+	}
+	if o.BreakoutVolumeRatio == 0 {
+		o.BreakoutVolumeRatio = d.BreakoutVolumeRatio
+	}
+	o.defaulted = true
+	return o
 }
 
 // RuleBasedStanceResolver はルールベースでマーケットスタンスを解決する。
@@ -56,6 +107,9 @@ func NewRuleBasedStanceResolver(repo repository.StanceOverrideRepository) *RuleB
 }
 
 // NewRuleBasedStanceResolverWithOptions creates resolver with explicit options.
+// Zero-valued numeric threshold fields are backfilled with legacy defaults so
+// existing callers that only set DisableOverride / DisablePersistence continue
+// to work unchanged.
 func NewRuleBasedStanceResolverWithOptions(repo repository.StanceOverrideRepository, options RuleBasedStanceResolverOptions) *RuleBasedStanceResolver {
 	if options.DisablePersistence {
 		repo = nil
@@ -63,7 +117,7 @@ func NewRuleBasedStanceResolverWithOptions(repo repository.StanceOverrideReposit
 
 	r := &RuleBasedStanceResolver{
 		repo:    repo,
-		options: options,
+		options: options.applyStanceResolverDefaults(),
 	}
 	if repo != nil && !options.DisableOverride {
 		record, err := repo.Load(context.Background())
@@ -144,7 +198,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 	rsi := *indicators.RSI14
 
 	// 2. RSI極端値 → CONTRARIAN（最優先）
-	if rsi < 25 {
+	if rsi < r.options.RSIOversold {
 		return StanceResult{
 			Stance:    entity.MarketStanceContrarian,
 			Reasoning: "RSI oversold",
@@ -152,7 +206,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 			UpdatedAt: now.Unix(),
 		}
 	}
-	if rsi > 75 {
+	if rsi > r.options.RSIOverbought {
 		return StanceResult{
 			Stance:    entity.MarketStanceContrarian,
 			Reasoning: "RSI overbought",
@@ -165,7 +219,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 	if indicators.RecentSqueeze != nil && *indicators.RecentSqueeze {
 		if indicators.BBUpper != nil && indicators.BBLower != nil && indicators.VolumeRatio != nil {
 			volRatio := *indicators.VolumeRatio
-			if lastPrice > *indicators.BBUpper && volRatio >= 1.5 {
+			if lastPrice > *indicators.BBUpper && volRatio >= r.options.BreakoutVolumeRatio {
 				return StanceResult{
 					Stance:    entity.MarketStanceBreakout,
 					Reasoning: "BB breakout upward with volume confirmation",
@@ -173,7 +227,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 					UpdatedAt: now.Unix(),
 				}
 			}
-			if lastPrice < *indicators.BBLower && volRatio >= 1.5 {
+			if lastPrice < *indicators.BBLower && volRatio >= r.options.BreakoutVolumeRatio {
 				return StanceResult{
 					Stance:    entity.MarketStanceBreakout,
 					Reasoning: "BB breakout downward with volume confirmation",
@@ -193,7 +247,7 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 
 	// 4. SMA収束 → HOLD
 	divergence := math.Abs(sma20-sma50) / sma50
-	if divergence < 0.001 {
+	if divergence < r.options.SMAConvergenceThreshold {
 		return StanceResult{
 			Stance:    entity.MarketStanceHold,
 			Reasoning: "SMA converged",

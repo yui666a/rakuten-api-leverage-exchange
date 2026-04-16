@@ -8,14 +8,126 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
 
+// StrategyEngineOptions parameterizes the thresholds and feature toggles used
+// by StrategyEngine. Zero values are replaced with production defaults by
+// applyDefaults, so callers can construct a partially-populated options struct
+// and still get sensible behaviour — but production code paths that create
+// StrategyEngine via NewStrategyEngine inherit every default implicitly.
+//
+// Boolean feature toggles (EnableTrendFollow / EnableContrarian /
+// EnableBreakout / HTFEnabled / HTFBlockCounterTrend / RequireMACDConfirm /
+// RequireEMACross / BreakoutRequireMACDConfirm) default to true because the
+// current hard-coded StrategyEngine behaviour applies each of those gates.
+// They are expressed as plain bools rather than *bool because the defaulting
+// code explicitly flips them to true when they arrive as false AND the struct
+// is otherwise empty — see applyDefaults.
+type StrategyEngineOptions struct {
+	// Trend-follow thresholds
+	RSIBuyMax          float64 // RSI ceiling for TREND_FOLLOW buy; default 70
+	RSISellMin         float64 // RSI floor for TREND_FOLLOW sell; default 30
+	RequireMACDConfirm bool    // if true, histogram sign gates trend-follow signals; default true
+	RequireEMACross    bool    // if true, use EMA-based cross with SMA alignment; default true
+
+	// Contrarian thresholds
+	ContrarianRSIEntry float64 // RSI below which contrarian BUYs; default 30
+	ContrarianRSIExit  float64 // RSI above which contrarian SELLs; default 70
+	MACDHistogramLimit float64 // |histogram| above which contrarian is suppressed; default 10
+
+	// Breakout thresholds
+	BreakoutVolumeRatio        float64 // volume ratio required for breakout; default 1.5
+	BreakoutRequireMACDConfirm bool    // if true, histogram sign gates breakout signals; default true
+
+	// HTF filter
+	HTFEnabled           bool    // if false, skip the HTF filter entirely; default true
+	HTFBlockCounterTrend bool    // if true, block signals against higher-TF trend; default true
+	HTFAlignmentBoost    float64 // confidence boost when HTF aligns; default 0.1
+
+	// Stance-level feature toggles
+	EnableTrendFollow bool // if false, TREND_FOLLOW stance yields HOLD; default true
+	EnableContrarian  bool // if false, CONTRARIAN stance yields HOLD; default true
+	EnableBreakout    bool // if false, BREAKOUT stance yields HOLD; default true
+
+	// defaulted tracks whether applyDefaults has already been called so we
+	// don't flip booleans to true twice (e.g. on a caller that explicitly
+	// wants them false).
+	defaulted bool
+}
+
+// defaultStrategyEngineOptions returns the legacy hard-coded configuration
+// preserved exactly as it was before profile-driven overrides were threaded
+// through the engine.
+func defaultStrategyEngineOptions() StrategyEngineOptions {
+	return StrategyEngineOptions{
+		RSIBuyMax:                  70,
+		RSISellMin:                 30,
+		RequireMACDConfirm:         true,
+		RequireEMACross:            true,
+		ContrarianRSIEntry:         30,
+		ContrarianRSIExit:          70,
+		MACDHistogramLimit:         10,
+		BreakoutVolumeRatio:        1.5,
+		BreakoutRequireMACDConfirm: true,
+		HTFEnabled:                 true,
+		HTFBlockCounterTrend:       true,
+		HTFAlignmentBoost:          0.1,
+		EnableTrendFollow:          true,
+		EnableContrarian:           true,
+		EnableBreakout:             true,
+		defaulted:                  true,
+	}
+}
+
+// applyDefaults fills zero-valued numeric fields with legacy constants. It
+// does NOT touch boolean toggles: callers that explicitly want a gate
+// disabled must pass the bool they want, and callers that want defaults
+// should use defaultStrategyEngineOptions() as the starting point.
+func (o StrategyEngineOptions) applyDefaults() StrategyEngineOptions {
+	if o.defaulted {
+		return o
+	}
+	d := defaultStrategyEngineOptions()
+	if o.RSIBuyMax == 0 {
+		o.RSIBuyMax = d.RSIBuyMax
+	}
+	if o.RSISellMin == 0 {
+		o.RSISellMin = d.RSISellMin
+	}
+	if o.ContrarianRSIEntry == 0 {
+		o.ContrarianRSIEntry = d.ContrarianRSIEntry
+	}
+	if o.ContrarianRSIExit == 0 {
+		o.ContrarianRSIExit = d.ContrarianRSIExit
+	}
+	if o.MACDHistogramLimit == 0 {
+		o.MACDHistogramLimit = d.MACDHistogramLimit
+	}
+	if o.BreakoutVolumeRatio == 0 {
+		o.BreakoutVolumeRatio = d.BreakoutVolumeRatio
+	}
+	if o.HTFAlignmentBoost == 0 {
+		o.HTFAlignmentBoost = d.HTFAlignmentBoost
+	}
+	o.defaulted = true
+	return o
+}
+
 // StrategyEngine はテクニカル指標とスタンスリゾルバの戦略方針を統合して売買シグナルを生成する。
 type StrategyEngine struct {
 	stanceResolver StanceResolver
+	options        StrategyEngineOptions
 }
 
 func NewStrategyEngine(stanceResolver StanceResolver) *StrategyEngine {
+	return NewStrategyEngineWithOptions(stanceResolver, defaultStrategyEngineOptions())
+}
+
+// NewStrategyEngineWithOptions builds a StrategyEngine driven by explicit
+// options. Zero-valued numeric fields are backfilled with legacy defaults;
+// boolean toggles are taken as-is (see applyDefaults for the split).
+func NewStrategyEngineWithOptions(stanceResolver StanceResolver, options StrategyEngineOptions) *StrategyEngine {
 	return &StrategyEngine{
 		stanceResolver: stanceResolver,
+		options:        options.applyDefaults(),
 	}
 }
 
@@ -62,7 +174,7 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 		}
 	}
 
-	if higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
+	if !e.options.HTFEnabled || higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
 		return signal, nil
 	}
 
@@ -73,25 +185,33 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 
 	higherUptrend := *higherTF.SMA20 > *higherTF.SMA50
 
-	if signal.Action == entity.SignalActionBuy && !higherUptrend {
-		return &entity.Signal{
-			SymbolID:  indicators.SymbolID,
-			Action:    entity.SignalActionHold,
-			Reason:    "MTF filter: higher timeframe downtrend blocks buy",
-			Timestamp: signal.Timestamp,
-		}, nil
-	}
-	if signal.Action == entity.SignalActionSell && higherUptrend {
-		return &entity.Signal{
-			SymbolID:  indicators.SymbolID,
-			Action:    entity.SignalActionHold,
-			Reason:    "MTF filter: higher timeframe uptrend blocks sell",
-			Timestamp: signal.Timestamp,
-		}, nil
+	if e.options.HTFBlockCounterTrend {
+		if signal.Action == entity.SignalActionBuy && !higherUptrend {
+			return &entity.Signal{
+				SymbolID:  indicators.SymbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "MTF filter: higher timeframe downtrend blocks buy",
+				Timestamp: signal.Timestamp,
+			}, nil
+		}
+		if signal.Action == entity.SignalActionSell && higherUptrend {
+			return &entity.Signal{
+				SymbolID:  indicators.SymbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "MTF filter: higher timeframe uptrend blocks sell",
+				Timestamp: signal.Timestamp,
+			}, nil
+		}
 	}
 
-	// Signal aligns with higher TF: boost confidence by 10% (capped at 1.0)
-	signal.Confidence = math.Min(signal.Confidence+0.1, 1.0)
+	// Signal aligns with higher TF: boost confidence by HTFAlignmentBoost
+	// (capped at 1.0). Boost only applies when the signal direction matches
+	// the higher-timeframe trend direction.
+	aligned := (signal.Action == entity.SignalActionBuy && higherUptrend) ||
+		(signal.Action == entity.SignalActionSell && !higherUptrend)
+	if aligned {
+		signal.Confidence = math.Min(signal.Confidence+e.options.HTFAlignmentBoost, 1.0)
+	}
 	return signal, nil
 }
 
@@ -126,10 +246,34 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 
 	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
+		if !e.options.EnableTrendFollow {
+			return &entity.Signal{
+				SymbolID:  indicators.SymbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "trend follow: disabled by profile",
+				Timestamp: nowUnix,
+			}, nil
+		}
 		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceContrarian:
+		if !e.options.EnableContrarian {
+			return &entity.Signal{
+				SymbolID:  indicators.SymbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "contrarian: disabled by profile",
+				Timestamp: nowUnix,
+			}, nil
+		}
 		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceBreakout:
+		if !e.options.EnableBreakout {
+			return &entity.Signal{
+				SymbolID:  indicators.SymbolID,
+				Action:    entity.SignalActionHold,
+				Reason:    "breakout: disabled by profile",
+				Timestamp: nowUnix,
+			}, nil
+		}
 		return e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix), nil
 	default:
 		return &entity.Signal{
@@ -147,11 +291,13 @@ func (e *StrategyEngine) resolveAt(ctx context.Context, indicators entity.Indica
 
 func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64, nowUnix int64) *entity.Signal {
 
-	// Primary signal: EMA12/26 crossover (faster than SMA cross)
-	// Fallback to SMA20/50 when EMA is unavailable
+	// Primary signal: EMA12/26 crossover (faster than SMA cross), controlled
+	// by the RequireEMACross option. When disabled, we skip EMA entirely and
+	// only look at SMA20/50. When enabled but EMA is unavailable, we fall
+	// back to SMA — matches the original behaviour.
 	var fastAboveSlow bool
 	var fastBelowSlow bool
-	useEMA := ema12 != nil && ema26 != nil
+	useEMA := e.options.RequireEMACross && ema12 != nil && ema26 != nil
 
 	if useEMA {
 		fastAboveSlow = *ema12 > *ema26
@@ -174,9 +320,9 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 		}
 	}
 
-	if fastAboveSlow && rsi < 70 {
+	if fastAboveSlow && rsi < e.options.RSIBuyMax {
 		// MACD histogram confirmation: skip buy if momentum is negative
-		if histogram != nil && *histogram < 0 {
+		if e.options.RequireMACDConfirm && histogram != nil && *histogram < 0 {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
@@ -199,9 +345,9 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 			Timestamp:  nowUnix,
 		}
 	}
-	if fastBelowSlow && rsi > 30 {
+	if fastBelowSlow && rsi > e.options.RSISellMin {
 		// MACD histogram confirmation: skip sell if momentum is positive
-		if histogram != nil && *histogram > 0 {
+		if e.options.RequireMACDConfirm && histogram != nil && *histogram > 0 {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
@@ -264,9 +410,9 @@ func trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *f
 
 func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogram *float64, nowUnix int64) *entity.Signal {
 
-	if rsi < 30 {
+	if rsi < e.options.ContrarianRSIEntry {
 		// Skip contrarian buy if MACD momentum is still strongly negative
-		if histogram != nil && *histogram < -10 {
+		if histogram != nil && *histogram < -e.options.MACDHistogramLimit {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
@@ -286,9 +432,9 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 			Timestamp:  nowUnix,
 		}
 	}
-	if rsi > 70 {
+	if rsi > e.options.ContrarianRSIExit {
 		// Skip contrarian sell if MACD momentum is still strongly positive
-		if histogram != nil && *histogram > 10 {
+		if histogram != nil && *histogram > e.options.MACDHistogramLimit {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
@@ -347,9 +493,9 @@ func (e *StrategyEngine) evaluateBreakout(symbolID int64, lastPrice float64, bbU
 		}
 	}
 
-	if lastPrice > *bbUpper && *volumeRatio >= 1.5 {
+	if lastPrice > *bbUpper && *volumeRatio >= e.options.BreakoutVolumeRatio {
 		// MACD histogram confirmation
-		if histogram != nil && *histogram < 0 {
+		if e.options.BreakoutRequireMACDConfirm && histogram != nil && *histogram < 0 {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
@@ -366,8 +512,8 @@ func (e *StrategyEngine) evaluateBreakout(symbolID int64, lastPrice float64, bbU
 		}
 	}
 
-	if lastPrice < *bbLower && *volumeRatio >= 1.5 {
-		if histogram != nil && *histogram > 0 {
+	if lastPrice < *bbLower && *volumeRatio >= e.options.BreakoutVolumeRatio {
+		if e.options.BreakoutRequireMACDConfirm && histogram != nil && *histogram > 0 {
 			return &entity.Signal{
 				SymbolID:  symbolID,
 				Action:    entity.SignalActionHold,
