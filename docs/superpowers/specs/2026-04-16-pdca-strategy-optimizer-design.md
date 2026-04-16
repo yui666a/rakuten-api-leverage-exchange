@@ -227,7 +227,13 @@ Plan:
 Do:
   1. profiles/experiment_*.json を生成
   2. (Level 3の場合) indicator/*.go を追加・修正
-  3. go run ./cmd/backtest run --profile profiles/experiment_... を実行
+  3. バックテスト実行:
+     go run ./cmd/backtest run \
+       --profile experiment_2026-04-16_01 \
+       --data data/candles_LTC_JPY_PT15M.csv \
+       --data-htf data/candles_LTC_JPY_PT1H.csv
+     ※ --data/--data-htf は常に必須。プロファイルは戦略パラメータのみを持ち、
+       データソースと期間はCLI引数で指定する（再現性のためPDCA記録にも残す）。
 
 Check:
   1. 結果を前回と比較 (目的関数で評価)
@@ -321,7 +327,14 @@ for _, col := range backtestPDCAColumns {
 
 `parent_result_id` にはインデックスと自己参照 FK 制約を設定する。
 本プロジェクトは `PRAGMA foreign_keys=ON`（`sqlite.go:31`）を有効化しているため、FK が実効的に機能する。
-ただし `parent_result_id` は空文字（ルートノード）を許容するため、FK は空文字でない場合のみ適用される（SQLite では NULL の FK は無視されるため、空文字ではなく NULL をデフォルトとする）。
+`parent_result_id` のルートノード（親なし）は NULL で表現する。SQLite では NULL の FK 参照はチェックをスキップする。
+
+**`parent_result_id` の整合性ルール（アプリケーション層）:**
+
+- **存在チェック:** 非 NULL の場合、`backtest_results` に該当IDが存在すること（FK で担保）
+- **自己参照禁止:** 自身の result_id と同一の値を拒否する（保存前に検証、HTTP 422 を返す）
+- **別プロファイル参照:** 許可する。異なるプロファイル間の比較チェーンは有効なユースケース（例: production → experiment_v1 の系譜）
+- **エラーレスポンス:** parent_result_id が不正な場合は HTTP 422 Unprocessable Entity を返し、理由を含める
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
@@ -483,22 +496,50 @@ go run ./cmd/backtest run \
   --data data/candles_LTC_JPY_PT15M.csv \
   --data-htf data/candles_LTC_JPY_PT1H.csv
 
-# プロファイル指定で最適化
+# プロファイルをベースに最適化（プロファイルの値を起点としてパラメータ探索）
 go run ./cmd/backtest optimize \
-  --profile production \
+  --profile experiment_2026-04-16_01 \
   --param "stop_loss_percent=1:10:1" \
   ...
 ```
 
 ### 8.2 API 拡張
 
+`POST /api/v1/backtest/run` の完全リクエストスキーマ:
+
+```jsonc
+{
+  // --- データソース (必須: 既存と同じ) ---
+  "data": "data/candles_LTC_JPY_PT15M.csv",       // required
+  "dataHtf": "data/candles_LTC_JPY_PT1H.csv",     // optional
+  "from": "2024-01-01",                             // optional (省略時: CSV先頭)
+  "to": "2024-12-31",                               // optional (省略時: CSV末尾)
+
+  // --- 戦略プロファイル (optional, 新規追加) ---
+  "profileName": "experiment_2026-04-16_01",        // optional: profiles/<name>.json を読み込み
+
+  // --- 個別パラメータ (optional, 既存と同じ) ---
+  // profileName と同時指定された場合、個別パラメータがプロファイルの値をオーバーライドする
+  "initialBalance": 100000,
+  "tradeAmount": 0.1,
+  "stopLossPercent": 5,
+  "takeProfitPercent": 10,
+  "spread": 0.1,
+  "carryingCost": 0.04,
+  "slippage": 0.05,
+  "maxPositionAmount": 100000,
+  "maxDailyLoss": 50000,
+  "maxConsecutiveLosses": 0,
+  "cooldownMinutes": 0,
+
+  // --- PDCAメタデータ (optional, 新規追加) ---
+  "pdcaCycleId": "2026-04-16_cycle01",             // optional
+  "hypothesis": "RSI閾値を15/85に変更",             // optional
+  "parentResultId": "01HXYZ..."                     // optional: 既存結果IDのみ許可
+}
 ```
-POST /api/v1/backtest/run
-  + profileName: string (プロファイル名。profiles/<profileName>.json として解決)
-  + pdcaCycleId: string (PDCAサイクルID、オプション)
-  + hypothesis: string (仮説テキスト、オプション)
-  + parentResultId: string (比較元の結果ID、オプション)
-```
+
+**優先順位ルール:** `profileName` が指定された場合、プロファイルの値をベースとし、同時に指定された個別パラメータでオーバーライドする。`profileName` が未指定の場合は従来通り個別パラメータのみで動作する。
 
 ### 8.3 プロファイルパスのバリデーション
 
