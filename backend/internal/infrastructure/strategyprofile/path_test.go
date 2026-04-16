@@ -9,30 +9,41 @@ import (
 
 func TestResolveProfilePath(t *testing.T) {
 	// A fixed baseDir is fine for these tests — nothing touches the
-	// filesystem, we only check path math.
+	// filesystem, we only check path math. The expected paths are computed
+	// via filepath.Abs because ResolveProfilePath now returns absolute paths
+	// to avoid a CWD-change TOCTOU class of bug.
 	const baseDir = "profiles"
+
+	mustAbs := func(t *testing.T, p string) string {
+		t.Helper()
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			t.Fatalf("filepath.Abs(%q): %v", p, err)
+		}
+		return abs
+	}
 
 	tests := []struct {
 		name       string
 		profile    string
-		wantPath   string // expected cleaned relative path; "" when an error is expected
+		wantPath   string // expected absolute cleaned path; "" when an error is expected
 		wantErr    error  // expected sentinel via errors.Is; nil when no error expected
 		wantErrSub string // substring check when wantErr is nil but an error is expected
 	}{
 		{
 			name:     "valid simple name",
 			profile:  "production",
-			wantPath: filepath.Join("profiles", "production.json"),
+			wantPath: mustAbs(t, filepath.Join("profiles", "production.json")),
 		},
 		{
 			name:     "valid with hyphen and underscore",
 			profile:  "experiment_2026-04-16_01",
-			wantPath: filepath.Join("profiles", "experiment_2026-04-16_01.json"),
+			wantPath: mustAbs(t, filepath.Join("profiles", "experiment_2026-04-16_01.json")),
 		},
 		{
 			name:     "valid alphanumeric mix",
 			profile:  "ltc_aggressive_v3",
-			wantPath: filepath.Join("profiles", "ltc_aggressive_v3.json"),
+			wantPath: mustAbs(t, filepath.Join("profiles", "ltc_aggressive_v3.json")),
 		},
 		{
 			name:    "empty name rejected",
@@ -82,7 +93,6 @@ func TestResolveProfilePath(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got, err := ResolveProfilePath(baseDir, tc.profile)

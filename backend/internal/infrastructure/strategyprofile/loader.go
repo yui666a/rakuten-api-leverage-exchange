@@ -57,6 +57,8 @@ func ParseProfile(r io.Reader) (*entity.StrategyProfile, error) {
 	if err := dec.Decode(&profile); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
+	// Call Validate on the value (Validate has a value receiver, so this
+	// avoids any nil-pointer question entirely).
 	if err := profile.Validate(); err != nil {
 		return nil, fmt.Errorf("validate: %w", err)
 	}

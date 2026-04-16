@@ -116,6 +116,14 @@ func TestStrategyProfile_Validate(t *testing.T) {
 			wantErr: "macd_slow",
 		},
 		{
+			name: "macd_fast >= macd_slow",
+			mutate: func(p *StrategyProfile) {
+				p.Indicators.MACDFast = 26
+				p.Indicators.MACDSlow = 26
+			},
+			wantErr: "must be < macd_slow",
+		},
+		{
 			name:    "macd_signal zero",
 			mutate:  func(p *StrategyProfile) { p.Indicators.MACDSignal = 0 },
 			wantErr: "macd_signal",
@@ -171,7 +179,6 @@ func TestStrategyProfile_Validate(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			p := validProfile()

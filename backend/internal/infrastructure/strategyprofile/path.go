@@ -21,22 +21,27 @@ var profileNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 // that fails the allow-list check.
 var ErrInvalidProfileName = errors.New("invalid profile name")
 
-// ErrPathEscape is returned when the resolved path, after cleaning, lies
-// outside baseDir. This should not happen given the regex check, but is kept
-// as a defence-in-depth guard.
+// ErrPathEscape is a defence-in-depth sentinel retained for future changes;
+// the regex above (profileNamePattern) currently makes it unreachable in
+// practice because every name that could cause the cleaned path to escape
+// baseDir would be rejected earlier as ErrInvalidProfileName. It is kept
+// (and returned) so that if the regex is ever relaxed, callers still have
+// a stable error type to match against.
 var ErrPathEscape = errors.New("resolved path escapes base directory")
 
-// ResolveProfilePath returns the cleaned relative path to
+// ResolveProfilePath returns the cleaned *absolute* path to
 // `<baseDir>/<name>.json`, or an error if `name` is unsafe.
 //
 // Contract:
 //   - `name` must be non-empty and match ^[a-zA-Z0-9_-]+$.
-//   - The returned path is the result of filepath.Clean(filepath.Join(baseDir, name+".json"))
-//     — it is intentionally *relative* (not absolute) so logs and test
-//     expectations remain portable. The caller may pass the result straight
-//     to os.Open.
-//   - The cleaned path is double-checked against the absolute baseDir to
-//     guarantee it has not escaped (defence in depth).
+//   - The returned path is absolute (filepath.Abs of
+//     filepath.Clean(filepath.Join(baseDir, name+".json"))). Returning an
+//     absolute path eliminates a TOCTOU class of bug where a caller
+//     changes the process working directory between ResolveProfilePath
+//     and os.Open, causing the "relative" path to resolve to a different
+//     file than intended.
+//   - The absolute path is also checked against the absolute baseDir as a
+//     defence-in-depth guard against directory escape (see ErrPathEscape).
 func ResolveProfilePath(baseDir, name string) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("%w: name must not be empty", ErrInvalidProfileName)
@@ -66,5 +71,5 @@ func ResolveProfilePath(baseDir, name string) (string, error) {
 		return "", fmt.Errorf("%w: %q", ErrPathEscape, cleaned)
 	}
 
-	return cleaned, nil
+	return absCleaned, nil
 }

@@ -99,7 +99,11 @@ type StrategyRiskConfig struct {
 //
 // All violations are collected via errors.Join so the caller sees every
 // problem in one pass.
-func (p *StrategyProfile) Validate() error {
+//
+// Value receiver: Validate() does not mutate the receiver, and a value
+// receiver eliminates the possibility of a nil-pointer panic if a caller
+// ever holds a nil *StrategyProfile.
+func (p StrategyProfile) Validate() error {
 	var errs []error
 
 	if p.Name == "" {
@@ -124,6 +128,9 @@ func (p *StrategyProfile) Validate() error {
 	}
 	if ind.MACDSlow <= 0 {
 		errs = append(errs, fmt.Errorf("indicators.macd_slow must be > 0 (got %d)", ind.MACDSlow))
+	}
+	if ind.MACDFast > 0 && ind.MACDSlow > 0 && ind.MACDFast >= ind.MACDSlow {
+		errs = append(errs, fmt.Errorf("indicators.macd_fast (%d) must be < macd_slow (%d)", ind.MACDFast, ind.MACDSlow))
 	}
 	if ind.MACDSignal <= 0 {
 		errs = append(errs, fmt.Errorf("indicators.macd_signal must be > 0 (got %d)", ind.MACDSignal))
