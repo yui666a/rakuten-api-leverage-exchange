@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from 'react'
+import { useEffect, useRef, useMemo, useCallback, useState } from 'react'
 import {
   createChart,
   BaselineSeries,
@@ -8,6 +8,7 @@ import {
   type BaselineData,
   type SeriesMarker,
   type Time,
+  type ISeriesMarkersPluginApi,
 } from 'lightweight-charts'
 import type { BacktestTrade } from '../lib/api'
 
@@ -23,6 +24,9 @@ function toChartTime(ms: number): Time {
   return Math.floor(ms / 1000) as unknown as Time
 }
 
+/** Max markers to render at once to keep the chart readable. */
+const MAX_VISIBLE_MARKERS = 200
+
 export function EquityCurveChart({
   trades,
   initialBalance,
@@ -31,15 +35,15 @@ export function EquityCurveChart({
 }: EquityCurveChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
+  const [showMarkers, setShowMarkers] = useState(true)
 
-  // Sort trades by exit time and compute equity curve
-  const { equityData, markers } = useMemo(() => {
+  // Sort trades once and compute equity curve + all markers
+  const { equityData, allMarkers, sortedTrades } = useMemo(() => {
     const sorted = [...trades].sort((a, b) => a.exitTime - b.exitTime)
 
-    // Build equity data points: start with initial balance, then accumulate PnL at each exit
+    // Build equity data points
     const points: BaselineData<Time>[] = []
-
-    // Starting point
     points.push({ time: toChartTime(periodFrom), value: initialBalance })
 
     let equity = initialBalance
@@ -48,7 +52,6 @@ export function EquityCurveChart({
       points.push({ time: toChartTime(trade.exitTime), value: equity })
     }
 
-    // End point if last trade exit is before periodTo
     if (sorted.length > 0 && sorted[sorted.length - 1].exitTime < periodTo) {
       points.push({ time: toChartTime(periodTo), value: equity })
     }
@@ -58,12 +61,13 @@ export function EquityCurveChart({
     for (let i = 0; i < points.length; i++) {
       seen.set(points[i].time as unknown as number, i)
     }
-    const deduped = [...seen.values()].sort((a, b) => a - b).map((i) => points[i])
+    const deduped = [...seen.values()]
+      .sort((a, b) => a - b)
+      .map((i) => points[i])
 
-    // Build markers for entries and exits
+    // Build all markers (sorted by time)
     const mkrs: SeriesMarker<Time>[] = []
     for (const trade of sorted) {
-      // Entry marker
       mkrs.push({
         time: toChartTime(trade.entryTime),
         position: 'belowBar',
@@ -72,7 +76,6 @@ export function EquityCurveChart({
         text: trade.side === 'BUY' ? 'BUY' : 'SELL',
         size: 0.8,
       })
-      // Exit marker
       mkrs.push({
         time: toChartTime(trade.exitTime),
         position: 'aboveBar',
@@ -82,13 +85,42 @@ export function EquityCurveChart({
         size: 0.6,
       })
     }
-    // Sort markers by time (required by lightweight-charts)
     mkrs.sort(
       (a, b) => (a.time as unknown as number) - (b.time as unknown as number),
     )
 
-    return { equityData: deduped, markers: mkrs }
+    return { equityData: deduped, allMarkers: mkrs, sortedTrades: sorted }
   }, [trades, initialBalance, periodFrom, periodTo])
+
+  // Filter markers to only those within a given time range, with a cap
+  const updateVisibleMarkers = useCallback(
+    (from: number, to: number) => {
+      if (!markersPluginRef.current) return
+
+      if (!showMarkers) {
+        markersPluginRef.current.setMarkers([])
+        return
+      }
+
+      const visible = allMarkers.filter((m) => {
+        const t = m.time as unknown as number
+        return t >= from && t <= to
+      })
+
+      if (visible.length <= MAX_VISIBLE_MARKERS) {
+        markersPluginRef.current.setMarkers(visible)
+      } else {
+        // Downsample: evenly pick markers to stay under the cap
+        const step = visible.length / MAX_VISIBLE_MARKERS
+        const sampled: SeriesMarker<Time>[] = []
+        for (let i = 0; i < MAX_VISIBLE_MARKERS; i++) {
+          sampled.push(visible[Math.floor(i * step)])
+        }
+        markersPluginRef.current.setMarkers(sampled)
+      }
+    },
+    [allMarkers, showMarkers],
+  )
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -115,7 +147,6 @@ export function EquityCurveChart({
 
     chartRef.current = chart
 
-    // Baseline series: green above initial balance, red below
     const series = chart.addSeries(BaselineSeries, {
       baseValue: { type: 'price', price: initialBalance },
       topLineColor: '#00d4aa',
@@ -131,7 +162,6 @@ export function EquityCurveChart({
 
     series.setData(equityData)
 
-    // Horizontal dashed line at initial balance
     series.createPriceLine({
       price: initialBalance,
       color: 'rgba(255, 255, 255, 0.3)',
@@ -141,12 +171,38 @@ export function EquityCurveChart({
       title: 'Initial',
     })
 
-    // Trade markers
-    if (markers.length > 0) {
-      createSeriesMarkers(series, markers)
-    }
+    // Create markers plugin (initially empty — populated after visible range is set)
+    const markersPlugin = createSeriesMarkers(series, [])
+    markersPluginRef.current = markersPlugin
 
-    chart.timeScale().fitContent()
+    // Set initial visible range to last 3 months
+    const threeMonthsMs = 90 * 24 * 60 * 60
+    const lastDataTimeSec =
+      sortedTrades.length > 0
+        ? Math.floor(sortedTrades[sortedTrades.length - 1].exitTime / 1000)
+        : Math.floor(periodTo / 1000)
+    const rangeFrom = lastDataTimeSec - threeMonthsMs
+    const rangeTo = lastDataTimeSec
+
+    chart
+      .timeScale()
+      .setVisibleRange({ from: rangeFrom as unknown as Time, to: rangeTo as unknown as Time })
+
+    // Show markers for the initial range
+    updateVisibleMarkers(rangeFrom, rangeTo)
+
+    // Update markers dynamically on scroll / zoom
+    const onVisibleRangeChange = () => {
+      const range = chart.timeScale().getVisibleRange()
+      if (!range) return
+      updateVisibleMarkers(
+        range.from as unknown as number,
+        range.to as unknown as number,
+      )
+    }
+    chart
+      .timeScale()
+      .subscribeVisibleTimeRangeChange(onVisibleRangeChange)
 
     // ResizeObserver for responsive width
     const resizeObserver = new ResizeObserver((entries) => {
@@ -158,11 +214,44 @@ export function EquityCurveChart({
     resizeObserver.observe(containerRef.current)
 
     return () => {
+      chart
+        .timeScale()
+        .unsubscribeVisibleTimeRangeChange(onVisibleRangeChange)
       resizeObserver.disconnect()
       chart.remove()
       chartRef.current = null
+      markersPluginRef.current = null
     }
-  }, [equityData, markers, initialBalance])
+  }, [equityData, allMarkers, initialBalance, sortedTrades, periodTo, updateVisibleMarkers])
 
-  return <div ref={containerRef} className="h-full w-full" />
+  // Re-apply markers when toggle changes
+  useEffect(() => {
+    if (!chartRef.current) return
+    const range = chartRef.current.timeScale().getVisibleRange()
+    if (!range) return
+    updateVisibleMarkers(
+      range.from as unknown as number,
+      range.to as unknown as number,
+    )
+  }, [showMarkers, updateVisibleMarkers])
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="mb-1 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowMarkers((v) => !v)}
+          className="rounded-full px-2.5 py-0.5 text-[11px] font-medium transition"
+          style={{
+            backgroundColor: showMarkers ? 'rgba(0, 212, 170, 0.14)' : 'rgba(255,255,255,0.06)',
+            color: showMarkers ? '#00d4aa' : '#94a3b8',
+            border: `1px solid ${showMarkers ? 'rgba(0, 212, 170, 0.45)' : 'rgba(255,255,255,0.1)'}`,
+          }}
+        >
+          Markers
+        </button>
+      </div>
+      <div ref={containerRef} className="min-h-0 flex-1" />
+    </div>
+  )
 }
