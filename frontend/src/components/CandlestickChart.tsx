@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time } from 'lightweight-charts'
+import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
+import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
 
 type CandlestickChartProps = {
@@ -7,6 +8,8 @@ type CandlestickChartProps = {
 }
 
 type MALineKey = 'sma20' | 'sma50' | 'ema12' | 'ema26'
+type BBKey = 'bb1' | 'bb2' | 'bb3'
+type BBLineKey = `${BBKey}Upper` | `${BBKey}Lower`
 
 const INTERVAL_OPTIONS: { value: CandleInterval; label: string }[] = [
   { value: 'PT1M', label: '1m' },
@@ -22,6 +25,12 @@ const MA_CONFIG: Record<MALineKey, { label: string; color: string }> = {
   sma50: { label: 'SMA(50)', color: '#e74c8b' },
   ema12: { label: 'EMA(12)', color: '#00bfff' },
   ema26: { label: 'EMA(26)', color: '#a78bfa' },
+}
+
+const BB_CONFIG: Record<BBKey, { label: string; color: string; fillColor: string; multiplier: number }> = {
+  bb1: { label: 'BB(1σ)', color: '#4fc3f7', fillColor: 'rgba(79, 195, 247, 0.12)', multiplier: 1 },
+  bb2: { label: 'BB(2σ)', color: '#7c4dff', fillColor: 'rgba(124, 77, 255, 0.10)', multiplier: 2 },
+  bb3: { label: 'BB(3σ)', color: '#ff6e40', fillColor: 'rgba(255, 110, 64, 0.08)', multiplier: 3 },
 }
 
 /** Threshold: fetch more data when user scrolls within N bars of the left edge. */
@@ -59,11 +68,139 @@ function calcEMA(closes: number[], period: number): (number | null)[] {
   return result
 }
 
+function calcBollingerBands(
+  closes: number[],
+  period: number,
+  multiplier: number,
+): { upper: (number | null)[]; lower: (number | null)[] } {
+  const upper: (number | null)[] = []
+  const lower: (number | null)[] = []
+  for (let i = 0; i < closes.length; i++) {
+    if (i < period - 1) {
+      upper.push(null)
+      lower.push(null)
+    } else {
+      let sum = 0
+      for (let j = i - period + 1; j <= i; j++) sum += closes[j]
+      const mean = sum / period
+      let sumSqDiff = 0
+      for (let j = i - period + 1; j <= i; j++) {
+        const diff = closes[j] - mean
+        sumSqDiff += diff * diff
+      }
+      const stdDev = Math.sqrt(sumSqDiff / period)
+      upper.push(mean + multiplier * stdDev)
+      lower.push(mean - multiplier * stdDev)
+    }
+  }
+  return { upper, lower }
+}
+
+type BandPoint = { time: Time; upper: number; lower: number }
+
+class BollingerBandFillRenderer implements IPrimitivePaneRenderer {
+  private _data: BandPoint[] = []
+  private _color: string = 'rgba(0,0,0,0)'
+  private _series: ISeriesApi<SeriesType, Time> | null = null
+  private _chart: IChartApi | null = null
+
+  update(data: BandPoint[], color: string, series: ISeriesApi<SeriesType, Time>, chart: IChartApi) {
+    this._data = data
+    this._color = color
+    this._series = series
+    this._chart = chart
+  }
+
+  draw(target: CanvasRenderingTarget2D): void {
+    const series = this._series
+    const chart = this._chart
+    if (!series || !chart || this._data.length === 0) return
+
+    target.useMediaCoordinateSpace(({ context: ctx }) => {
+      const points: { x: number; yUpper: number; yLower: number }[] = []
+
+      for (const d of this._data) {
+        const x = chart.timeScale().timeToCoordinate(d.time)
+        const yUpper = series.priceToCoordinate(d.upper)
+        const yLower = series.priceToCoordinate(d.lower)
+        if (x === null || yUpper === null || yLower === null) continue
+        points.push({ x, yUpper, yLower })
+      }
+
+      if (points.length < 2) return
+
+      ctx.beginPath()
+      // Draw upper edge left → right
+      ctx.moveTo(points[0].x, points[0].yUpper)
+      for (let i = 1; i < points.length; i++) {
+        ctx.lineTo(points[i].x, points[i].yUpper)
+      }
+      // Draw lower edge right → left
+      for (let i = points.length - 1; i >= 0; i--) {
+        ctx.lineTo(points[i].x, points[i].yLower)
+      }
+      ctx.closePath()
+      ctx.fillStyle = this._color
+      ctx.fill()
+    })
+  }
+}
+
+class BollingerBandFillPrimitive implements ISeriesPrimitive<Time> {
+  private _renderer = new BollingerBandFillRenderer()
+  private _data: BandPoint[] = []
+  private _color: string
+  private _series: ISeriesApi<SeriesType, Time> | null = null
+  private _chart: IChartApi | null = null
+  private _paneViews: IPrimitivePaneView[]
+
+  constructor(color: string) {
+    this._color = color
+    const renderer = this._renderer
+    this._paneViews = [{
+      zOrder: () => 'bottom' as const,
+      renderer: () => renderer,
+    }]
+  }
+
+  setData(data: BandPoint[]) {
+    this._data = data
+    this._updateRenderer()
+  }
+
+  attached(param: SeriesAttachedParameter<Time, SeriesType>) {
+    this._series = param.series
+    this._chart = param.chart
+    this._updateRenderer()
+  }
+
+  detached() {
+    this._series = null
+    this._chart = null
+  }
+
+  updateAllViews() {
+    this._updateRenderer()
+  }
+
+  paneViews(): readonly IPrimitivePaneView[] {
+    return this._paneViews
+  }
+
+  private _updateRenderer() {
+    if (this._series && this._chart) {
+      this._renderer.update(this._data, this._color, this._series, this._chart)
+    }
+  }
+}
+
 export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const lineSeriesRefs = useRef<Partial<Record<MALineKey, ISeriesApi<'Line'>>>>({})
+  const bbSeriesRefs = useRef<Partial<Record<BBLineKey, ISeriesApi<'Line'>>>>({})
+  const bbFillRefs = useRef<Partial<Record<BBKey, BollingerBandFillPrimitive>>>({})
   const prevCandleCountRef = useRef(0)
 
   const [interval, setInterval] = useState<CandleInterval>('PT15M')
@@ -90,6 +227,12 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     sma50: true,
     ema12: false,
     ema26: false,
+  })
+
+  const [bbVisible, setBBVisible] = useState<Record<BBKey, boolean>>({
+    bb1: false,
+    bb2: true,
+    bb3: false,
   })
 
   useEffect(() => {
@@ -134,6 +277,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     return () => {
       window.removeEventListener('resize', handleResize)
       lineSeriesRefs.current = {}
+      bbSeriesRefs.current = {}
+      bbFillRefs.current = {}
       prevCandleCountRef.current = 0
       chart.remove()
     }
@@ -239,8 +384,93 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     }
   }, [visible, candles])
 
+  // Manage Bollinger Band line series and fill primitives based on toggle state
+  useEffect(() => {
+    const chart = chartRef.current
+    const candleSeries = seriesRef.current
+    if (!chart || !candleSeries || candles.length === 0) return
+
+    const closes = candles.map((c) => c.close)
+    const times = candles.map((c) => Math.floor(c.time / 1000) as Time)
+
+    for (const key of Object.keys(BB_CONFIG) as BBKey[]) {
+      const cfg = BB_CONFIG[key]
+      const upperKey: BBLineKey = `${key}Upper`
+      const lowerKey: BBLineKey = `${key}Lower`
+      const existingUpper = bbSeriesRefs.current[upperKey]
+      const existingLower = bbSeriesRefs.current[lowerKey]
+
+      if (bbVisible[key]) {
+        const { upper, lower } = calcBollingerBands(closes, 20, cfg.multiplier)
+
+        const upperData: LineData<Time>[] = []
+        const lowerData: LineData<Time>[] = []
+        const fillData: BandPoint[] = []
+        for (let i = 0; i < upper.length; i++) {
+          if (upper[i] !== null && lower[i] !== null) {
+            upperData.push({ time: times[i], value: upper[i]! })
+            lowerData.push({ time: times[i], value: lower[i]! })
+            fillData.push({ time: times[i], upper: upper[i]!, lower: lower[i]! })
+          }
+        }
+
+        const lineOpts = {
+          color: cfg.color,
+          lineWidth: 1 as const,
+          lineStyle: 2 as const, // dashed
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }
+
+        if (existingUpper) {
+          existingUpper.setData(upperData)
+        } else {
+          const s = chart.addSeries(LineSeries, lineOpts)
+          s.setData(upperData)
+          bbSeriesRefs.current[upperKey] = s
+        }
+
+        if (existingLower) {
+          existingLower.setData(lowerData)
+        } else {
+          const s = chart.addSeries(LineSeries, lineOpts)
+          s.setData(lowerData)
+          bbSeriesRefs.current[lowerKey] = s
+        }
+
+        // Fill primitive
+        let fill = bbFillRefs.current[key]
+        if (!fill) {
+          fill = new BollingerBandFillPrimitive(cfg.fillColor)
+          candleSeries.attachPrimitive(fill as ISeriesPrimitive<Time>)
+          bbFillRefs.current[key] = fill
+        }
+        fill.setData(fillData)
+      } else {
+        if (existingUpper) {
+          chart.removeSeries(existingUpper)
+          delete bbSeriesRefs.current[upperKey]
+        }
+        if (existingLower) {
+          chart.removeSeries(existingLower)
+          delete bbSeriesRefs.current[lowerKey]
+        }
+        const fill = bbFillRefs.current[key]
+        if (fill) {
+          candleSeries.detachPrimitive(fill as ISeriesPrimitive<Time>)
+          delete bbFillRefs.current[key]
+        }
+      }
+    }
+  }, [bbVisible, candles])
+
   const toggle = useCallback((key: MALineKey) => {
     setVisible((prev) => ({ ...prev, [key]: !prev[key] }))
+  }, [])
+
+  const toggleBB = useCallback((key: BBKey) => {
+    setBBVisible((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
 
   return (
@@ -273,7 +503,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
             </span>
           )}
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex flex-wrap gap-1.5">
           {(Object.keys(MA_CONFIG) as MALineKey[]).map((key) => (
             <button
               key={key}
@@ -287,6 +517,22 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
               }}
             >
               {MA_CONFIG[key].label}
+            </button>
+          ))}
+          <span className="mx-0.5 self-center text-[10px] text-white/20">|</span>
+          {(Object.keys(BB_CONFIG) as BBKey[]).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => toggleBB(key)}
+              className="rounded-full px-2.5 py-0.5 text-[11px] font-medium transition"
+              style={{
+                backgroundColor: bbVisible[key] ? BB_CONFIG[key].color + '22' : 'rgba(255,255,255,0.06)',
+                color: bbVisible[key] ? BB_CONFIG[key].color : '#94a3b8',
+                border: `1px solid ${bbVisible[key] ? BB_CONFIG[key].color + '55' : 'rgba(255,255,255,0.1)'}`,
+              }}
+            >
+              {BB_CONFIG[key].label}
             </button>
           ))}
         </div>
