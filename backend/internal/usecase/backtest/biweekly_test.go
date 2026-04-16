@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	dayMillis  int64 = 24 * 60 * 60 * 1000
-	weekMillis       = 7 * dayMillis
+	dayMillis int64 = 24 * 60 * 60 * 1000
 )
 
 // makeTrade は ExitTime と PnL だけ指定可能な簡易ファクトリ。
@@ -92,10 +91,12 @@ func TestComputeBiweeklyWinRate_Mix2Wins1Loss(t *testing.T) {
 
 func TestComputeBiweeklyWinRate_SparseCoverageBelowFloor(t *testing.T) {
 	// 期間 30 日 → ウィンドウ 17 個 (start = 0..16 day)。
-	// 先頭 3 日間に全勝 3 件のみ配置 → [0,14)/[1,15)/[2,15)/[3,16) あたりだけ有効。
-	// 有効ウィンドウ数を計算: トレードは day2, day3 に配置。
-	// windowStart=s のウィンドウが有効なのは s<=2 かつ s+14>3 つまり s>-11 → s in {0,1,2}。
-	// カバレッジ = 3/17 < 0.5 → 0 を返すべき。
+	// トレードは day1, day2, day3 に全勝 3 件のみ配置。
+	// windowStart=s のウィンドウ [s, s+14) に 3 件全てが入って有効 (>=3件) となる条件:
+	//   day1 が入る → s <= 1
+	//   day3 が入る → s+14 > 3 (常に真)
+	// 従って有効ウィンドウは s in {0,1} の 2 つ。
+	// カバレッジ = 2/17 ≈ 0.118 < 0.5 → 0 を返すべき。
 	trades := []entity.BacktestTradeRecord{
 		makeTrade(1*dayMillis, 10),
 		makeTrade(2*dayMillis, 10),
