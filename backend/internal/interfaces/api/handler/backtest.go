@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -150,6 +151,13 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	}
 
 	if err := h.repo.Save(c.Request.Context(), *result); err != nil {
+		// parent_result_id integrity failures map to 422 so clients can
+		// distinguish them from generic 500 persistence errors.
+		if errors.Is(err, repository.ErrParentResultSelfReference) ||
+			errors.Is(err, repository.ErrParentResultNotFound) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save backtest result: " + err.Error()})
 		return
 	}
