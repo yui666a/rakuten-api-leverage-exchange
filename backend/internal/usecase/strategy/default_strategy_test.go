@@ -143,14 +143,15 @@ func TestDefaultStrategy_Evaluate_NilIndicators(t *testing.T) {
 	}
 }
 
-func TestDefaultStrategy_Evaluate_NilEngine(t *testing.T) {
-	s := NewDefaultStrategy(nil)
-	indicators := entity.IndicatorSet{SymbolID: 1}
-	signal, err := s.Evaluate(context.Background(), &indicators, nil, 0, time.Now())
-	if err == nil {
-		t.Fatal("expected error when wrapping a nil engine, got nil")
-	}
-	if signal != nil {
-		t.Errorf("expected nil signal on error, got %+v", signal)
-	}
+// TestDefaultStrategy_NewDefaultStrategy_NilEnginePanics asserts that passing
+// a nil engine to the constructor panics. The non-nil engine invariant is
+// enforced at construction time so Evaluate can rely on it without redundant
+// defensive checks.
+func TestDefaultStrategy_NewDefaultStrategy_NilEnginePanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic when constructing DefaultStrategy with nil engine, got none")
+		}
+	}()
+	_ = NewDefaultStrategy(nil)
 }

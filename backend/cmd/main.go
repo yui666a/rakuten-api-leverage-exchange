@@ -59,12 +59,12 @@ func main() {
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+	// The StrategyRegistry lives in the strategy package and is exercised by
+	// its own unit tests. It is intentionally not wired here yet because no
+	// downstream code consumes it; leaving dead infrastructure at the
+	// composition root would be misleading. It will be wired in the PR that
+	// introduces CLI/API strategy-profile selection.
 	defaultStrategy := strategyuc.NewDefaultStrategy(strategyEngine)
-	strategyRegistry := strategyuc.NewStrategyRegistry()
-	if err := strategyRegistry.Register(defaultStrategy.Name(), defaultStrategy); err != nil {
-		slog.Error("failed to register default strategy", "error", err)
-		os.Exit(1)
-	}
 	backtestRunner := backtestuc.NewBacktestRunner()
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount:     cfg.Risk.MaxPositionAmount,

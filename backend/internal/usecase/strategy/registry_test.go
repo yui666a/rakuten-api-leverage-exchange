@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -178,27 +179,5 @@ func TestStrategyRegistry_ConcurrentAccess(t *testing.T) {
 
 func stratName(worker, idx int) string {
 	// Compact deterministic names that sort stably.
-	return "w" + itoa(worker) + "-" + itoa(idx)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return fmt.Sprintf("w%02d-%02d", worker, idx)
 }

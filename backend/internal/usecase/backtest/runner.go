@@ -81,7 +81,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskCfg.TakeProfitPercent,
 	)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
-	strategyHandler := &StrategyHandler{Strategy: defaultStrategy}
+	strategyHandler := NewStrategyHandler(defaultStrategy)
 	riskHandler := &RiskHandler{
 		RiskManager: riskMgr,
 		TradeAmount: input.TradeAmount,

@@ -33,8 +33,13 @@ type DefaultStrategy struct {
 }
 
 // NewDefaultStrategy wraps a StrategyEngine so it can be consumed as a
-// port.Strategy. engine must not be nil.
+// port.Strategy. engine must not be nil; passing nil panics because a nil
+// engine represents a composition-root programmer error that should fail
+// loudly at startup rather than surface as a runtime error later.
 func NewDefaultStrategy(engine *usecase.StrategyEngine) *DefaultStrategy {
+	if engine == nil {
+		panic("strategy: NewDefaultStrategy engine must not be nil")
+	}
 	return &DefaultStrategy{engine: engine}
 }
 
@@ -42,6 +47,10 @@ func NewDefaultStrategy(engine *usecase.StrategyEngine) *DefaultStrategy {
 // StrategyEngine. It converts the pointer-based port signature to the
 // by-value signature used by StrategyEngine. Nil indicators result in
 // ErrIndicatorsRequired.
+//
+// The receiver and engine are construction-time invariants enforced by
+// NewDefaultStrategy, so Evaluate only validates the caller-supplied
+// indicators argument.
 func (s *DefaultStrategy) Evaluate(
 	ctx context.Context,
 	indicators *entity.IndicatorSet,
@@ -49,9 +58,6 @@ func (s *DefaultStrategy) Evaluate(
 	lastPrice float64,
 	now time.Time,
 ) (*entity.Signal, error) {
-	if s == nil || s.engine == nil {
-		return nil, errors.New("strategy: default strategy is not initialised")
-	}
 	if indicators == nil {
 		return nil, ErrIndicatorsRequired
 	}

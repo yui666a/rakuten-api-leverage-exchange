@@ -65,7 +65,7 @@ func TestIndicatorHandler_NoFutureHigherTFLeak(t *testing.T) {
 func TestStrategyHandler_UsesIndicatorTimestamp(t *testing.T) {
 	resolver := usecase.NewRuleBasedStanceResolver(nil)
 	engine := usecase.NewStrategyEngine(resolver)
-	handler := &StrategyHandler{Strategy: strategyuc.NewDefaultStrategy(engine)}
+	handler := NewStrategyHandler(strategyuc.NewDefaultStrategy(engine))
 
 	ts := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC).UnixMilli()
 	events, err := handler.Handle(context.Background(), entity.IndicatorEvent{
