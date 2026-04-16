@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { AppFrame } from '../components/AppFrame'
 import {
   useBacktestCSVMeta,
@@ -50,6 +51,7 @@ const defaultRunForm: BacktestRunForm = {
 }
 
 const fallbackBacktestPairs = ['BTC_JPY', 'LTC_JPY'] as const
+const TRADE_TABLE_COLUMN_COUNT = 11
 
 function buildAutoCSVPaths(currencyPair: string) {
   return {
@@ -630,32 +632,67 @@ function DetailPanel({ result }: { result: BacktestResult }) {
           <h3 className="mt-2 text-lg font-semibold text-white">
             取引一覧 ({result.trades.length} 件)
           </h3>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead>
-                <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
-                  <th className="px-3 py-2">#</th>
-                  <th className="px-3 py-2">Side</th>
-                  <th className="px-3 py-2">Entry</th>
-                  <th className="px-3 py-2">Exit</th>
-                  <th className="px-3 py-2 text-right">Entry Price</th>
-                  <th className="px-3 py-2 text-right">Exit Price</th>
-                  <th className="px-3 py-2 text-right">Amount</th>
-                  <th className="px-3 py-2 text-right">PnL</th>
-                  <th className="px-3 py-2 text-right">PnL %</th>
-                  <th className="px-3 py-2">Entry Reason</th>
-                  <th className="px-3 py-2">Exit Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.trades.map((t) => (
-                  <TradeRow key={t.tradeId} trade={t} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <VirtualizedTradesTable trades={result.trades} />
         </div>
       )}
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Trades table                                                        */
+/* ------------------------------------------------------------------ */
+
+function VirtualizedTradesTable({ trades }: { trades: BacktestTrade[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const rowVirtualizer = useVirtualizer({
+    count: trades.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 42,
+    overscan: 15,
+  })
+
+  const virtualRows = rowVirtualizer.getVirtualItems()
+  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0
+  const paddingBottom = virtualRows.length > 0
+    ? rowVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+    : 0
+
+  return (
+    <div ref={scrollRef} className="mt-3 max-h-[560px] overflow-auto">
+      <table className="w-full min-w-[900px] text-sm">
+        <thead className="sticky top-0 z-10 bg-bg-card/95 backdrop-blur">
+          <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
+            <th className="px-3 py-2">#</th>
+            <th className="px-3 py-2">Side</th>
+            <th className="px-3 py-2">Entry</th>
+            <th className="px-3 py-2">Exit</th>
+            <th className="px-3 py-2 text-right">Entry Price</th>
+            <th className="px-3 py-2 text-right">Exit Price</th>
+            <th className="px-3 py-2 text-right">Amount</th>
+            <th className="px-3 py-2 text-right">PnL</th>
+            <th className="px-3 py-2 text-right">PnL %</th>
+            <th className="px-3 py-2">Entry Reason</th>
+            <th className="px-3 py-2">Exit Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {paddingTop > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={TRADE_TABLE_COLUMN_COUNT} style={{ height: `${paddingTop}px` }} />
+            </tr>
+          )}
+          {virtualRows.map((virtualRow) => {
+            const trade = trades[virtualRow.index]
+            return <TradeRow key={`${trade.tradeId}-${virtualRow.index}`} trade={trade} />
+          })}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={TRADE_TABLE_COLUMN_COUNT} style={{ height: `${paddingBottom}px` }} />
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   )
 }
