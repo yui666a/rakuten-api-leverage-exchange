@@ -127,9 +127,12 @@ type indicatorScenario struct {
 // fpRef returns a pointer to v so scenarios can be expressed inline.
 func fpRef(v float64) *float64 { return &v }
 
+// bpRef returns a pointer to v so scenarios can be expressed inline.
+func bpRef(v bool) *bool { return &v }
+
 // scenariosForEquivalence exercises multiple signal branches: TREND_FOLLOW
-// buy, CONTRARIAN sell, and a HOLD counter-trend case. All three must match
-// between DefaultStrategy and ConfigurableStrategy(production).
+// buy, CONTRARIAN sell, BREAKOUT buy, and a HOLD counter-trend case. All four
+// must match between DefaultStrategy and ConfigurableStrategy(production).
 func scenariosForEquivalence() []indicatorScenario {
 	return []indicatorScenario{
 		{
@@ -164,6 +167,30 @@ func scenariosForEquivalence() []indicatorScenario {
 			},
 			higherTF:  nil,
 			lastPrice: 5_150_000,
+		},
+		{
+			// BREAKOUT stance (RecentSqueeze=true, price > BBUpper, VolumeRatio
+			// >= 1.5) must also route identically between the two strategies.
+			// This closes the breakout-volume-ratio dual-path coverage gap
+			// (the threshold appears in both StanceRulesConfig and
+			// SignalRulesConfig and they must stay in sync for production.json).
+			name: "breakout buy (BB squeeze release with volume confirmation)",
+			indicators: entity.IndicatorSet{
+				SymbolID:      7,
+				SMA20:         fpRef(5_050_000),
+				SMA50:         fpRef(5_000_000),
+				EMA12:         fpRef(5_050_000),
+				EMA26:         fpRef(5_000_000),
+				RSI14:         fpRef(55), // neutral: avoids CONTRARIAN override
+				Histogram:     fpRef(5),  // >= 0: survives BreakoutRequireMACDConfirm
+				BBUpper:       fpRef(5_100_000),
+				BBMiddle:      fpRef(5_050_000),
+				BBLower:       fpRef(5_000_000),
+				VolumeRatio:   fpRef(1.6), // >= 1.5 default BreakoutVolumeRatio
+				RecentSqueeze: bpRef(true),
+			},
+			higherTF:  nil,
+			lastPrice: 5_150_000, // strictly above BBUpper
 		},
 		{
 			name: "hold: TF buy blocked by higher-TF downtrend",

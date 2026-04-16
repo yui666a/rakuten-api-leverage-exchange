@@ -9,18 +9,31 @@ import (
 )
 
 // StrategyEngineOptions parameterizes the thresholds and feature toggles used
-// by StrategyEngine. Zero values are replaced with production defaults by
-// applyDefaults, so callers can construct a partially-populated options struct
-// and still get sensible behaviour — but production code paths that create
-// StrategyEngine via NewStrategyEngine inherit every default implicitly.
+// by StrategyEngine.
 //
-// Boolean feature toggles (EnableTrendFollow / EnableContrarian /
-// EnableBreakout / HTFEnabled / HTFBlockCounterTrend / RequireMACDConfirm /
-// RequireEMACross / BreakoutRequireMACDConfirm) default to true because the
-// current hard-coded StrategyEngine behaviour applies each of those gates.
-// They are expressed as plain bools rather than *bool because the defaulting
-// code explicitly flips them to true when they arrive as false AND the struct
-// is otherwise empty — see applyDefaults.
+// Defaulting rules (see applyDefaults):
+//   - Numeric threshold fields (RSIBuyMax, RSISellMin, ContrarianRSIEntry,
+//     ContrarianRSIExit, MACDHistogramLimit, BreakoutVolumeRatio,
+//     HTFAlignmentBoost) are backfilled with the legacy production constants
+//     when they arrive as zero.
+//   - Boolean toggles (EnableTrendFollow / EnableContrarian / EnableBreakout /
+//     HTFEnabled / HTFBlockCounterTrend / RequireMACDConfirm / RequireEMACross
+//     / BreakoutRequireMACDConfirm) are NOT defaulted — they are taken
+//     as-supplied so callers can opt out of each gate explicitly.
+//
+// Constructing StrategyEngineOptions safely:
+//   - Call defaultStrategyEngineOptions() to get the legacy-preserving
+//     starting point (all bools true, all numerics at production values) and
+//     override only the fields you want to change.
+//   - Or populate every field you care about explicitly, including every
+//     boolean toggle that your profile intends to enable.
+//
+// Passing a bare StrategyEngineOptions{} to NewStrategyEngineWithOptions
+// yields all-false booleans, which effectively disables signal generation
+// (every stance branch hits its EnableX==false guard and returns HOLD). This
+// is intentional: profile-driven configurations that want, for example,
+// EnableTrendFollow=false simply omit it, and nothing flips it back on behind
+// the caller's back.
 type StrategyEngineOptions struct {
 	// Trend-follow thresholds
 	RSIBuyMax          float64 // RSI ceiling for TREND_FOLLOW buy; default 70
@@ -340,7 +353,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionBuy,
-			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, true),
+			Confidence: e.trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, true),
 			Reason:     reason,
 			Timestamp:  nowUnix,
 		}
@@ -365,7 +378,7 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionSell,
-			Confidence: trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, false),
+			Confidence: e.trendFollowConfidence(sma20, sma50, rsi, ema12, ema26, histogram, false),
 			Reason:     reason,
 			Timestamp:  nowUnix,
 		}
@@ -380,7 +393,13 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 
 // trendFollowConfidence computes a 0.0–1.0 confidence score for trend-follow signals.
 // Factors: EMA/SMA divergence (30%), SMA trend strength (15%), RSI headroom (25%), MACD (30%).
-func trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *float64, isBuy bool) float64 {
+//
+// RSI headroom is measured against the configured RSIBuyMax / RSISellMin
+// thresholds so that profile overrides (e.g. RSIBuyMax=60) feed through to
+// confidence as well as gating. The width (RSIBuyMax - RSISellMin) is used as
+// the denominator; under default thresholds (70, 30) this preserves the
+// legacy 40-wide band exactly.
+func (e *StrategyEngine) trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *float64, isBuy bool) float64 {
 	// EMA divergence: how strongly the EMA cross is established
 	emaDivergence := 0.5
 	if ema12 != nil && ema26 != nil && *ema26 != 0 {
@@ -390,12 +409,17 @@ func trendFollowConfidence(sma20, sma50, rsi float64, ema12, ema26, histogram *f
 	// SMA trend strength (capped at 2%)
 	smaDivergence := math.Min(math.Abs(sma20-sma50)/sma50*100, 2.0) / 2.0
 
-	// RSI headroom: distance from the overbought/oversold boundary
+	// RSI headroom: distance from the overbought/oversold boundary, scaled by
+	// the configured RSI band width. Guard against a zero/negative band (which
+	// would be a misconfiguration) by falling back to 0.0 headroom.
+	rsiBand := e.options.RSIBuyMax - e.options.RSISellMin
 	var rsiRoom float64
-	if isBuy {
-		rsiRoom = (70 - rsi) / 40
-	} else {
-		rsiRoom = (rsi - 30) / 40
+	if rsiBand > 0 {
+		if isBuy {
+			rsiRoom = (e.options.RSIBuyMax - rsi) / rsiBand
+		} else {
+			rsiRoom = (rsi - e.options.RSISellMin) / rsiBand
+		}
 	}
 	rsiRoom = math.Max(0, math.Min(1, rsiRoom))
 
@@ -427,7 +451,7 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionBuy,
-			Confidence: contrarianConfidence(rsi, histogram, true),
+			Confidence: e.contrarianConfidence(rsi, histogram, true),
 			Reason:     reason,
 			Timestamp:  nowUnix,
 		}
@@ -449,7 +473,7 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 		return &entity.Signal{
 			SymbolID:   symbolID,
 			Action:     entity.SignalActionSell,
-			Confidence: contrarianConfidence(rsi, histogram, false),
+			Confidence: e.contrarianConfidence(rsi, histogram, false),
 			Reason:     reason,
 			Timestamp:  nowUnix,
 		}
@@ -464,13 +488,27 @@ func (e *StrategyEngine) evaluateContrarian(symbolID int64, rsi float64, histogr
 
 // contrarianConfidence computes a 0.0–1.0 confidence score for contrarian signals.
 // Factors: RSI extremity (60%), MACD not-against (40%).
-func contrarianConfidence(rsi float64, histogram *float64, isBuy bool) float64 {
-	// RSI extremity: how deep into oversold/overbought territory
+//
+// RSI extremity uses the configured ContrarianRSIEntry / ContrarianRSIExit
+// thresholds so profile overrides affect confidence. The denominators are
+// sized to preserve legacy behaviour under default thresholds (entry=30,
+// exit=70): buy-side = ContrarianRSIEntry (i.e. 30), sell-side =
+// 100 − ContrarianRSIExit (i.e. 30).
+func (e *StrategyEngine) contrarianConfidence(rsi float64, histogram *float64, isBuy bool) float64 {
+	// RSI extremity: how deep into oversold/overbought territory. Guard
+	// against degenerate thresholds (entry<=0 or exit>=100) that would make
+	// the denominator non-positive.
 	var rsiExtreme float64
 	if isBuy {
-		rsiExtreme = (30 - rsi) / 30 // 0→1.0, 30→0.0
+		denom := e.options.ContrarianRSIEntry
+		if denom > 0 {
+			rsiExtreme = (e.options.ContrarianRSIEntry - rsi) / denom
+		}
 	} else {
-		rsiExtreme = (rsi - 70) / 30 // 100→1.0, 70→0.0
+		denom := 100.0 - e.options.ContrarianRSIExit
+		if denom > 0 {
+			rsiExtreme = (rsi - e.options.ContrarianRSIExit) / denom
+		}
 	}
 	rsiExtreme = math.Max(0, math.Min(1, rsiExtreme))
 
