@@ -10,6 +10,7 @@ type CandlestickChartProps = {
 type MALineKey = 'sma20' | 'sma50' | 'ema12' | 'ema26'
 type BBKey = 'bb1' | 'bb2' | 'bb3'
 type BBLineKey = `${BBKey}Upper` | `${BBKey}Lower`
+type IchimokuLineKey = 'tenkan' | 'kijun' | 'senkouA' | 'senkouB' | 'chikou'
 
 const INTERVAL_OPTIONS: { value: CandleInterval; label: string }[] = [
   { value: 'PT1M', label: '1m' },
@@ -31,6 +32,19 @@ const BB_CONFIG: Record<BBKey, { label: string; color: string; fillColor: string
   bb1: { label: 'BB(1σ)', color: '#4fc3f7', fillColor: 'rgba(79, 195, 247, 0.12)', multiplier: 1 },
   bb2: { label: 'BB(2σ)', color: '#7c4dff', fillColor: 'rgba(124, 77, 255, 0.10)', multiplier: 2 },
   bb3: { label: 'BB(3σ)', color: '#ff6e40', fillColor: 'rgba(255, 110, 64, 0.08)', multiplier: 3 },
+}
+
+const ICHIMOKU_CONFIG: Record<IchimokuLineKey, { label: string; color: string }> = {
+  tenkan: { label: '転換線', color: '#2196f3' },
+  kijun: { label: '基準線', color: '#ff5722' },
+  senkouA: { label: '先行スパン1', color: '#4caf50' },
+  senkouB: { label: '先行スパン2', color: '#e91e63' },
+  chikou: { label: '遅行スパン', color: '#ffeb3b' },
+}
+
+const ICHIMOKU_KUMO_COLORS = {
+  bullish: 'rgba(76, 175, 80, 0.12)',
+  bearish: 'rgba(233, 30, 99, 0.12)',
 }
 
 /** Threshold: fetch more data when user scrolls within N bars of the left edge. */
@@ -94,6 +108,69 @@ function calcBollingerBands(
     }
   }
   return { upper, lower }
+}
+
+type IchimokuResult = {
+  tenkan: (number | null)[]
+  kijun: (number | null)[]
+  senkouA: (number | null)[]
+  senkouB: (number | null)[]
+  chikou: (number | null)[]
+}
+
+/** High-low midpoint over a rolling window. */
+function highLowMid(highs: number[], lows: number[], period: number, index: number): number | null {
+  if (index < period - 1) return null
+  let maxH = -Infinity
+  let minL = Infinity
+  for (let j = index - period + 1; j <= index; j++) {
+    if (highs[j] > maxH) maxH = highs[j]
+    if (lows[j] < minL) minL = lows[j]
+  }
+  return (maxH + minL) / 2
+}
+
+function calcIchimoku(
+  highs: number[],
+  lows: number[],
+  closes: number[],
+): IchimokuResult {
+  const len = closes.length
+  const tenkan: (number | null)[] = []
+  const kijun: (number | null)[] = []
+  const senkouA: (number | null)[] = []
+  const senkouB: (number | null)[] = []
+  const chikou: (number | null)[] = []
+
+  // Tenkan-sen (9), Kijun-sen (26)
+  for (let i = 0; i < len; i++) {
+    tenkan.push(highLowMid(highs, lows, 9, i))
+    kijun.push(highLowMid(highs, lows, 26, i))
+  }
+
+  // Senkou Span A & B: computed at index i, plotted at i+26
+  // So we need arrays of length len+26, where the first 26 entries are from "shifted" future data
+  const totalLen = len + 26
+  for (let i = 0; i < totalLen; i++) {
+    const srcIdx = i - 26 // the source candle index
+    if (srcIdx < 0 || srcIdx >= len) {
+      senkouA.push(null)
+      senkouB.push(null)
+    } else {
+      const t = tenkan[srcIdx]
+      const k = kijun[srcIdx]
+      senkouA.push(t !== null && k !== null ? (t + k) / 2 : null)
+      senkouB.push(highLowMid(highs, lows, 52, srcIdx))
+    }
+  }
+
+  // Chikou Span: close plotted 26 periods back
+  for (let i = 0; i < len; i++) {
+    const srcIdx = i + 26
+    chikou.push(srcIdx < len ? closes[srcIdx] : null)
+  }
+
+  return { tenkan, kijun, senkouA, senkouB, chikou }
 }
 
 type BandPoint = { time: Time; upper: number; lower: number }
@@ -194,6 +271,103 @@ class BollingerBandFillPrimitive implements ISeriesPrimitive<Time> {
   }
 }
 
+type KumoPoint = { time: Time; senkouA: number; senkouB: number }
+
+class KumoFillRenderer implements IPrimitivePaneRenderer {
+  private _data: KumoPoint[] = []
+  private _bullColor: string = ICHIMOKU_KUMO_COLORS.bullish
+  private _bearColor: string = ICHIMOKU_KUMO_COLORS.bearish
+  private _series: ISeriesApi<SeriesType, Time> | null = null
+  private _chart: IChartApi | null = null
+
+  update(data: KumoPoint[], series: ISeriesApi<SeriesType, Time>, chart: IChartApi) {
+    this._data = data
+    this._series = series
+    this._chart = chart
+  }
+
+  draw(target: CanvasRenderingTarget2D): void {
+    const series = this._series
+    const chart = this._chart
+    if (!series || !chart || this._data.length === 0) return
+
+    target.useMediaCoordinateSpace(({ context: ctx }) => {
+      // Convert all points to pixel coordinates
+      const pixels: { x: number; yA: number; yB: number }[] = []
+      for (const d of this._data) {
+        const x = chart.timeScale().timeToCoordinate(d.time)
+        const yA = series.priceToCoordinate(d.senkouA)
+        const yB = series.priceToCoordinate(d.senkouB)
+        if (x === null || yA === null || yB === null) continue
+        pixels.push({ x, yA, yB })
+      }
+
+      if (pixels.length < 2) return
+
+      // Draw segments, switching color when the relationship between A and B changes
+      let segStart = 0
+      for (let i = 1; i <= pixels.length; i++) {
+        const prevBull = this._data[segStart] ? this._data[segStart].senkouA >= this._data[segStart].senkouB : true
+        const currBull = i < this._data.length ? this._data[i]?.senkouA >= this._data[i]?.senkouB : prevBull
+        const isLast = i === pixels.length
+
+        if (isLast || currBull !== prevBull) {
+          const seg = pixels.slice(segStart, i + (isLast ? 0 : 1))
+          if (seg.length >= 2) {
+            ctx.beginPath()
+            ctx.moveTo(seg[0].x, seg[0].yA)
+            for (let j = 1; j < seg.length; j++) ctx.lineTo(seg[j].x, seg[j].yA)
+            for (let j = seg.length - 1; j >= 0; j--) ctx.lineTo(seg[j].x, seg[j].yB)
+            ctx.closePath()
+            ctx.fillStyle = prevBull ? this._bullColor : this._bearColor
+            ctx.fill()
+          }
+          segStart = i
+        }
+      }
+    })
+  }
+}
+
+class KumoFillPrimitive implements ISeriesPrimitive<Time> {
+  private _renderer = new KumoFillRenderer()
+  private _paneViews: IPrimitivePaneView[]
+  private _series: ISeriesApi<SeriesType, Time> | null = null
+  private _chart: IChartApi | null = null
+
+  constructor() {
+    const renderer = this._renderer
+    this._paneViews = [{
+      zOrder: () => 'bottom' as const,
+      renderer: () => renderer,
+    }]
+  }
+
+  setData(data: KumoPoint[]) {
+    if (this._series && this._chart) {
+      this._renderer.update(data, this._series, this._chart)
+    }
+  }
+
+  attached(param: SeriesAttachedParameter<Time, SeriesType>) {
+    this._series = param.series
+    this._chart = param.chart
+  }
+
+  detached() {
+    this._series = null
+    this._chart = null
+  }
+
+  updateAllViews() {
+    // renderer already has references, will use latest data on next draw
+  }
+
+  paneViews(): readonly IPrimitivePaneView[] {
+    return this._paneViews
+  }
+}
+
 export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -201,6 +375,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const lineSeriesRefs = useRef<Partial<Record<MALineKey, ISeriesApi<'Line'>>>>({})
   const bbSeriesRefs = useRef<Partial<Record<BBLineKey, ISeriesApi<'Line'>>>>({})
   const bbFillRefs = useRef<Partial<Record<BBKey, BollingerBandFillPrimitive>>>({})
+  const ichimokuSeriesRefs = useRef<Partial<Record<IchimokuLineKey, ISeriesApi<'Line'>>>>({})
+  const kumoFillRef = useRef<KumoFillPrimitive | null>(null)
   const prevCandleCountRef = useRef(0)
 
   const [interval, setInterval] = useState<CandleInterval>('PT15M')
@@ -234,6 +410,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     bb2: true,
     bb3: false,
   })
+
+  const [ichimokuVisible, setIchimokuVisible] = useState(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -279,6 +457,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       lineSeriesRefs.current = {}
       bbSeriesRefs.current = {}
       bbFillRefs.current = {}
+      ichimokuSeriesRefs.current = {}
+      kumoFillRef.current = null
       prevCandleCountRef.current = 0
       chart.remove()
     }
@@ -465,6 +645,98 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     }
   }, [bbVisible, candles])
 
+  // Manage Ichimoku Kinko Hyo lines and kumo fill
+  useEffect(() => {
+    const chart = chartRef.current
+    const candleSeries = seriesRef.current
+    if (!chart || !candleSeries || candles.length === 0) return
+
+    if (ichimokuVisible) {
+      const highs = candles.map((c) => c.high)
+      const lows = candles.map((c) => c.low)
+      const closes = candles.map((c) => c.close)
+      const times = candles.map((c) => Math.floor(c.time / 1000) as Time)
+
+      const ichi = calcIchimoku(highs, lows, closes)
+
+      // Generate future times for senkou spans (26 periods ahead)
+      // Estimate interval from last two candles
+      const lastTime = candles[candles.length - 1].time
+      const prevTime = candles.length > 1 ? candles[candles.length - 2].time : lastTime - 60000
+      const candleIntervalMs = lastTime - prevTime
+      const futureTimes: Time[] = []
+      for (let i = 1; i <= 26; i++) {
+        futureTimes.push(Math.floor((lastTime + candleIntervalMs * i) / 1000) as Time)
+      }
+      const allSenkouTimes = [...times, ...futureTimes]
+
+      // Build line data for each component
+      const lineConfigs: { key: IchimokuLineKey; values: (number | null)[]; timesArr: Time[] }[] = [
+        { key: 'tenkan', values: ichi.tenkan, timesArr: times },
+        { key: 'kijun', values: ichi.kijun, timesArr: times },
+        { key: 'senkouA', values: ichi.senkouA, timesArr: allSenkouTimes },
+        { key: 'senkouB', values: ichi.senkouB, timesArr: allSenkouTimes },
+        { key: 'chikou', values: ichi.chikou, timesArr: times },
+      ]
+
+      for (const { key, values, timesArr } of lineConfigs) {
+        const lineData: LineData<Time>[] = []
+        for (let i = 0; i < values.length; i++) {
+          if (values[i] !== null && i < timesArr.length) {
+            lineData.push({ time: timesArr[i], value: values[i]! })
+          }
+        }
+
+        const existing = ichimokuSeriesRefs.current[key]
+        if (existing) {
+          existing.setData(lineData)
+        } else {
+          const cfg = ICHIMOKU_CONFIG[key]
+          const s = chart.addSeries(LineSeries, {
+            color: cfg.color,
+            lineWidth: 1,
+            lineStyle: key === 'chikou' ? 2 : 0, // chikou is dashed
+            priceLineVisible: false,
+            lastValueVisible: false,
+            crosshairMarkerVisible: false,
+          })
+          s.setData(lineData)
+          ichimokuSeriesRefs.current[key] = s
+        }
+      }
+
+      // Kumo fill
+      const kumoData: KumoPoint[] = []
+      for (let i = 0; i < ichi.senkouA.length; i++) {
+        if (ichi.senkouA[i] !== null && ichi.senkouB[i] !== null && i < allSenkouTimes.length) {
+          kumoData.push({ time: allSenkouTimes[i], senkouA: ichi.senkouA[i]!, senkouB: ichi.senkouB[i]! })
+        }
+      }
+
+      let kumoFill = kumoFillRef.current
+      if (!kumoFill) {
+        kumoFill = new KumoFillPrimitive()
+        candleSeries.attachPrimitive(kumoFill as ISeriesPrimitive<Time>)
+        kumoFillRef.current = kumoFill
+      }
+      kumoFill.setData(kumoData)
+    } else {
+      // Remove all ichimoku series
+      for (const key of Object.keys(ICHIMOKU_CONFIG) as IchimokuLineKey[]) {
+        const existing = ichimokuSeriesRefs.current[key]
+        if (existing) {
+          chart.removeSeries(existing)
+          delete ichimokuSeriesRefs.current[key]
+        }
+      }
+      const kumoFill = kumoFillRef.current
+      if (kumoFill) {
+        candleSeries.detachPrimitive(kumoFill as ISeriesPrimitive<Time>)
+        kumoFillRef.current = null
+      }
+    }
+  }, [ichimokuVisible, candles])
+
   const toggle = useCallback((key: MALineKey) => {
     setVisible((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
@@ -519,6 +791,19 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
               {MA_CONFIG[key].label}
             </button>
           ))}
+          <span className="mx-0.5 self-center text-[10px] text-white/20">|</span>
+          <button
+            type="button"
+            onClick={() => setIchimokuVisible((v) => !v)}
+            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium transition"
+            style={{
+              backgroundColor: ichimokuVisible ? 'rgba(33, 150, 243, 0.18)' : 'rgba(255,255,255,0.06)',
+              color: ichimokuVisible ? '#2196f3' : '#94a3b8',
+              border: `1px solid ${ichimokuVisible ? 'rgba(33, 150, 243, 0.45)' : 'rgba(255,255,255,0.1)'}`,
+            }}
+          >
+            一目
+          </button>
           <span className="mx-0.5 self-center text-[10px] text-white/20">|</span>
           {(Object.keys(BB_CONFIG) as BBKey[]).map((key) => (
             <button
