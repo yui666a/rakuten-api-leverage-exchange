@@ -4,6 +4,7 @@ import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
 import { MACDChart } from './MACDChart'
 import { RSIChart } from './RSIChart'
+import { StochasticsChart } from './StochasticsChart'
 
 type CandlestickChartProps = {
   symbolId: number
@@ -831,6 +832,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
         <>
           <MACDChart candles={candles} />
           <RSIChart candles={candles} />
+          <StochasticsChart candles={candles} />
         </>
       )}
     </div>
