@@ -2,6 +2,7 @@ package backtest
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -239,4 +240,263 @@ func TestResultRepository_PDCAFieldsRoundTrip(t *testing.T) {
 	if afterDelete.ParentResultID != nil {
 		t.Fatalf("expected child ParentResultID to be nil after parent delete, got %q", *afterDelete.ParentResultID)
 	}
+}
+
+// newTestRepo opens a fresh in-memory-backed SQLite DB in a temp directory,
+// runs migrations, and returns a ResultRepository ready for use.
+func newTestRepo(t *testing.T) *ResultRepository {
+	t.Helper()
+	tmp := t.TempDir()
+	db, err := database.NewDB(filepath.Join(tmp, "test.db"))
+	if err != nil {
+		t.Fatalf("new db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := database.RunMigrations(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	return NewResultRepository(db)
+}
+
+// basicResult returns a minimally-populated BacktestResult for persistence tests.
+func basicResult(id string, createdAt int64) entity.BacktestResult {
+	return entity.BacktestResult{
+		ID:        id,
+		CreatedAt: createdAt,
+		Config: entity.BacktestConfig{
+			Symbol:          "BTC_JPY",
+			SymbolID:        7,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   1000,
+			ToTimestamp:     2000,
+		},
+		Summary: entity.BacktestSummary{
+			InitialBalance: 100000,
+			FinalBalance:   110000,
+			WinRate:        50,
+		},
+	}
+}
+
+func TestResultRepository_SaveSelfReference422(t *testing.T) {
+	repo := newTestRepo(t)
+	id := "bt-self-ref"
+	self := id
+	r := basicResult(id, time.Now().Unix())
+	r.ParentResultID = &self
+
+	err := repo.Save(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error for self-reference, got nil")
+	}
+	if !errors.Is(err, repository.ErrParentResultSelfReference) {
+		t.Fatalf("expected ErrParentResultSelfReference, got %v", err)
+	}
+}
+
+func TestResultRepository_SaveParentNotFound422(t *testing.T) {
+	repo := newTestRepo(t)
+	missing := "does-not-exist"
+	r := basicResult("bt-orphan", time.Now().Unix())
+	r.ParentResultID = &missing
+
+	err := repo.Save(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error for missing parent, got nil")
+	}
+	if !errors.Is(err, repository.ErrParentResultNotFound) {
+		t.Fatalf("expected ErrParentResultNotFound, got %v", err)
+	}
+}
+
+func TestResultRepository_SaveValidParent(t *testing.T) {
+	repo := newTestRepo(t)
+	now := time.Now().Unix()
+
+	parent := basicResult("bt-parent", now)
+	if err := repo.Save(context.Background(), parent); err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
+
+	pid := parent.ID
+	child := basicResult("bt-child", now+1)
+	child.ParentResultID = &pid
+	if err := repo.Save(context.Background(), child); err != nil {
+		t.Fatalf("save valid child: %v", err)
+	}
+
+	found, err := repo.FindByID(context.Background(), child.ID)
+	if err != nil {
+		t.Fatalf("find child: %v", err)
+	}
+	if found == nil || found.ParentResultID == nil || *found.ParentResultID != parent.ID {
+		t.Fatalf("expected child.ParentResultID=%q, got %+v", parent.ID, found)
+	}
+}
+
+func TestResultRepository_Filter(t *testing.T) {
+	repo := newTestRepo(t)
+	now := time.Now().Unix()
+	ctx := context.Background()
+
+	// r1: profile=prodA, cycle=c1, no parent.
+	r1 := basicResult("bt-f1", now)
+	r1.ProfileName = "prodA"
+	r1.PDCACycleID = "c1"
+
+	// r2: profile=prodB, cycle=c1, no parent.
+	r2 := basicResult("bt-f2", now+1)
+	r2.ProfileName = "prodB"
+	r2.PDCACycleID = "c1"
+
+	// r3: profile=prodA, cycle=c2, parent=r1.
+	r3 := basicResult("bt-f3", now+2)
+	r3.ProfileName = "prodA"
+	r3.PDCACycleID = "c2"
+	pid1 := r1.ID
+	r3.ParentResultID = &pid1
+
+	// r4: profile=prodB, cycle=c2, parent=r2.
+	r4 := basicResult("bt-f4", now+3)
+	r4.ProfileName = "prodB"
+	r4.PDCACycleID = "c2"
+	pid2 := r2.ID
+	r4.ParentResultID = &pid2
+
+	for _, r := range []entity.BacktestResult{r1, r2, r3, r4} {
+		if err := repo.Save(ctx, r); err != nil {
+			t.Fatalf("save %s: %v", r.ID, err)
+		}
+	}
+
+	collectIDs := func(results []entity.BacktestResult) map[string]struct{} {
+		m := make(map[string]struct{}, len(results))
+		for _, r := range results {
+			m[r.ID] = struct{}{}
+		}
+		return m
+	}
+
+	t.Run("ProfileName", func(t *testing.T) {
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:       10,
+			ProfileName: "prodA",
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 rows, got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r1.ID]; !ok {
+			t.Fatalf("r1 missing from ProfileName=prodA result: %v", ids)
+		}
+		if _, ok := ids[r3.ID]; !ok {
+			t.Fatalf("r3 missing from ProfileName=prodA result: %v", ids)
+		}
+	})
+
+	t.Run("PDCACycleID", func(t *testing.T) {
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:       10,
+			PDCACycleID: "c2",
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 rows, got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r3.ID]; !ok {
+			t.Fatalf("r3 missing from PDCACycleID=c2 result: %v", ids)
+		}
+		if _, ok := ids[r4.ID]; !ok {
+			t.Fatalf("r4 missing from PDCACycleID=c2 result: %v", ids)
+		}
+	})
+
+	t.Run("HasParentTrue", func(t *testing.T) {
+		yes := true
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:     10,
+			HasParent: &yes,
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 rows (children only), got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r3.ID]; !ok {
+			t.Fatalf("r3 missing from HasParent=true: %v", ids)
+		}
+		if _, ok := ids[r4.ID]; !ok {
+			t.Fatalf("r4 missing from HasParent=true: %v", ids)
+		}
+	})
+
+	t.Run("HasParentFalse", func(t *testing.T) {
+		no := false
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:     10,
+			HasParent: &no,
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 2 {
+			t.Fatalf("expected 2 rows (roots only), got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r1.ID]; !ok {
+			t.Fatalf("r1 missing from HasParent=false: %v", ids)
+		}
+		if _, ok := ids[r2.ID]; !ok {
+			t.Fatalf("r2 missing from HasParent=false: %v", ids)
+		}
+	})
+
+	t.Run("ParentResultIDExactMatch", func(t *testing.T) {
+		pid := r1.ID
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:          10,
+			ParentResultID: &pid,
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 1 {
+			t.Fatalf("expected 1 row, got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r3.ID]; !ok {
+			t.Fatalf("r3 missing from ParentResultID=r1 result: %v", ids)
+		}
+	})
+
+	t.Run("ParentResultIDWinsOverHasParent", func(t *testing.T) {
+		// Spec §5.3: ParentResultID takes precedence over HasParent.
+		// If HasParent=false (which would exclude rows with a parent) were
+		// honored, we'd get zero rows; ParentResultID=r2 must win and return r4.
+		pid := r2.ID
+		no := false
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:          10,
+			ParentResultID: &pid,
+			HasParent:      &no,
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 1 {
+			t.Fatalf("expected 1 row (ParentResultID wins), got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r4.ID]; !ok {
+			t.Fatalf("r4 missing from ParentResultID=r2 (HasParent should be ignored): %v", ids)
+		}
+	})
 }

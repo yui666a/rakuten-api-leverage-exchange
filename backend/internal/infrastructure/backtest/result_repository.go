@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
@@ -39,6 +40,22 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	// Application-layer integrity checks on parent_result_id (design doc §5.1).
+	// Self-reference check happens first so we short-circuit without hitting the DB.
+	if result.ParentResultID != nil {
+		if *result.ParentResultID == result.ID {
+			return fmt.Errorf("save backtest result: %w", repository.ErrParentResultSelfReference)
+		}
+		var exists int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM backtest_results WHERE id = ?`, *result.ParentResultID).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return fmt.Errorf("save backtest result: %w", repository.ErrParentResultNotFound)
+			}
+			return fmt.Errorf("check parent existence: %w", err)
+		}
+	}
 
 	parentID := sql.NullString{}
 	if result.ParentResultID != nil {
@@ -128,9 +145,42 @@ func (r *ResultRepository) List(ctx context.Context, filter repository.BacktestR
 		offset = 0
 	}
 
-	rows, err := r.db.QueryContext(ctx, `SELECT `+resultColumns+` FROM backtest_results
+	// Dynamic WHERE construction. Only parameterised placeholders are used;
+	// the static column names are not derived from caller input.
+	var clauses []string
+	var args []any
+
+	if filter.ProfileName != "" {
+		clauses = append(clauses, "profile_name = ?")
+		args = append(args, filter.ProfileName)
+	}
+	if filter.PDCACycleID != "" {
+		clauses = append(clauses, "pdca_cycle_id = ?")
+		args = append(args, filter.PDCACycleID)
+	}
+	// ParentResultID takes precedence over HasParent (design doc §5.3).
+	switch {
+	case filter.ParentResultID != nil:
+		clauses = append(clauses, "parent_result_id = ?")
+		args = append(args, *filter.ParentResultID)
+	case filter.HasParent != nil && *filter.HasParent:
+		clauses = append(clauses, "parent_result_id IS NOT NULL")
+	case filter.HasParent != nil && !*filter.HasParent:
+		clauses = append(clauses, "parent_result_id IS NULL")
+	}
+
+	where := ""
+	if len(clauses) > 0 {
+		where = " WHERE " + strings.Join(clauses, " AND ")
+	}
+
+	args = append(args, limit, offset)
+
+	query := `SELECT ` + resultColumns + ` FROM backtest_results` + where + `
 		ORDER BY created_at DESC, id DESC
-		LIMIT ? OFFSET ?`, limit, offset)
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list backtest results: %w", err)
 	}
