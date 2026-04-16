@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
+import { MACDChart } from './MACDChart'
 
 type CandlestickChartProps = {
   symbolId: number
@@ -825,6 +826,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
         </div>
       </div>
       <div ref={containerRef} />
+      {candles.length > 0 && <MACDChart candles={candles} />}
     </div>
   )
 }
