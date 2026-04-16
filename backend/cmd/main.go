@@ -19,6 +19,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
 func main() {
@@ -58,6 +59,12 @@ func main() {
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+	defaultStrategy := strategyuc.NewDefaultStrategy(strategyEngine)
+	strategyRegistry := strategyuc.NewStrategyRegistry()
+	if err := strategyRegistry.Register(defaultStrategy.Name(), defaultStrategy); err != nil {
+		slog.Error("failed to register default strategy", "error", err)
+		os.Exit(1)
+	}
 	backtestRunner := backtestuc.NewBacktestRunner()
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount:     cfg.Risk.MaxPositionAmount,
@@ -94,7 +101,7 @@ func main() {
 		restClient,
 		restClient, // SymbolFetcher
 		marketDataSvc,
-		strategyEngine,
+		defaultStrategy,
 		riskMgr,
 		tradeHistoryRepo,
 		riskStateRepo,

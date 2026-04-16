@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/live"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
@@ -30,7 +31,7 @@ type EventDrivenPipeline struct {
 
 	// Existing dependencies (injected at construction)
 	riskMgr          *usecase.RiskManager
-	strategyEngine   *usecase.StrategyEngine
+	strategy         port.Strategy
 	marketDataSvc    *usecase.MarketDataService
 	orderClient      repository.OrderClient
 	symbolFetcher    repository.SymbolFetcher
@@ -66,7 +67,7 @@ func NewEventDrivenPipeline(
 	orderClient repository.OrderClient,
 	symbolFetcher repository.SymbolFetcher,
 	marketDataSvc *usecase.MarketDataService,
-	strategyEngine *usecase.StrategyEngine,
+	strategy port.Strategy,
 	riskMgr *usecase.RiskManager,
 	tradeHistoryRepo repository.TradeHistoryRepository,
 	riskStateRepo repository.RiskStateRepository,
@@ -81,7 +82,7 @@ func NewEventDrivenPipeline(
 		orderClient:       orderClient,
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
-		strategyEngine:    strategyEngine,
+		strategy:          strategy,
 		riskMgr:           riskMgr,
 		tradeHistoryRepo:  tradeHistoryRepo,
 		riskStateRepo:     riskStateRepo,
@@ -252,7 +253,7 @@ func (p *EventDrivenPipeline) snapshot() eventSnapshot {
 // feeds them through LiveSource to produce events, and dispatches them
 // through the EventEngine handler chain.
 func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapshot) {
-	if p.marketDataSvc == nil || p.strategyEngine == nil || p.orderClient == nil || p.riskMgr == nil {
+	if p.marketDataSvc == nil || p.strategy == nil || p.orderClient == nil || p.riskMgr == nil {
 		<-ctx.Done()
 		return
 	}
@@ -285,7 +286,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
 
 	// StrategyHandler: signal generation from indicators (priority 20).
-	strategyHandler := &backtest.StrategyHandler{Engine: p.strategyEngine}
+	strategyHandler := &backtest.StrategyHandler{Strategy: p.strategy}
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
 
 	// RiskHandler: risk gating for signals (priority 30).

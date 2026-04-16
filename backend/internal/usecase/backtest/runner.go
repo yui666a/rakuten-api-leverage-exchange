@@ -11,6 +11,7 @@ import (
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
 type RunInput struct {
@@ -61,6 +62,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		DisablePersistence: true,
 	})
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+	defaultStrategy := strategyuc.NewDefaultStrategy(strategyEngine)
 	riskMgr := usecase.NewRiskManager(riskCfg)
 
 	sim := infra.NewSimExecutor(infra.SimConfig{
@@ -79,7 +81,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskCfg.TakeProfitPercent,
 	)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
-	strategyHandler := &StrategyHandler{Engine: strategyEngine}
+	strategyHandler := &StrategyHandler{Strategy: defaultStrategy}
 	riskHandler := &RiskHandler{
 		RiskManager: riskMgr,
 		TradeAmount: input.TradeAmount,

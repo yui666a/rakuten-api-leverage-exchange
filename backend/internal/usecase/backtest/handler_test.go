@@ -8,6 +8,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
 func TestIndicatorHandler_NoFutureHigherTFLeak(t *testing.T) {
@@ -64,7 +65,7 @@ func TestIndicatorHandler_NoFutureHigherTFLeak(t *testing.T) {
 func TestStrategyHandler_UsesIndicatorTimestamp(t *testing.T) {
 	resolver := usecase.NewRuleBasedStanceResolver(nil)
 	engine := usecase.NewStrategyEngine(resolver)
-	handler := &StrategyHandler{Engine: engine}
+	handler := &StrategyHandler{Strategy: strategyuc.NewDefaultStrategy(engine)}
 
 	ts := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC).UnixMilli()
 	events, err := handler.Handle(context.Background(), entity.IndicatorEvent{

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
@@ -162,9 +163,12 @@ func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	return nil, nil
 }
 
-// StrategyHandler converts IndicatorEvent to SignalEvent using StrategyEngine.
+// StrategyHandler converts IndicatorEvent to SignalEvent using a Strategy.
+// It depends on the port.Strategy abstraction so the concrete implementation
+// (DefaultStrategy wrapping StrategyEngine today, a ConfigurableStrategy later)
+// can be swapped at the composition root without touching the handler chain.
 type StrategyHandler struct {
-	Engine *usecase.StrategyEngine
+	Strategy port.Strategy
 }
 
 func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]entity.Event, error) {
@@ -172,13 +176,14 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 	if !ok {
 		return nil, nil
 	}
-	if h.Engine == nil {
-		return nil, fmt.Errorf("strategy engine is nil")
+	if h.Strategy == nil {
+		return nil, fmt.Errorf("strategy is nil")
 	}
 
-	signal, err := h.Engine.EvaluateWithHigherTFAt(
+	indicators := indicatorEvent.Primary
+	signal, err := h.Strategy.Evaluate(
 		ctx,
-		indicatorEvent.Primary,
+		&indicators,
 		indicatorEvent.HigherTF,
 		indicatorEvent.LastPrice,
 		time.UnixMilli(indicatorEvent.Timestamp),
