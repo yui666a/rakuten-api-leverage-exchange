@@ -32,6 +32,12 @@ type BacktestSummary struct {
 	AvgHoldSeconds     int64   `json:"avgHoldSeconds"`
 	TotalCarryingCost  float64 `json:"totalCarryingCost"`
 	TotalSpreadCost    float64 `json:"totalSpreadCost"`
+	// BiweeklyWinRate is the mean of 14-day sliding-window win rates across the
+	// backtest period, expressed on a 0-100 scale (matches WinRate scale).
+	// Windows with fewer than 3 closed trades are penalized to 0 (not skipped);
+	// if the coverage ratio (windows with >=3 trades / total windows) is below 50%,
+	// the overall value is reported as 0 to signal low reliability.
+	BiweeklyWinRate float64 `json:"biweeklyWinRate"`
 }
 
 // BacktestTradeRecord is a closed trade record produced by the simulator.
@@ -59,4 +65,15 @@ type BacktestResult struct {
 	Config    BacktestConfig        `json:"config"`
 	Summary   BacktestSummary       `json:"summary"`
 	Trades    []BacktestTradeRecord `json:"trades,omitempty"`
+
+	// PDCA metadata. Introduced by the PDCA strategy optimizer (see design doc §5).
+	// ProfileName identifies the StrategyProfile that produced this run (empty for legacy rows).
+	ProfileName string `json:"profileName"`
+	// PDCACycleID links this run to a PDCA cycle document/ID (empty when unassigned).
+	PDCACycleID string `json:"pdcaCycleId,omitempty"`
+	// Hypothesis records the experimenter's hypothesis for this run.
+	Hypothesis string `json:"hypothesis,omitempty"`
+	// ParentResultID points to the previous run in a comparison chain.
+	// nil means "root node" (no parent).
+	ParentResultID *string `json:"parentResultId,omitempty"`
 }
