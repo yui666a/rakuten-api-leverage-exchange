@@ -12,19 +12,36 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
+// defaultProfilesBaseDir mirrors the CLI default: strategy profiles live
+// under backend/profiles/ at repository root. See spec §8.3 for why the
+// path is relative and why profile names are restricted to [a-zA-Z0-9_-].
+const defaultProfilesBaseDir = "profiles"
+
 type BacktestHandler struct {
-	runner *bt.BacktestRunner
-	repo   repository.BacktestResultRepository
+	runner          *bt.BacktestRunner
+	repo            repository.BacktestResultRepository
+	profilesBaseDir string
 }
 
 func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResultRepository) *BacktestHandler {
 	return &BacktestHandler{
-		runner: runner,
-		repo:   repo,
+		runner:          runner,
+		repo:            repo,
+		profilesBaseDir: defaultProfilesBaseDir,
 	}
+}
+
+// SetProfilesBaseDir overrides the profile directory used to resolve
+// `profileName` in POST /backtest/run requests. Tests inject an absolute
+// temp dir so they don't need to chdir. Production code relies on the
+// default ("profiles") with cwd=backend/.
+func (h *BacktestHandler) SetProfilesBaseDir(dir string) {
+	h.profilesBaseDir = dir
 }
 
 type runBacktestRequest struct {
@@ -43,6 +60,14 @@ type runBacktestRequest struct {
 	MaxDailyLoss         float64 `json:"maxDailyLoss"`
 	MaxConsecutiveLosses int     `json:"maxConsecutiveLosses"`
 	CooldownMinutes      int     `json:"cooldownMinutes"`
+
+	// PDCA extensions (spec §8.2). All optional; when ProfileName is set,
+	// the profile's values become the base and non-zero individual fields
+	// above override them.
+	ProfileName    string  `json:"profileName,omitempty"`
+	PDCACycleID    string  `json:"pdcaCycleId,omitempty"`
+	Hypothesis     string  `json:"hypothesis,omitempty"`
+	ParentResultID *string `json:"parentResultId,omitempty"`
 }
 
 func (h *BacktestHandler) Run(c *gin.Context) {
@@ -56,30 +81,28 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.InitialBalance <= 0 {
-		req.InitialBalance = 100000
+
+	// Resolve / load the StrategyProfile up-front. Spec §8.3 requires that
+	// invalid names, missing files, and profiles that fail Validate() all
+	// surface as HTTP 400 (caller-driven errors), not 500.
+	baseDir := h.profilesBaseDir
+	if baseDir == "" {
+		baseDir = defaultProfilesBaseDir
 	}
-	if req.Spread <= 0 {
-		req.Spread = 0.1
+	profile, loadErr := loadProfileForRequest(baseDir, req.ProfileName)
+	if loadErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": loadErr.Error()})
+		return
 	}
-	if req.CarryingCost <= 0 {
-		req.CarryingCost = 0.04
-	}
-	if req.TradeAmount <= 0 {
-		req.TradeAmount = 0.01
-	}
-	if req.StopLossPercent <= 0 {
-		req.StopLossPercent = 5
-	}
-	if req.TakeProfitPercent <= 0 {
-		req.TakeProfitPercent = 10
-	}
-	if req.MaxPositionAmount <= 0 {
-		req.MaxPositionAmount = 1_000_000_000
-	}
-	if req.MaxDailyLoss <= 0 {
-		req.MaxDailyLoss = 1_000_000_000
-	}
+
+	// Apply profile defaults to zero-valued individual fields so spec §8.2's
+	// precedence rule holds: profile first, then any non-zero individual
+	// parameter in the request overrides.
+	applyProfileDefaults(&req, profile)
+
+	// Legacy callers (no profile) still get the historical hard-coded
+	// defaults when individual fields are zero.
+	applyLegacyDefaults(&req)
 
 	primary, err := csvinfra.LoadCandles(req.DataPath)
 	if err != nil {
@@ -130,7 +153,23 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		cfg.HigherTFInterval = ""
 	}
 
-	result, err := h.runner.Run(context.Background(), bt.RunInput{
+	// When a profile is specified, build a one-shot runner wired with a
+	// ConfigurableStrategy. We do NOT mutate h.runner (it is shared across
+	// requests) so profile selection is per-request.
+	runner := h.runner
+	if profile != nil {
+		strat, err := strategyuc.NewConfigurableStrategy(profile)
+		if err != nil {
+			// A profile that loaded but fails strategy construction is still
+			// caller-driven (the profile JSON is on disk because the caller
+			// referenced it) — return 400 rather than 500.
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile: " + err.Error()})
+			return
+		}
+		runner = bt.NewBacktestRunner(bt.WithStrategy(strat))
+	}
+
+	result, err := runner.Run(context.Background(), bt.RunInput{
 		Config:         cfg,
 		TradeAmount:    req.TradeAmount,
 		PrimaryCandles: primary.Candles,
@@ -150,6 +189,14 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		return
 	}
 
+	// Attach PDCA metadata before Save so the repository's parent-integrity
+	// checks (Task 5) actually see the parent_result_id value. Without this
+	// wiring, Task 5's 422 guard could never fire via the HTTP layer.
+	result.ProfileName = req.ProfileName
+	result.PDCACycleID = req.PDCACycleID
+	result.Hypothesis = req.Hypothesis
+	result.ParentResultID = req.ParentResultID
+
 	if err := h.repo.Save(c.Request.Context(), *result); err != nil {
 		// parent_result_id integrity failures map to 422 so clients can
 		// distinguish them from generic 500 persistence errors.
@@ -162,6 +209,80 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// loadProfileForRequest resolves and loads a profile by name. Returns
+// (nil, nil) if name is empty (caller did not request a profile). Any error
+// is caller-driven and should map to HTTP 400 at the handler layer.
+func loadProfileForRequest(baseDir, name string) (*entity.StrategyProfile, error) {
+	if name == "" {
+		return nil, nil
+	}
+	// ResolveProfilePath rejects bad names (regex violation, traversal) and
+	// the loader further rejects missing files / unknown JSON fields /
+	// Validate failures. All of these are caller-driven (the caller asked
+	// for this profile), so everything collapses to a single 400 surface.
+	if _, err := strategyprofile.ResolveProfilePath(baseDir, name); err != nil {
+		return nil, err
+	}
+	loader := strategyprofile.NewLoader(baseDir)
+	profile, err := loader.Load(name)
+	if err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
+// applyProfileDefaults overlays the profile's risk values onto the request
+// wherever the request left a field at its zero value. This runs BEFORE
+// applyLegacyDefaults so profile values take precedence over the hard-coded
+// fallbacks but defer to any non-zero individual field from the request.
+func applyProfileDefaults(req *runBacktestRequest, profile *entity.StrategyProfile) {
+	if profile == nil {
+		return
+	}
+	if req.StopLossPercent <= 0 && profile.Risk.StopLossPercent > 0 {
+		req.StopLossPercent = profile.Risk.StopLossPercent
+	}
+	if req.TakeProfitPercent <= 0 && profile.Risk.TakeProfitPercent > 0 {
+		req.TakeProfitPercent = profile.Risk.TakeProfitPercent
+	}
+	if req.MaxPositionAmount <= 0 && profile.Risk.MaxPositionAmount > 0 {
+		req.MaxPositionAmount = profile.Risk.MaxPositionAmount
+	}
+	if req.MaxDailyLoss <= 0 && profile.Risk.MaxDailyLoss > 0 {
+		req.MaxDailyLoss = profile.Risk.MaxDailyLoss
+	}
+}
+
+// applyLegacyDefaults restores the historical zero-value fallbacks used by
+// the handler before PDCA. Extracted so tests and the profile path share
+// the same fallback logic.
+func applyLegacyDefaults(req *runBacktestRequest) {
+	if req.InitialBalance <= 0 {
+		req.InitialBalance = 100000
+	}
+	if req.Spread <= 0 {
+		req.Spread = 0.1
+	}
+	if req.CarryingCost <= 0 {
+		req.CarryingCost = 0.04
+	}
+	if req.TradeAmount <= 0 {
+		req.TradeAmount = 0.01
+	}
+	if req.StopLossPercent <= 0 {
+		req.StopLossPercent = 5
+	}
+	if req.TakeProfitPercent <= 0 {
+		req.TakeProfitPercent = 10
+	}
+	if req.MaxPositionAmount <= 0 {
+		req.MaxPositionAmount = 1_000_000_000
+	}
+	if req.MaxDailyLoss <= 0 {
+		req.MaxDailyLoss = 1_000_000_000
+	}
 }
 
 func (h *BacktestHandler) ListResults(c *gin.Context) {

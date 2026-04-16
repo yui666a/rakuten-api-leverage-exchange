@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
@@ -22,14 +23,43 @@ type RunInput struct {
 	HigherCandles  []entity.Candle
 }
 
-type BacktestRunner struct {
-	reporter *SummaryReporter
+// RunnerOption tunes optional aspects of a BacktestRunner at construction.
+//
+// Added to support PDCA strategy-profile selection (spec §8): callers that
+// want to drive the run with a ConfigurableStrategy (or any other
+// port.Strategy implementation) pass WithStrategy(...). Runners constructed
+// without any option keep the historical behaviour of building a fresh
+// DefaultStrategy per run.
+type RunnerOption func(*BacktestRunner)
+
+// WithStrategy sets a custom port.Strategy for the runner. A nil value is
+// ignored so callers can pass a strategy that may or may not be configured
+// without an extra branch at the call site.
+func WithStrategy(s port.Strategy) RunnerOption {
+	return func(r *BacktestRunner) {
+		if s != nil {
+			r.strategy = s
+		}
+	}
 }
 
-func NewBacktestRunner() *BacktestRunner {
-	return &BacktestRunner{
+type BacktestRunner struct {
+	reporter *SummaryReporter
+	// strategy is optional. When nil, Run builds the legacy DefaultStrategy.
+	// When non-nil (typically a ConfigurableStrategy), Run uses it directly.
+	strategy port.Strategy
+}
+
+func NewBacktestRunner(opts ...RunnerOption) *BacktestRunner {
+	r := &BacktestRunner{
 		reporter: NewSummaryReporter(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
 }
 
 func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.BacktestResult, error) {
@@ -57,12 +87,18 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskCfg.StopLossPercent = 5
 	}
 
-	stanceResolver := usecase.NewRuleBasedStanceResolverWithOptions(nil, usecase.RuleBasedStanceResolverOptions{
-		DisableOverride:    true,
-		DisablePersistence: true,
-	})
-	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
-	defaultStrategy := strategyuc.NewDefaultStrategy(strategyEngine)
+	// Strategy selection: prefer the caller-supplied strategy (set via
+	// WithStrategy) so PDCA runs can use a ConfigurableStrategy. Fall back
+	// to the hard-coded DefaultStrategy for legacy callers.
+	strategy := r.strategy
+	if strategy == nil {
+		stanceResolver := usecase.NewRuleBasedStanceResolverWithOptions(nil, usecase.RuleBasedStanceResolverOptions{
+			DisableOverride:    true,
+			DisablePersistence: true,
+		})
+		strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+		strategy = strategyuc.NewDefaultStrategy(strategyEngine)
+	}
 	riskMgr := usecase.NewRiskManager(riskCfg)
 
 	sim := infra.NewSimExecutor(infra.SimConfig{
@@ -81,7 +117,7 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskCfg.TakeProfitPercent,
 	)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
-	strategyHandler := NewStrategyHandler(defaultStrategy)
+	strategyHandler := NewStrategyHandler(strategy)
 	riskHandler := &RiskHandler{
 		RiskManager: riskMgr,
 		TradeAmount: input.TradeAmount,
