@@ -310,6 +310,7 @@ backtestPDCAColumns := []struct {
     {"pdca_cycle_id", "pdca_cycle_id TEXT NOT NULL DEFAULT ''"},
     {"hypothesis", "hypothesis TEXT NOT NULL DEFAULT ''"},
     {"parent_result_id", "parent_result_id TEXT NOT NULL DEFAULT ''"},
+    {"biweekly_win_rate", "biweekly_win_rate REAL NOT NULL DEFAULT 0"},
 }
 for _, col := range backtestPDCAColumns {
     if err := addColumnIfNotExists(db, "backtest_results", col.name, col.def); err != nil {
@@ -329,7 +330,13 @@ CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
 CREATE INDEX IF NOT EXISTS idx_backtest_results_profile
     ON backtest_results(profile_name)
     WHERE profile_name != '';
+
+CREATE INDEX IF NOT EXISTS idx_backtest_results_pdca_cycle
+    ON backtest_results(pdca_cycle_id)
+    WHERE pdca_cycle_id != '';
 ```
+
+`biweekly_win_rate` カラムは `BacktestSummary` の新フィールドに対応し、Repository の INSERT/SELECT で永続化する。
 
 ### 5.2 API レスポンス拡張
 
@@ -431,14 +438,20 @@ type PDCAEvaluation struct {
 
 バックテスト期間をタイムスタンプベースで2週間 (14日) のウィンドウに分割し、1日ずつスライドする。
 各ウィンドウ内のクローズ済みトレードから勝率を算出し、全ウィンドウの平均を取る。
-トレード数が0のウィンドウはスキップする。
+
+**最低トレード数制約:** 各ウィンドウ内のトレード数が3件未満の場合はそのウィンドウの勝率を0%として扱う（スキップではなくペナルティ）。
+これにより低頻度売買戦略が見かけ上高い勝率を得ることを防ぐ。
+
+**カバレッジ率制約:** トレードが3件以上あるウィンドウの割合（カバレッジ率）が50%未満の場合、BiweeklyWinRate 自体を信頼不可として 0 を返す。
 
 ```
 期間: 2024-01-01 ～ 2024-12-31
-Window 1: 01/01 - 01/14 → 勝率 75%
-Window 2: 01/02 - 01/15 → 勝率 80%
+Window 1: 01/01 - 01/14 → 5件, 勝率 75%  ✓
+Window 2: 01/02 - 01/15 → 1件, 勝率 0%   (3件未満ペナルティ)
+Window 3: 01/03 - 01/16 → 4件, 勝率 80%  ✓
 ...
-BiweeklyWinRate = avg(全ウィンドウ)
+カバレッジ率 = 有効ウィンドウ数 / 全ウィンドウ数
+BiweeklyWinRate = カバレッジ率 ≥ 50% ? avg(全ウィンドウ) : 0
 ```
 
 ### 7.3 BacktestSummary への追加フィールド
@@ -480,10 +493,32 @@ go run ./cmd/backtest optimize \
 
 ```
 POST /api/v1/backtest/run
-  + profilePath: string (プロファイルJSONのパス)
+  + profileName: string (プロファイル名。profiles/<profileName>.json として解決)
   + pdcaCycleId: string (PDCAサイクルID、オプション)
   + hypothesis: string (仮説テキスト、オプション)
   + parentResultId: string (比較元の結果ID、オプション)
+```
+
+### 8.3 プロファイルパスのバリデーション
+
+API 経由の `profileName` はファイル名のみ（拡張子なし）を受け付け、サーバー側で `profiles/<name>.json` に解決する。
+CLI の `--profile` も同様に `profiles/` 配下に限定する。
+
+```go
+// パストラバーサル防止
+func resolveProfilePath(name string) (string, error) {
+    // 英数字、ハイフン、アンダースコアのみ許可
+    if !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(name) {
+        return "", fmt.Errorf("invalid profile name: %s", name)
+    }
+    path := filepath.Join("profiles", name+".json")
+    // 念のため Clean 後に profiles/ プレフィックスを検証
+    cleaned := filepath.Clean(path)
+    if !strings.HasPrefix(cleaned, "profiles/") {
+        return "", fmt.Errorf("profile path traversal detected: %s", name)
+    }
+    return cleaned, nil
+}
 ```
 
 ---
