@@ -309,7 +309,7 @@ backtestPDCAColumns := []struct {
     {"profile_name", "profile_name TEXT NOT NULL DEFAULT ''"},
     {"pdca_cycle_id", "pdca_cycle_id TEXT NOT NULL DEFAULT ''"},
     {"hypothesis", "hypothesis TEXT NOT NULL DEFAULT ''"},
-    {"parent_result_id", "parent_result_id TEXT NOT NULL DEFAULT ''"},
+    {"parent_result_id", "parent_result_id TEXT DEFAULT NULL REFERENCES backtest_results(id)"},
     {"biweekly_win_rate", "biweekly_win_rate REAL NOT NULL DEFAULT 0"},
 }
 for _, col := range backtestPDCAColumns {
@@ -319,13 +319,14 @@ for _, col := range backtestPDCAColumns {
 }
 ```
 
-`parent_result_id` にはインデックスを作成し、系譜追跡のクエリ性能を確保する。
-SQLite では FK 制約の実効性が限定的なため、アプリケーション層で参照整合性を検証する。
+`parent_result_id` にはインデックスと自己参照 FK 制約を設定する。
+本プロジェクトは `PRAGMA foreign_keys=ON`（`sqlite.go:31`）を有効化しているため、FK が実効的に機能する。
+ただし `parent_result_id` は空文字（ルートノード）を許容するため、FK は空文字でない場合のみ適用される（SQLite では NULL の FK は無視されるため、空文字ではなく NULL をデフォルトとする）。
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
     ON backtest_results(parent_result_id)
-    WHERE parent_result_id != '';
+    WHERE parent_result_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_backtest_results_profile
     ON backtest_results(profile_name)
@@ -348,7 +349,7 @@ type BacktestResult struct {
     ProfileName    string `json:"profileName"`
     PDCACycleID    string `json:"pdcaCycleId,omitempty"`
     Hypothesis     string `json:"hypothesis,omitempty"`
-    ParentResultID string `json:"parentResultId,omitempty"`
+    ParentResultID *string `json:"parentResultId,omitempty"` // NULL = ルートノード
 }
 ```
 
@@ -469,8 +470,8 @@ type BacktestSummary struct {
 
 ### 8.1 `--profile` フラグ追加
 
-CLI および API でのパスは `backend/` ディレクトリからの相対パスとして解決する。
-これは既存の `--data` フラグ（例: `data/candles_*.csv`）と同じ規約に従う。
+CLI・API ともにプロファイルは **名前のみ（拡張子なし）** で指定する。
+サーバー/CLI 側で `profiles/<name>.json` に解決する（8.3 のバリデーション参照）。
 
 ```bash
 # 実行ディレクトリ: backend/
@@ -478,13 +479,13 @@ cd backend
 
 # プロファイル指定でバックテスト実行
 go run ./cmd/backtest run \
-  --profile profiles/experiment_2026-04-16_01.json \
+  --profile experiment_2026-04-16_01 \
   --data data/candles_LTC_JPY_PT15M.csv \
   --data-htf data/candles_LTC_JPY_PT1H.csv
 
 # プロファイル指定で最適化
 go run ./cmd/backtest optimize \
-  --profile profiles/base.json \
+  --profile production \
   --param "stop_loss_percent=1:10:1" \
   ...
 ```
