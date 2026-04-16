@@ -278,7 +278,7 @@ func basicResult(id string, createdAt int64) entity.BacktestResult {
 	}
 }
 
-func TestResultRepository_SaveSelfReference422(t *testing.T) {
+func TestResultRepository_SaveRejectsSelfReference(t *testing.T) {
 	repo := newTestRepo(t)
 	id := "bt-self-ref"
 	self := id
@@ -292,12 +292,22 @@ func TestResultRepository_SaveSelfReference422(t *testing.T) {
 	if !errors.Is(err, repository.ErrParentResultSelfReference) {
 		t.Fatalf("expected ErrParentResultSelfReference, got %v", err)
 	}
+
+	// Rollback integrity: the rejected row must not have been persisted.
+	found, err := repo.FindByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("find after self-ref rejection: %v", err)
+	}
+	if found != nil {
+		t.Fatalf("expected no row persisted after self-ref rejection, got %+v", found)
+	}
 }
 
-func TestResultRepository_SaveParentNotFound422(t *testing.T) {
+func TestResultRepository_SaveRejectsMissingParent(t *testing.T) {
 	repo := newTestRepo(t)
 	missing := "does-not-exist"
-	r := basicResult("bt-orphan", time.Now().Unix())
+	id := "bt-orphan"
+	r := basicResult(id, time.Now().Unix())
 	r.ParentResultID = &missing
 
 	err := repo.Save(context.Background(), r)
@@ -306,6 +316,15 @@ func TestResultRepository_SaveParentNotFound422(t *testing.T) {
 	}
 	if !errors.Is(err, repository.ErrParentResultNotFound) {
 		t.Fatalf("expected ErrParentResultNotFound, got %v", err)
+	}
+
+	// Rollback integrity: the rejected row must not have been persisted.
+	found, err := repo.FindByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("find after missing-parent rejection: %v", err)
+	}
+	if found != nil {
+		t.Fatalf("expected no row persisted after missing-parent rejection, got %+v", found)
 	}
 }
 
@@ -474,6 +493,27 @@ func TestResultRepository_Filter(t *testing.T) {
 		}
 		if _, ok := ids[r3.ID]; !ok {
 			t.Fatalf("r3 missing from ParentResultID=r1 result: %v", ids)
+		}
+	})
+
+	t.Run("ProfileNameAndPDCACycleIDCombined", func(t *testing.T) {
+		// AND semantics: only rows matching BOTH ProfileName=prodA and
+		// PDCACycleID=c1 should be returned. r3 matches profile but not cycle;
+		// r2 matches cycle but not profile; only r1 matches both.
+		got, err := repo.List(ctx, repository.BacktestResultFilter{
+			Limit:       10,
+			ProfileName: "prodA",
+			PDCACycleID: "c1",
+		})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := collectIDs(got)
+		if len(ids) != 1 {
+			t.Fatalf("expected 1 row (AND match), got %d: %v", len(ids), ids)
+		}
+		if _, ok := ids[r1.ID]; !ok {
+			t.Fatalf("r1 missing from ProfileName=prodA AND PDCACycleID=c1 result: %v", ids)
 		}
 	})
 

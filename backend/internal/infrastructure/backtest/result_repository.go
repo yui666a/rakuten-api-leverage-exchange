@@ -3,6 +3,7 @@ package backtest
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -50,7 +51,7 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		var exists int
 		err := tx.QueryRowContext(ctx, `SELECT 1 FROM backtest_results WHERE id = ?`, *result.ParentResultID).Scan(&exists)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("save backtest result: %w", repository.ErrParentResultNotFound)
 			}
 			return fmt.Errorf("check parent existence: %w", err)
