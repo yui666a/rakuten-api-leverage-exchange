@@ -264,6 +264,12 @@ Act:
 ```markdown
 # PDCA Cycle NN — YYYY-MM-DD
 
+## 実行条件
+- データ: data/candles_LTC_JPY_PT15M.csv
+- HTFデータ: data/candles_LTC_JPY_PT1H.csv
+- 期間: YYYY-MM-DD ～ YYYY-MM-DD
+- 実行コマンド: (再現用の完全なコマンドを記載)
+
 ## 仮説
 (何をどう変えるか、なぜ改善すると考えるか)
 
@@ -497,8 +503,11 @@ go run ./cmd/backtest run \
   --data-htf data/candles_LTC_JPY_PT1H.csv
 
 # プロファイルをベースに最適化（プロファイルの値を起点としてパラメータ探索）
+# --data は必須、--data-htf / --from / --to はオプション（run と同じ規約）
 go run ./cmd/backtest optimize \
   --profile experiment_2026-04-16_01 \
+  --data data/candles_LTC_JPY_PT15M.csv \
+  --data-htf data/candles_LTC_JPY_PT1H.csv \
   --param "stop_loss_percent=1:10:1" \
   ...
 ```
@@ -580,6 +589,18 @@ func resolveProfilePath(name string) (string, error) {
 - production.json (現行パラメータの外出し)
 - docs/pdca/ 記録フォーマット
 - BiweeklyWinRate (2週間スライド勝率) の算出ロジック + BacktestSummary への追加
+
+### 必須テスト
+
+| 対象 | テストケース | 種別 |
+|---|---|---|
+| マイグレーション | 新カラム追加が冪等に実行できること（2回実行してエラーなし） | 統合テスト |
+| resolveProfilePath | 正常名、空文字、`..` 含み、絶対パス、特殊文字を拒否 | 単体テスト |
+| parent_result_id | 自己参照で 422、存在しないIDで FK エラー、NULL で正常保存 | 統合テスト |
+| profileName + 個別パラメータ | 個別パラメータがプロファイル値をオーバーライドすること | 単体テスト |
+| BiweeklyWinRate | 3件未満ペナルティ、カバレッジ50%未満で0、正常算出 | 単体テスト |
+| ConfigurableStrategy | プロファイルから生成した戦略が DefaultStrategy と同一入力で動作すること | 単体テスト |
+| API /backtest/results フィルタ | profileName / pdcaCycleId でフィルタ結果が正しいこと | 統合テスト |
 
 ### 今回実装しないもの
 
