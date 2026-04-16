@@ -747,7 +747,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
 
   return (
     <div className="bg-bg-card rounded-lg p-4">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      <div className="mb-2 space-y-2">
+        {/* Row 1: interval selector */}
         <div className="flex items-center gap-2">
           <div className="flex gap-1">
             {INTERVAL_OPTIONS.map((opt) => {
@@ -775,7 +776,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
             </span>
           )}
         </div>
-        <div className="flex flex-wrap gap-1.5">
+        {/* Row 2: indicator toggles */}
+        <div className="flex flex-wrap items-center gap-1.5">
           {(Object.keys(MA_CONFIG) as MALineKey[]).map((key) => (
             <button
               key={key}
