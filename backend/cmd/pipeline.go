@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 )
@@ -58,7 +59,7 @@ type TradingPipeline struct {
 	symbolFetcher    repository.SymbolFetcher
 	marketDataSvc    *usecase.MarketDataService
 	indicatorCalc    *usecase.IndicatorCalculator
-	strategyEngine   *usecase.StrategyEngine
+	strategy         port.Strategy
 	orderExecutor    *usecase.OrderExecutor
 	riskMgr          *usecase.RiskManager
 	tradeHistoryRepo repository.TradeHistoryRepository
@@ -105,7 +106,7 @@ func NewTradingPipeline(
 	symbolFetcher repository.SymbolFetcher,
 	marketDataSvc *usecase.MarketDataService,
 	indicatorCalc *usecase.IndicatorCalculator,
-	strategyEngine *usecase.StrategyEngine,
+	strategy port.Strategy,
 	orderExecutor *usecase.OrderExecutor,
 	riskMgr *usecase.RiskManager,
 	tradeHistoryRepo repository.TradeHistoryRepository,
@@ -121,7 +122,7 @@ func NewTradingPipeline(
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
 		indicatorCalc:     indicatorCalc,
-		strategyEngine:    strategyEngine,
+		strategy:          strategy,
 		orderExecutor:     orderExecutor,
 		riskMgr:           riskMgr,
 		tradeHistoryRepo:  tradeHistoryRepo,
@@ -280,7 +281,7 @@ func (p *TradingPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, onSw
 // runTradingLoop は一定間隔で指標計算→戦略判定→注文実行を行う。
 func (p *TradingPipeline) runTradingLoop(ctx context.Context) {
 	// テスト時に依存が nil の場合は評価ループを回さない（ロック挙動のみ検証する用途）
-	if p.marketDataSvc == nil || p.indicatorCalc == nil || p.strategyEngine == nil || p.restClient == nil || p.orderExecutor == nil {
+	if p.marketDataSvc == nil || p.indicatorCalc == nil || p.strategy == nil || p.restClient == nil || p.orderExecutor == nil {
 		<-ctx.Done()
 		return
 	}
@@ -330,7 +331,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	// 3. 戦略判定（マルチタイムフレーム分析付き）
-	signal, err := p.strategyEngine.EvaluateWithHigherTF(ctx, *indicators, higherTF, latestTicker.Last)
+	signal, err := p.strategy.Evaluate(ctx, indicators, higherTF, latestTicker.Last, time.Now())
 	if err != nil {
 		slog.Warn("pipeline: failed to evaluate strategy", "error", err)
 		return

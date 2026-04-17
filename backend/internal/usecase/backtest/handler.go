@@ -2,6 +2,7 @@ package backtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -9,10 +10,17 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
+
+// ErrBacktestStrategyMissing is returned by StrategyHandler.Handle when the
+// handler was constructed with a nil port.Strategy. Callers should use
+// NewStrategyHandler so this path is only reachable through struct-literal
+// construction that bypasses the constructor.
+var ErrBacktestStrategyMissing = errors.New("backtest: strategy handler has no strategy")
 
 // TickGeneratorHandler creates deterministic synthetic in-bar ticks from primary candles.
 type TickGeneratorHandler struct {
@@ -162,9 +170,26 @@ func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	return nil, nil
 }
 
-// StrategyHandler converts IndicatorEvent to SignalEvent using StrategyEngine.
+// StrategyHandler converts IndicatorEvent to SignalEvent using a Strategy.
+// It depends on the port.Strategy abstraction so the concrete implementation
+// (DefaultStrategy wrapping StrategyEngine today, a ConfigurableStrategy later)
+// can be swapped at the composition root without touching the handler chain.
+//
+// Construct via NewStrategyHandler to guarantee a non-nil strategy. The
+// Handle method keeps a sentinel check as defense-in-depth for struct-literal
+// construction that bypasses the constructor.
 type StrategyHandler struct {
-	Engine *usecase.StrategyEngine
+	Strategy port.Strategy
+}
+
+// NewStrategyHandler returns a StrategyHandler that delegates to s. It panics
+// if s is nil — the non-nil strategy is a composition-root invariant, so a nil
+// argument represents a programmer error that should fail loudly at startup.
+func NewStrategyHandler(s port.Strategy) *StrategyHandler {
+	if s == nil {
+		panic("backtest: NewStrategyHandler strategy must not be nil")
+	}
+	return &StrategyHandler{Strategy: s}
 }
 
 func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]entity.Event, error) {
@@ -172,13 +197,14 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 	if !ok {
 		return nil, nil
 	}
-	if h.Engine == nil {
-		return nil, fmt.Errorf("strategy engine is nil")
+	if h.Strategy == nil {
+		return nil, ErrBacktestStrategyMissing
 	}
 
-	signal, err := h.Engine.EvaluateWithHigherTFAt(
+	indicators := indicatorEvent.Primary
+	signal, err := h.Strategy.Evaluate(
 		ctx,
-		indicatorEvent.Primary,
+		&indicators,
 		indicatorEvent.HigherTF,
 		indicatorEvent.LastPrice,
 		time.UnixMilli(indicatorEvent.Timestamp),

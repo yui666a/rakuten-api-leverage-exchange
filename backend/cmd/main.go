@@ -19,6 +19,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
 func main() {
@@ -58,6 +59,12 @@ func main() {
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
+	// The StrategyRegistry lives in the strategy package and is exercised by
+	// its own unit tests. It is intentionally not wired here yet because no
+	// downstream code consumes it; leaving dead infrastructure at the
+	// composition root would be misleading. It will be wired in the PR that
+	// introduces CLI/API strategy-profile selection.
+	defaultStrategy := strategyuc.NewDefaultStrategy(strategyEngine)
 	backtestRunner := backtestuc.NewBacktestRunner()
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount:     cfg.Risk.MaxPositionAmount,
@@ -94,7 +101,7 @@ func main() {
 		restClient,
 		restClient, // SymbolFetcher
 		marketDataSvc,
-		strategyEngine,
+		defaultStrategy,
 		riskMgr,
 		tradeHistoryRepo,
 		riskStateRepo,
