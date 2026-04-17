@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -455,72 +456,45 @@ func TestBacktestHandler_Run_Happy_200(t *testing.T) {
 
 // --- Task 6: profileName + PDCA metadata tests ---
 
-// productionProfileJSON mirrors backend/profiles/production.json. We write
-// it into a temp dir rather than referencing the on-disk copy so these
-// tests stay hermetic and don't depend on the process cwd.
-const productionProfileJSON = `{
-  "name": "production",
-  "description": "test copy of production defaults",
-  "indicators": {
-    "sma_short": 20,
-    "sma_long": 50,
-    "rsi_period": 14,
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "bb_period": 20,
-    "bb_multiplier": 2.0,
-    "atr_period": 14
-  },
-  "stance_rules": {
-    "rsi_oversold": 25,
-    "rsi_overbought": 75,
-    "sma_convergence_threshold": 0.001,
-    "bb_squeeze_lookback": 5,
-    "breakout_volume_ratio": 1.5
-  },
-  "signal_rules": {
-    "trend_follow": {
-      "enabled": true,
-      "require_macd_confirm": true,
-      "require_ema_cross": true,
-      "rsi_buy_max": 70,
-      "rsi_sell_min": 30
-    },
-    "contrarian": {
-      "enabled": true,
-      "rsi_entry": 30,
-      "rsi_exit": 70,
-      "macd_histogram_limit": 10
-    },
-    "breakout": {
-      "enabled": true,
-      "volume_ratio_min": 1.5,
-      "require_macd_confirm": true
-    }
-  },
-  "strategy_risk": {
-    "stop_loss_percent": 5,
-    "take_profit_percent": 10,
-    "stop_loss_atr_multiplier": 0,
-    "max_position_amount": 100000,
-    "max_daily_loss": 50000
-  },
-  "htf_filter": {
-    "enabled": true,
-    "block_counter_trend": true,
-    "alignment_boost": 0.1
-  }
-}`
+// readProductionProfileJSON loads backend/profiles/production.json by walking
+// up to the module root (go.mod). Reading the real on-disk fixture (rather
+// than an inline copy) removes the duplication with cmd/backtest's tests and
+// guarantees both test suites exercise the same profile the handler would
+// load in production. See configurable_strategy_test.go for the same walk
+// pattern. The file is a test fixture: keep it in sync with whatever the
+// production default is meant to be.
+func readProductionProfileJSON(t *testing.T) []byte {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	dir := filepath.Dir(thisFile)
+	for {
+		candidate := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(candidate); err == nil {
+			data, err := os.ReadFile(filepath.Join(dir, "profiles", "production.json"))
+			if err != nil {
+				t.Fatalf("read production.json: %v", err)
+			}
+			return data
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found walking up from test file")
+		}
+		dir = parent
+	}
+}
 
 // setupProfilesDir writes the given name.json files under a temp profiles
 // directory and returns the directory path.
-func setupProfilesDir(t *testing.T, profiles map[string]string) string {
+func setupProfilesDir(t *testing.T, profiles map[string][]byte) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, content := range profiles {
 		path := filepath.Join(dir, name+".json")
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(path, content, 0o600); err != nil {
 			t.Fatalf("write profile %s: %v", name, err)
 		}
 	}
@@ -534,10 +508,11 @@ func newRunRouter(t *testing.T, profilesDir string) (*gin.Engine, *BacktestHandl
 	gin.SetMode(gin.TestMode)
 	db := setupIntegrationDB(t)
 	repo := btinfra.NewResultRepository(db)
-	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+	var opts []BacktestHandlerOption
 	if profilesDir != "" {
-		h.SetProfilesBaseDir(profilesDir)
+		opts = append(opts, WithProfilesBaseDir(profilesDir))
 	}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo, opts...)
 
 	router := gin.New()
 	router.POST("/api/v1/backtest/run", h.Run)
@@ -583,7 +558,7 @@ func makeCSVForRunTests(t *testing.T) string {
 }
 
 func TestBacktestHandler_Run_Profile_OK(t *testing.T) {
-	profilesDir := setupProfilesDir(t, map[string]string{"production": productionProfileJSON})
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
 	router, _, repo := newRunRouter(t, profilesDir)
 	csvPath := makeCSVForRunTests(t)
 
@@ -616,7 +591,7 @@ func TestBacktestHandler_Run_Profile_OK(t *testing.T) {
 }
 
 func TestBacktestHandler_Run_Profile_InvalidName_400(t *testing.T) {
-	profilesDir := setupProfilesDir(t, map[string]string{"production": productionProfileJSON})
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
 	router, _, _ := newRunRouter(t, profilesDir)
 	csvPath := makeCSVForRunTests(t)
 
@@ -630,7 +605,7 @@ func TestBacktestHandler_Run_Profile_InvalidName_400(t *testing.T) {
 }
 
 func TestBacktestHandler_Run_Profile_Unknown_400(t *testing.T) {
-	profilesDir := setupProfilesDir(t, map[string]string{"production": productionProfileJSON})
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
 	router, _, _ := newRunRouter(t, profilesDir)
 	csvPath := makeCSVForRunTests(t)
 
@@ -646,7 +621,7 @@ func TestBacktestHandler_Run_Profile_Unknown_400(t *testing.T) {
 func TestBacktestHandler_Run_Profile_IndividualFieldOverrides(t *testing.T) {
 	// production.json has stop_loss_percent=5. Passing stopLossPercent=7
 	// in the request body must override that.
-	profilesDir := setupProfilesDir(t, map[string]string{"production": productionProfileJSON})
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
 	router, _, repo := newRunRouter(t, profilesDir)
 	csvPath := makeCSVForRunTests(t)
 
@@ -739,7 +714,7 @@ func TestApplyProfileDefaults_IndividualFieldOverrides(t *testing.T) {
 }
 
 func TestBacktestHandler_Run_ParentResultID_Chains(t *testing.T) {
-	profilesDir := setupProfilesDir(t, map[string]string{"production": productionProfileJSON})
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
 	router, _, repo := newRunRouter(t, profilesDir)
 	csvPath := makeCSVForRunTests(t)
 

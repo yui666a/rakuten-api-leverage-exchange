@@ -125,7 +125,7 @@ func runCommand(args []string) error {
 		return fmt.Errorf("--data is required")
 	}
 
-	profile, err := loadProfileIfSet(f.Profile)
+	profile, err := loadProfileIfSet(f.Profile, profilesBaseDir)
 	if err != nil {
 		return err
 	}
@@ -177,20 +177,24 @@ func visitedFlagNames(fs *flag.FlagSet) map[string]bool {
 	return set
 }
 
-// loadProfileIfSet loads a StrategyProfile from profiles/<name>.json if
+// loadProfileIfSet loads a StrategyProfile from <baseDir>/<name>.json if
 // `name` is non-empty. It returns (nil, nil) when the caller did not request
 // a profile, which the caller uses as the sentinel for "keep default
 // strategy".
-func loadProfileIfSet(name string) (*entity.StrategyProfile, error) {
+//
+// baseDir is accepted as an argument (rather than hard-coded to the package
+// const) so tests can inject a temp directory without relying on os.Chdir,
+// which races with the test runner's parallel-package default.
+func loadProfileIfSet(name string, baseDir string) (*entity.StrategyProfile, error) {
 	if name == "" {
 		return nil, nil
 	}
 	// ResolveProfilePath rejects traversal / unsafe names before any I/O so
 	// the caller sees a clean error for bad input without a disk roundtrip.
-	if _, err := strategyprofile.ResolveProfilePath(profilesBaseDir, name); err != nil {
+	if _, err := strategyprofile.ResolveProfilePath(baseDir, name); err != nil {
 		return nil, fmt.Errorf("resolve profile %q: %w", name, err)
 	}
-	loader := strategyprofile.NewLoader(profilesBaseDir)
+	loader := strategyprofile.NewLoader(baseDir)
 	profile, err := loader.Load(name)
 	if err != nil {
 		return nil, fmt.Errorf("load profile %q: %w", name, err)
@@ -232,7 +236,7 @@ func optimizeCommand(args []string) error {
 		return fmt.Errorf("--sort-by currently supports only sharpe_ratio")
 	}
 
-	profile, err := loadProfileIfSet(f.Profile)
+	profile, err := loadProfileIfSet(f.Profile, profilesBaseDir)
 	if err != nil {
 		return err
 	}
@@ -314,7 +318,7 @@ func refineCommand(args []string) error {
 		return fmt.Errorf("at least one --param is required")
 	}
 
-	profile, err := loadProfileIfSet(f.Profile)
+	profile, err := loadProfileIfSet(f.Profile, profilesBaseDir)
 	if err != nil {
 		return err
 	}

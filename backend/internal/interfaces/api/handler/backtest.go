@@ -28,20 +28,34 @@ type BacktestHandler struct {
 	profilesBaseDir string
 }
 
-func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResultRepository) *BacktestHandler {
-	return &BacktestHandler{
+// BacktestHandlerOption configures optional aspects of a BacktestHandler at
+// construction time. Using a functional option pattern avoids exposing a
+// post-construction setter (which would race with concurrent HTTP requests)
+// while still letting tests inject a temp profile directory.
+type BacktestHandlerOption func(*BacktestHandler)
+
+// WithProfilesBaseDir overrides the base directory used to resolve
+// `profileName` in POST /backtest/run requests. Tests inject an absolute
+// temp dir so they don't need to chdir. Production code relies on the
+// default ("profiles") with cwd=backend/.
+func WithProfilesBaseDir(dir string) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.profilesBaseDir = dir
+	}
+}
+
+func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResultRepository, opts ...BacktestHandlerOption) *BacktestHandler {
+	h := &BacktestHandler{
 		runner:          runner,
 		repo:            repo,
 		profilesBaseDir: defaultProfilesBaseDir,
 	}
-}
-
-// SetProfilesBaseDir overrides the profile directory used to resolve
-// `profileName` in POST /backtest/run requests. Tests inject an absolute
-// temp dir so they don't need to chdir. Production code relies on the
-// default ("profiles") with cwd=backend/.
-func (h *BacktestHandler) SetProfilesBaseDir(dir string) {
-	h.profilesBaseDir = dir
+	for _, opt := range opts {
+		if opt != nil {
+			opt(h)
+		}
+	}
+	return h
 }
 
 type runBacktestRequest struct {
