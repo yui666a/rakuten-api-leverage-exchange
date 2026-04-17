@@ -11,7 +11,7 @@
 ### 1.1 目標
 
 - MaxDrawdown 20%以下の制約のもとで Total Return を最大化する
-- 2週間区間での勝率80%を目標とする（バックテスト期間を2週間ウィンドウでスライドし、各ウィンドウの勝率を算出、その平均値で評価）
+- 2週間区間での勝率80%を目標とする（バックテスト期間を2週間ウィンドウでスライドし、各ウィンドウの勝率を算出、その平均値で評価。勝率は 0-100 の百分率で扱う）
 - 本番運用の戦略とは独立して実験的な戦略を試行できるようにする
 - うまくいった戦略を手動承認で本番に昇格させる
 
@@ -232,7 +232,7 @@ Do:
        --profile experiment_2026-04-16_01 \
        --data data/candles_LTC_JPY_PT15M.csv \
        --data-htf data/candles_LTC_JPY_PT1H.csv
-     ※ --data/--data-htf は常に必須。プロファイルは戦略パラメータのみを持ち、
+     ※ --data は必須、--data-htf は任意。プロファイルは戦略パラメータのみを持ち、
        データソースと期間はCLI引数で指定する（再現性のためPDCA記録にも残す）。
 
 Check:
@@ -321,7 +321,7 @@ backtestPDCAColumns := []struct {
     {"profile_name", "profile_name TEXT NOT NULL DEFAULT ''"},
     {"pdca_cycle_id", "pdca_cycle_id TEXT NOT NULL DEFAULT ''"},
     {"hypothesis", "hypothesis TEXT NOT NULL DEFAULT ''"},
-    {"parent_result_id", "parent_result_id TEXT DEFAULT NULL REFERENCES backtest_results(id)"},
+    {"parent_result_id", "parent_result_id TEXT DEFAULT NULL REFERENCES backtest_results(id) ON DELETE SET NULL"},
     {"biweekly_win_rate", "biweekly_win_rate REAL NOT NULL DEFAULT 0"},
 }
 for _, col := range backtestPDCAColumns {
@@ -334,6 +334,7 @@ for _, col := range backtestPDCAColumns {
 `parent_result_id` にはインデックスと自己参照 FK 制約を設定する。
 本プロジェクトは `PRAGMA foreign_keys=ON`（`sqlite.go:31`）を有効化しているため、FK が実効的に機能する。
 `parent_result_id` のルートノード（親なし）は NULL で表現する。SQLite では NULL の FK 参照はチェックをスキップする。
+親レコード削除時は `ON DELETE SET NULL` により子レコードをルートノードへ昇格させる（履歴保持を優先し、保持期間削除ジョブと衝突しないようにする）。
 
 **`parent_result_id` の整合性ルール（アプリケーション層）:**
 
@@ -341,6 +342,11 @@ for _, col := range backtestPDCAColumns {
 - **自己参照禁止:** 自身の result_id と同一の値を拒否する（保存前に検証、HTTP 422 を返す）
 - **別プロファイル参照:** 許可する。異なるプロファイル間の比較チェーンは有効なユースケース（例: production → experiment_v1 の系譜）
 - **エラーレスポンス:** parent_result_id が不正な場合は HTTP 422 Unprocessable Entity を返し、理由を含める
+
+**エラーマッピング方針（API層）:**
+
+- Repository/UseCase は `parent_result_id` の自己参照・存在不正を判別可能なドメインエラーで返す
+- Handler は上記ドメインエラーのみ HTTP 422 とし、それ以外の永続化エラーは HTTP 500 とする
 
 ```sql
 CREATE INDEX IF NOT EXISTS idx_backtest_results_parent
@@ -383,15 +389,19 @@ type BacktestResultFilter struct {
     Offset         int
     ProfileName    string // 完全一致フィルタ (空文字 = フィルタなし)
     PDCACycleID    string // 完全一致フィルタ
-    ParentResultID string // 系譜追跡用
+    ParentResultID *string // 完全一致フィルタ (nil = フィルタなし)
+    HasParent      *bool   // nil = フィルタなし, true = IS NOT NULL, false = IS NULL
 }
 ```
 
 ```
 GET /api/v1/backtest/results?limit=20&offset=0&profileName=ltc_aggressive_v3&pdcaCycleId=2026-04-16_cycle01
+GET /api/v1/backtest/results?hasParent=false
+GET /api/v1/backtest/results?parentResultId=01HXYZ...
 ```
 
 Repository 実装では追加カラムを `WHERE` 句に動的追加する。
+`parentResultId` と `hasParent` が同時指定された場合は `parentResultId` を優先し、`hasParent` は無視する。
 
 ### 5.4 フロントエンド一覧表示
 
@@ -444,8 +454,8 @@ type PDCAEvaluation struct {
     // 主目的 — 高いほど良い
     TotalReturn         float64
 
-    // 副目的 — 高いほど良い (目標 0.80)
-    BiweeklyWinRate     float64 // 2週間スライドウィンドウ勝率の平均
+    // 副目的 — 高いほど良い (目標 80.0)
+    BiweeklyWinRate     float64 // 2週間スライドウィンドウ勝率の平均 (0-100)
 
     // 参考指標
     SharpeRatio         float64
@@ -457,7 +467,7 @@ type PDCAEvaluation struct {
 ### 7.2 2週間スライド勝率の計算
 
 バックテスト期間をタイムスタンプベースで2週間 (14日) のウィンドウに分割し、1日ずつスライドする。
-各ウィンドウ内のクローズ済みトレードから勝率を算出し、全ウィンドウの平均を取る。
+各ウィンドウ内のクローズ済みトレードから勝率（0-100）を算出し、全ウィンドウの平均を取る。
 
 **最低トレード数制約:** 各ウィンドウ内のトレード数が3件未満の場合はそのウィンドウの勝率を0%として扱う（スキップではなくペナルティ）。
 これにより低頻度売買戦略が見かけ上高い勝率を得ることを防ぐ。
@@ -479,7 +489,7 @@ BiweeklyWinRate = カバレッジ率 ≥ 50% ? avg(全ウィンドウ) : 0
 ```go
 type BacktestSummary struct {
     // ... 既存フィールド
-    BiweeklyWinRate float64 // 2週間スライド勝率の平均
+    BiweeklyWinRate float64 // 2週間スライド勝率の平均 (0-100)
 }
 ```
 
@@ -596,11 +606,11 @@ func resolveProfilePath(name string) (string, error) {
 |---|---|---|
 | マイグレーション | 新カラム追加が冪等に実行できること（2回実行してエラーなし） | 統合テスト |
 | resolveProfilePath | 正常名、空文字、`..` 含み、絶対パス、特殊文字を拒否 | 単体テスト |
-| parent_result_id | 自己参照で 422、存在しないIDで FK エラー、NULL で正常保存 | 統合テスト |
+| parent_result_id | 自己参照で 422、存在しないIDで 422、NULL で正常保存、親削除時に子の parent_result_id が NULL 化される | 統合テスト |
 | profileName + 個別パラメータ | 個別パラメータがプロファイル値をオーバーライドすること | 単体テスト |
-| BiweeklyWinRate | 3件未満ペナルティ、カバレッジ50%未満で0、正常算出 | 単体テスト |
-| ConfigurableStrategy | プロファイルから生成した戦略が DefaultStrategy と同一入力で動作すること | 単体テスト |
-| API /backtest/results フィルタ | profileName / pdcaCycleId でフィルタ結果が正しいこと | 統合テスト |
+| BiweeklyWinRate | 3件未満ペナルティ、カバレッジ50%未満で0、正常算出（0-100スケール） | 単体テスト |
+| ConfigurableStrategy | production 相当プロファイルで DefaultStrategy と互換動作すること | 単体テスト |
+| API /backtest/results フィルタ | profileName / pdcaCycleId / hasParent / parentResultId でフィルタ結果が正しいこと | 統合テスト |
 
 ### 今回実装しないもの
 
