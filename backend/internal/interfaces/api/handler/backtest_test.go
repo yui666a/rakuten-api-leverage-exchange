@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -24,9 +25,12 @@ import (
 type mockBacktestResultRepo struct {
 	listResults []entity.BacktestResult
 	findResult  *entity.BacktestResult
+	saveErr     error
 }
 
-func (m *mockBacktestResultRepo) Save(_ context.Context, _ entity.BacktestResult) error { return nil }
+func (m *mockBacktestResultRepo) Save(_ context.Context, _ entity.BacktestResult) error {
+	return m.saveErr
+}
 func (m *mockBacktestResultRepo) List(_ context.Context, _ repository.BacktestResultFilter) ([]entity.BacktestResult, error) {
 	return m.listResults, nil
 }
@@ -368,5 +372,77 @@ func TestBacktestHandler_Integration_RunMissingData(t *testing.T) {
 
 	if runW.Code != http.StatusBadRequest {
 		t.Fatalf("missing data: expected 400, got %d", runW.Code)
+	}
+}
+
+// Error mapping tests: verify that parent-integrity sentinel errors surface
+// as HTTP 422, while other persistence errors stay at 500.
+//
+// Note: request-body plumbing for parent_result_id lands in Task 6. Here we
+// simulate the downstream error via a mock repo that returns the sentinel,
+// which is exactly the propagation path from the real repository.
+
+func runBacktestExpectingSaveErr(t *testing.T, saveErr error) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	repo := &mockBacktestResultRepo{saveErr: saveErr}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+
+	tmpDir := t.TempDir()
+	candles := generateTestCandles(50)
+	csvPath := writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "BTC_JPY",
+		SymbolID: 7,
+		Interval: "PT15M",
+		Candles:  candles,
+	})
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+
+	body := `{"data":"` + csvPath + `","initialBalance":100000}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func TestBacktestHandler_Run_SelfReference_422(t *testing.T) {
+	wrapped := fmt.Errorf("save backtest result: %w", repository.ErrParentResultSelfReference)
+	w := runBacktestExpectingSaveErr(t, wrapped)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.Error == "" {
+		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestBacktestHandler_Run_ParentNotFound_422(t *testing.T) {
+	wrapped := fmt.Errorf("save backtest result: %w", repository.ErrParentResultNotFound)
+	w := runBacktestExpectingSaveErr(t, wrapped)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_Run_OtherPersistError_500(t *testing.T) {
+	w := runBacktestExpectingSaveErr(t, fmt.Errorf("some generic storage failure"))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_Run_Happy_200(t *testing.T) {
+	w := runBacktestExpectingSaveErr(t, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
