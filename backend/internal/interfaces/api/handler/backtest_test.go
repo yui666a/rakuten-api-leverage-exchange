@@ -32,13 +32,17 @@ type mockBacktestResultRepo struct {
 	// to assert that PDCA metadata (profileName, parentResultId, etc.) is
 	// attached to the persisted entity.
 	saved *entity.BacktestResult
+	// lastFilter records the last filter passed to List so handler tests can
+	// assert query-parameter plumbing without exercising the SQL layer.
+	lastFilter *repository.BacktestResultFilter
 }
 
 func (m *mockBacktestResultRepo) Save(_ context.Context, r entity.BacktestResult) error {
 	m.saved = &r
 	return m.saveErr
 }
-func (m *mockBacktestResultRepo) List(_ context.Context, _ repository.BacktestResultFilter) ([]entity.BacktestResult, error) {
+func (m *mockBacktestResultRepo) List(_ context.Context, f repository.BacktestResultFilter) ([]entity.BacktestResult, error) {
+	m.lastFilter = &f
 	return m.listResults, nil
 }
 func (m *mockBacktestResultRepo) FindByID(_ context.Context, _ string) (*entity.BacktestResult, error) {
@@ -798,5 +802,135 @@ func TestBacktestHandler_Run_PDCAMetadataPersisted(t *testing.T) {
 	}
 	if stored.Hypothesis != "tighter stop reduces drawdown" {
 		t.Errorf("Hypothesis = %q, want %q", stored.Hypothesis, "tighter stop reduces drawdown")
+	}
+}
+
+// --- Task 7: ListResults query-parameter filters ---
+
+// listWithQuery invokes the ListResults handler with the given query string
+// against a mock repo so we can assert the BacktestResultFilter it received.
+func listWithQuery(t *testing.T, query string) (*httptest.ResponseRecorder, *mockBacktestResultRepo) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	repo := &mockBacktestResultRepo{}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo)
+	router := gin.New()
+	router.GET("/api/v1/backtest/results", h.ListResults)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/backtest/results"+query, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w, repo
+}
+
+func TestBacktestHandler_ListResults_FilterProfileName(t *testing.T) {
+	w, repo := listWithQuery(t, "?profileName=foo")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter == nil {
+		t.Fatal("expected List to receive a filter")
+	}
+	if repo.lastFilter.ProfileName != "foo" {
+		t.Errorf("ProfileName = %q, want %q", repo.lastFilter.ProfileName, "foo")
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterPDCACycleID(t *testing.T) {
+	w, repo := listWithQuery(t, "?pdcaCycleId=cycle-1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.PDCACycleID != "cycle-1" {
+		t.Errorf("PDCACycleID = %q, want %q", repo.lastFilter.PDCACycleID, "cycle-1")
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterHasParentTrue(t *testing.T) {
+	w, repo := listWithQuery(t, "?hasParent=true")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.HasParent == nil || *repo.lastFilter.HasParent != true {
+		t.Errorf("HasParent = %v, want true", repo.lastFilter.HasParent)
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterHasParentFalse(t *testing.T) {
+	w, repo := listWithQuery(t, "?hasParent=false")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.HasParent == nil || *repo.lastFilter.HasParent != false {
+		t.Errorf("HasParent = %v, want false", repo.lastFilter.HasParent)
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterHasParentInvalid_400(t *testing.T) {
+	w, _ := listWithQuery(t, "?hasParent=yes")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid hasParent, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterParentResultID(t *testing.T) {
+	w, repo := listWithQuery(t, "?parentResultId=p-123")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.ParentResultID == nil || *repo.lastFilter.ParentResultID != "p-123" {
+		t.Errorf("ParentResultID = %v, want &\"p-123\"", repo.lastFilter.ParentResultID)
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterParentResultIDEmpty_NoFilter(t *testing.T) {
+	// Spec §5.3: empty string is a legitimate filter value at the repo layer,
+	// but the handler treats `?parentResultId=` as "no filter" (see handler
+	// comment for rationale). We verify the handler drops the filter.
+	w, repo := listWithQuery(t, "?parentResultId=")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.ParentResultID != nil {
+		t.Errorf("ParentResultID = %v, want nil (empty string folds into no-filter)", repo.lastFilter.ParentResultID)
+	}
+}
+
+func TestBacktestHandler_ListResults_FilterCombined(t *testing.T) {
+	w, repo := listWithQuery(t, "?profileName=foo&hasParent=false")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.ProfileName != "foo" {
+		t.Errorf("ProfileName = %q, want %q", repo.lastFilter.ProfileName, "foo")
+	}
+	if repo.lastFilter.HasParent == nil || *repo.lastFilter.HasParent != false {
+		t.Errorf("HasParent = %v, want false", repo.lastFilter.HasParent)
+	}
+}
+
+func TestBacktestHandler_ListResults_PrecedenceParentResultIDOverHasParent(t *testing.T) {
+	// Per repository doc and spec §5.3: when both are set, ParentResultID wins.
+	// Handler enforces the precedence before calling into the repo so the two
+	// layers agree. Assert HasParent is dropped.
+	w, repo := listWithQuery(t, "?parentResultId=p-1&hasParent=true")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.ParentResultID == nil || *repo.lastFilter.ParentResultID != "p-1" {
+		t.Errorf("ParentResultID = %v, want &\"p-1\"", repo.lastFilter.ParentResultID)
+	}
+	if repo.lastFilter.HasParent != nil {
+		t.Errorf("HasParent = %v, want nil (parentResultId takes precedence)", repo.lastFilter.HasParent)
+	}
+}
+
+func TestBacktestHandler_ListResults_NoFilters(t *testing.T) {
+	w, repo := listWithQuery(t, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if repo.lastFilter.ProfileName != "" || repo.lastFilter.PDCACycleID != "" ||
+		repo.lastFilter.ParentResultID != nil || repo.lastFilter.HasParent != nil {
+		t.Errorf("expected all filters zero, got %+v", repo.lastFilter)
 	}
 }

@@ -231,6 +231,15 @@ export type BacktestResult = {
     totalSpreadCost: number
   }
   trades?: BacktestTrade[]
+  // PDCA metadata — introduced by spec §5. Optional on the wire because:
+  //   - profileName / pdcaCycleId / hypothesis use Go's `omitempty` tag so
+  //     empty strings may be dropped from the JSON payload for legacy rows.
+  //   - parentResultId is `*string` in Go with `omitempty`, so the field is
+  //     absent entirely for root runs; present as null is also tolerated.
+  profileName?: string
+  pdcaCycleId?: string
+  hypothesis?: string
+  parentResultId?: string | null
 }
 
 export type BacktestResultListResponse = {

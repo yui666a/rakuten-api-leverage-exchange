@@ -53,6 +53,16 @@ const defaultRunForm: BacktestRunForm = {
 const fallbackBacktestPairs = ['BTC_JPY', 'LTC_JPY'] as const
 const TRADE_TABLE_COLUMN_COUNT = 11
 
+// Parent-relation filter for the list view. Kept as a const tuple so the
+// runtime guard in the <select> onChange handler stays in sync with the
+// `HasParentFilter` type below.
+const PARENT_FILTER_VALUES = ['all', 'only', 'root'] as const
+type HasParentFilter = (typeof PARENT_FILTER_VALUES)[number]
+
+function isHasParentFilter(value: string): value is HasParentFilter {
+  return (PARENT_FILTER_VALUES as readonly string[]).includes(value)
+}
+
 function buildAutoCSVPaths(currencyPair: string) {
   return {
     primary: `data/candles_${currencyPair}_PT15M.csv`,
@@ -148,7 +158,25 @@ function BacktestPage() {
   const [runForm, setRunForm] = useState<BacktestRunForm>(defaultRunForm)
   const [runValidationError, setRunValidationError] = useState('')
   const runBacktest = useRunBacktest()
-  const { data, isLoading, isError } = useBacktestResults()
+  // List filter state. `profileFilter === ''` means "すべて" (no filter).
+  // `hasParentFilter === 'only'` means only PDCA-continuation rows (親あり);
+  // `'root'` means only root runs (親なし); `'all'` applies neither.
+  // `parentFilter` is set by clicking a lineage link on a row; it filters the
+  // list to just the children of that parent ID. Clearing it returns to the
+  // default view.
+  const [profileFilter, setProfileFilter] = useState('')
+  const [hasParentFilter, setHasParentFilter] = useState<HasParentFilter>('all')
+  const [parentFilter, setParentFilter] = useState('')
+  const { data, isLoading, isError } = useBacktestResults({
+    profileName: profileFilter || undefined,
+    hasParent:
+      hasParentFilter === 'only'
+        ? true
+        : hasParentFilter === 'root'
+          ? false
+          : undefined,
+    parentResultId: parentFilter || undefined,
+  })
   const { data: detail, isLoading: detailLoading } = useBacktestResult(selectedId)
   const {
     data: csvMeta,
@@ -157,6 +185,19 @@ function BacktestPage() {
   } = useBacktestCSVMeta(runForm.data)
 
   const results = data?.results ?? []
+
+  // Distinct profile names from the currently-loaded rows, for the filter
+  // dropdown. We keep the currently-selected profile in the list even when
+  // it is filtered out by `hasParent` to avoid dropping the selection on
+  // render.
+  const profileOptions = useMemo(() => {
+    const set = new Set<string>()
+    for (const r of results) {
+      if (r.profileName && r.profileName !== '') set.add(r.profileName)
+    }
+    if (profileFilter !== '') set.add(profileFilter)
+    return Array.from(set).sort()
+  }, [results, profileFilter])
 
   useEffect(() => {
     if (pairOptions.length === 0) return
@@ -398,18 +439,78 @@ function BacktestPage() {
         <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Results</p>
         <h2 className="mt-2 text-xl font-semibold text-white">バックテスト一覧</h2>
 
+        {/* Filter controls (spec §5.4) */}
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="block">
+            <span className="mb-2 block text-xs uppercase tracking-[0.2em] text-text-secondary">
+              プロファイル
+            </span>
+            <select
+              value={profileFilter}
+              onChange={(event) => setProfileFilter(event.target.value)}
+              className="w-[220px] rounded-2xl border border-white/10 bg-white/6 px-4 py-2 text-sm text-white outline-none transition focus:border-cyan-200"
+            >
+              <option value="" className="bg-bg-card text-white">すべて</option>
+              {profileOptions.map((name) => (
+                <option key={name} value={name} className="bg-bg-card text-white">
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs uppercase tracking-[0.2em] text-text-secondary">
+              親子関係
+            </span>
+            <select
+              value={hasParentFilter}
+              onChange={(event) => {
+                const value = event.target.value
+                if (isHasParentFilter(value)) {
+                  setHasParentFilter(value)
+                }
+              }}
+              className="w-[220px] rounded-2xl border border-white/10 bg-white/6 px-4 py-2 text-sm text-white outline-none transition focus:border-cyan-200"
+            >
+              <option value="all" className="bg-bg-card text-white">すべて</option>
+              <option value="only" className="bg-bg-card text-white">親あり (PDCA継続)</option>
+              <option value="root" className="bg-bg-card text-white">親なし (ルート)</option>
+            </select>
+          </label>
+
+          {parentFilter !== '' && (
+            <div className="flex items-center gap-2 rounded-full border border-cyan-200/40 bg-cyan-200/10 px-3 py-1.5 text-xs text-cyan-100">
+              <span className="font-medium">親フィルタ:</span>
+              <span className="font-mono">{parentFilter.slice(0, 8)}</span>
+              <button
+                type="button"
+                onClick={() => setParentFilter('')}
+                className="ml-1 rounded-full px-1.5 text-cyan-200 transition hover:bg-cyan-200/20"
+                aria-label="親フィルタを解除"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </div>
+
         {isLoading ? (
           <p className="mt-4 text-sm text-text-secondary">読み込み中...</p>
         ) : results.length === 0 ? (
           <p className="mt-4 text-sm text-text-secondary">
-            バックテスト結果がありません。
+            {profileFilter !== '' || parentFilter !== '' || hasParentFilter !== 'all'
+              ? 'フィルタに一致する結果がありません。'
+              : 'バックテスト結果がありません。'}
           </p>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[800px] text-sm">
+            <table className="w-full min-w-[960px] text-sm">
               <thead>
                 <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
                   <th className="px-3 py-2">ID</th>
+                  <th className="px-3 py-2">プロファイル</th>
+                  <th className="px-3 py-2">PDCA Cycle</th>
                   <th className="px-3 py-2">Symbol</th>
                   <th className="px-3 py-2">期間</th>
                   <th className="px-3 py-2 text-right">Total Return</th>
@@ -417,6 +518,7 @@ function BacktestPage() {
                   <th className="px-3 py-2 text-right">Sharpe</th>
                   <th className="px-3 py-2 text-right">Max DD</th>
                   <th className="px-3 py-2 text-right">Trades</th>
+                  <th className="px-3 py-2">親</th>
                   <th className="px-3 py-2">作成日</th>
                 </tr>
               </thead>
@@ -427,6 +529,7 @@ function BacktestPage() {
                     result={r}
                     selected={r.id === selectedId}
                     onSelect={() => setSelectedId(r.id === selectedId ? '' : r.id)}
+                    onNavigateParent={(parentId) => setParentFilter(parentId)}
                   />
                 ))}
               </tbody>
@@ -491,13 +594,19 @@ type ResultRowProps = {
   result: BacktestResult
   selected: boolean
   onSelect: () => void
+  onNavigateParent: (parentId: string) => void
 }
 
-function ResultRow({ result, selected, onSelect }: ResultRowProps) {
+function ResultRow({ result, selected, onSelect, onNavigateParent }: ResultRowProps) {
   const { config, summary } = result
   const periodFrom = new Date(config.fromTimestamp).toLocaleDateString('ja-JP')
   const periodTo = new Date(config.toTimestamp).toLocaleDateString('ja-JP')
   const created = new Date(result.createdAt * 1000).toLocaleDateString('ja-JP')
+  // Distinguish PDCA-driven runs (have a profileName) from manual runs with
+  // a small Tailwind pill. Empty profileName collapses to an em-dash so the
+  // table stays visually aligned.
+  const isPDCA = (result.profileName ?? '') !== ''
+  const parentId = result.parentResultId ?? undefined
 
   return (
     <tr
@@ -507,7 +616,24 @@ function ResultRow({ result, selected, onSelect }: ResultRowProps) {
       }`}
     >
       <td className="px-3 py-2.5 font-mono text-xs text-text-secondary">
-        {result.id.slice(0, 8)}
+        <div className="flex items-center gap-2">
+          <span>{result.id.slice(0, 8)}</span>
+          {isPDCA ? (
+            <span className="rounded-full bg-cyan-200/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-200">
+              PDCA
+            </span>
+          ) : (
+            <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
+              manual
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="px-3 py-2.5 text-white">
+        {result.profileName && result.profileName !== '' ? result.profileName : '—'}
+      </td>
+      <td className="px-3 py-2.5 font-mono text-xs text-text-secondary">
+        {result.pdcaCycleId && result.pdcaCycleId !== '' ? result.pdcaCycleId : '—'}
       </td>
       <td className="px-3 py-2.5 text-white">{config.symbol}</td>
       <td className="px-3 py-2.5 text-text-secondary">
@@ -526,6 +652,24 @@ function ResultRow({ result, selected, onSelect }: ResultRowProps) {
         {formatPercent(summary.maxDrawdown)}
       </td>
       <td className="px-3 py-2.5 text-right text-white">{summary.totalTrades}</td>
+      <td className="px-3 py-2.5 font-mono text-xs">
+        {parentId && parentId !== '' ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              // Prevent the row click (which toggles selectedId) from firing.
+              event.stopPropagation()
+              onNavigateParent(parentId)
+            }}
+            className="text-cyan-200 underline-offset-2 transition hover:underline"
+            aria-label={`親 ${parentId} でフィルタ`}
+          >
+            {parentId.slice(0, 8)}
+          </button>
+        ) : (
+          <span className="text-text-secondary">—</span>
+        )}
+      </td>
       <td className="px-3 py-2.5 text-text-secondary">{created}</td>
     </tr>
   )
