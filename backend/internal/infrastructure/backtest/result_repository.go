@@ -9,6 +9,22 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 )
 
+// resultColumns は backtest_results テーブルの全カラムを列挙した共通定義。
+// INSERT/SELECT の双方でこの定数を参照することで列リストの重複を排除する。
+//
+// 不変条件: このカラム順序は scanResultRow の Scan 引数順序および Save の
+// INSERT バインド引数順序と完全に一致していなければならない。変更時は両方を
+// 必ず同時に更新すること。
+const resultColumns = `id, created_at, symbol, symbol_id, primary_interval, higher_tf_interval,
+	from_ts, to_ts, initial_balance, final_balance, total_return, total_trades,
+	win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
+	sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost,
+	profile_name, pdca_cycle_id, hypothesis, parent_result_id, biweekly_win_rate`
+
+// resultColumnPlaceholders は resultColumns と同じ個数 (27) の INSERT プレースホルダ。
+// resultColumns のカラム数を変更した場合はここも必ず同期させること。
+const resultColumnPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+
 type ResultRepository struct {
 	db *sql.DB
 }
@@ -24,14 +40,12 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO backtest_results (
-			id, created_at, symbol, symbol_id, primary_interval, higher_tf_interval,
-			from_ts, to_ts, initial_balance, final_balance, total_return, total_trades,
-			win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
-			sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	parentID := sql.NullString{}
+	if result.ParentResultID != nil {
+		parentID = sql.NullString{String: *result.ParentResultID, Valid: true}
+	}
+
+	_, err = tx.ExecContext(ctx, `INSERT INTO backtest_results (`+resultColumns+`) VALUES (`+resultColumnPlaceholders+`)`,
 		result.ID,
 		result.CreatedAt,
 		result.Config.Symbol,
@@ -54,6 +68,11 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		result.Summary.AvgHoldSeconds,
 		result.Summary.TotalCarryingCost,
 		result.Summary.TotalSpreadCost,
+		result.ProfileName,
+		result.PDCACycleID,
+		result.Hypothesis,
+		parentID,
+		result.Summary.BiweeklyWinRate,
 	)
 	if err != nil {
 		return fmt.Errorf("insert backtest result: %w", err)
@@ -109,16 +128,9 @@ func (r *ResultRepository) List(ctx context.Context, filter repository.BacktestR
 		offset = 0
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			id, created_at, symbol, symbol_id, primary_interval, higher_tf_interval,
-			from_ts, to_ts, initial_balance, final_balance, total_return, total_trades,
-			win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
-			sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost
-		FROM backtest_results
+	rows, err := r.db.QueryContext(ctx, `SELECT `+resultColumns+` FROM backtest_results
 		ORDER BY created_at DESC, id DESC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+		LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list backtest results: %w", err)
 	}
@@ -139,15 +151,7 @@ func (r *ResultRepository) List(ctx context.Context, filter repository.BacktestR
 }
 
 func (r *ResultRepository) FindByID(ctx context.Context, id string) (*entity.BacktestResult, error) {
-	row := r.db.QueryRowContext(ctx, `
-		SELECT
-			id, created_at, symbol, symbol_id, primary_interval, higher_tf_interval,
-			from_ts, to_ts, initial_balance, final_balance, total_return, total_trades,
-			win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
-			sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost
-		FROM backtest_results
-		WHERE id = ?
-	`, id)
+	row := r.db.QueryRowContext(ctx, `SELECT `+resultColumns+` FROM backtest_results WHERE id = ?`, id)
 
 	var result entity.BacktestResult
 	if err := scanResultRow(row, &result); err != nil {
@@ -225,6 +229,7 @@ type rowScanner interface {
 }
 
 func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
+	var parentID sql.NullString
 	err := scanner.Scan(
 		&result.ID,
 		&result.CreatedAt,
@@ -248,9 +253,20 @@ func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 		&result.Summary.AvgHoldSeconds,
 		&result.Summary.TotalCarryingCost,
 		&result.Summary.TotalSpreadCost,
+		&result.ProfileName,
+		&result.PDCACycleID,
+		&result.Hypothesis,
+		&parentID,
+		&result.Summary.BiweeklyWinRate,
 	)
 	if err != nil {
 		return err
+	}
+	if parentID.Valid {
+		v := parentID.String
+		result.ParentResultID = &v
+	} else {
+		result.ParentResultID = nil
 	}
 	result.Summary.PeriodFrom = result.Config.FromTimestamp
 	result.Summary.PeriodTo = result.Config.ToTimestamp

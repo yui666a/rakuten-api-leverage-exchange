@@ -64,6 +64,7 @@ func (r *SummaryReporter) BuildSummary(
 
 	maxDDRatio, maxDDBalance := calcMaxDrawdown(equityPoints)
 	sharpe := calcSharpe(equityPoints)
+	biweekly := ComputeBiweeklyWinRate(trades, config.FromTimestamp, config.ToTimestamp)
 
 	return entity.BacktestSummary{
 		PeriodFrom:         config.FromTimestamp,
@@ -82,6 +83,7 @@ func (r *SummaryReporter) BuildSummary(
 		AvgHoldSeconds:     avgHold,
 		TotalCarryingCost:  carryingCost,
 		TotalSpreadCost:    spreadCost,
+		BiweeklyWinRate:    biweekly,
 	}
 }
 
