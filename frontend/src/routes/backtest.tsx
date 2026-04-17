@@ -53,6 +53,16 @@ const defaultRunForm: BacktestRunForm = {
 const fallbackBacktestPairs = ['BTC_JPY', 'LTC_JPY'] as const
 const TRADE_TABLE_COLUMN_COUNT = 11
 
+// Parent-relation filter for the list view. Kept as a const tuple so the
+// runtime guard in the <select> onChange handler stays in sync with the
+// `HasParentFilter` type below.
+const PARENT_FILTER_VALUES = ['all', 'only', 'root'] as const
+type HasParentFilter = (typeof PARENT_FILTER_VALUES)[number]
+
+function isHasParentFilter(value: string): value is HasParentFilter {
+  return (PARENT_FILTER_VALUES as readonly string[]).includes(value)
+}
+
 function buildAutoCSVPaths(currencyPair: string) {
   return {
     primary: `data/candles_${currencyPair}_PT15M.csv`,
@@ -155,7 +165,7 @@ function BacktestPage() {
   // list to just the children of that parent ID. Clearing it returns to the
   // default view.
   const [profileFilter, setProfileFilter] = useState('')
-  const [hasParentFilter, setHasParentFilter] = useState<'all' | 'only' | 'root'>('all')
+  const [hasParentFilter, setHasParentFilter] = useState<HasParentFilter>('all')
   const [parentFilter, setParentFilter] = useState('')
   const { data, isLoading, isError } = useBacktestResults({
     profileName: profileFilter || undefined,
@@ -455,9 +465,12 @@ function BacktestPage() {
             </span>
             <select
               value={hasParentFilter}
-              onChange={(event) =>
-                setHasParentFilter(event.target.value as 'all' | 'only' | 'root')
-              }
+              onChange={(event) => {
+                const value = event.target.value
+                if (isHasParentFilter(value)) {
+                  setHasParentFilter(value)
+                }
+              }}
               className="w-[220px] rounded-2xl border border-white/10 bg-white/6 px-4 py-2 text-sm text-white outline-none transition focus:border-cyan-200"
             >
               <option value="all" className="bg-bg-card text-white">すべて</option>
@@ -486,7 +499,9 @@ function BacktestPage() {
           <p className="mt-4 text-sm text-text-secondary">読み込み中...</p>
         ) : results.length === 0 ? (
           <p className="mt-4 text-sm text-text-secondary">
-            バックテスト結果がありません。
+            {profileFilter !== '' || parentFilter !== '' || hasParentFilter !== 'all'
+              ? 'フィルタに一致する結果がありません。'
+              : 'バックテスト結果がありません。'}
           </p>
         ) : (
           <div className="mt-4 overflow-x-auto">
@@ -495,7 +510,7 @@ function BacktestPage() {
                 <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
                   <th className="px-3 py-2">ID</th>
                   <th className="px-3 py-2">プロファイル</th>
-                  <th className="px-3 py-2">PDCA</th>
+                  <th className="px-3 py-2">PDCA Cycle</th>
                   <th className="px-3 py-2">Symbol</th>
                   <th className="px-3 py-2">期間</th>
                   <th className="px-3 py-2 text-right">Total Return</th>
@@ -591,7 +606,7 @@ function ResultRow({ result, selected, onSelect, onNavigateParent }: ResultRowPr
   // a small Tailwind pill. Empty profileName collapses to an em-dash so the
   // table stays visually aligned.
   const isPDCA = (result.profileName ?? '') !== ''
-  const parentId = result.parentResultId ?? null
+  const parentId = result.parentResultId ?? undefined
 
   return (
     <tr
