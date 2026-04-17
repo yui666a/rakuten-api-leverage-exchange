@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -327,10 +328,47 @@ func (h *BacktestHandler) ListResults(c *gin.Context) {
 		return
 	}
 
-	results, err := h.repo.List(c.Request.Context(), repository.BacktestResultFilter{
-		Limit:  limit,
-		Offset: offset,
-	})
+	filter := repository.BacktestResultFilter{
+		Limit:       limit,
+		Offset:      offset,
+		ProfileName: c.Query("profileName"),
+		PDCACycleID: c.Query("pdcaCycleId"),
+	}
+
+	// parentResultId: per spec §5.3 `(nil = フィルタなし)`. An empty string is a
+	// legitimate filter value at the repository layer, but it has no useful
+	// semantics as a real parent_result_id (domain values are UUIDs), so we
+	// fold empty into "no filter" at the HTTP layer. This keeps the query
+	// string ergonomic — callers can safely default `parentResultId=` to
+	// disable the filter without having to strip the param from the URL.
+	if v, present := c.GetQuery("parentResultId"); present && v != "" {
+		filter.ParentResultID = &v
+	}
+
+	// hasParent: accept only "true"/"false" (idiomatic strconv.ParseBool,
+	// aligns with JS booleans). Any other non-empty value is a 400.
+	if v, present := c.GetQuery("hasParent"); present {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "hasParent must be true or false"})
+			return
+		}
+		filter.HasParent = &parsed
+	}
+
+	// Precedence: when both parentResultId and hasParent are provided, the
+	// specific ID wins. Drop HasParent at the handler layer so the repository
+	// layer sees a single intent. Duplicating the rule here keeps the two
+	// layers internally consistent and surfaces a debug log for observability.
+	if filter.ParentResultID != nil && filter.HasParent != nil {
+		slog.Debug("backtest list filter: parentResultId takes precedence over hasParent",
+			"parentResultId", *filter.ParentResultID,
+			"droppedHasParent", *filter.HasParent,
+		)
+		filter.HasParent = nil
+	}
+
+	results, err := h.repo.List(c.Request.Context(), filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
