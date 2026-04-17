@@ -67,4 +67,5 @@
 | `docs/rakuten-api/error-codes.md` | 楽天 API エラーコード一覧と対処法 | API エラーのデバッグ・エラーハンドリング実装時 |
 | `docs/design/` | 設計書・実装計画 | 各機能の設計意図を確認するとき |
 | `docs/pdca/README.md` | PDCA 戦略最適化の運用ガイド + サイクル記録 | プロファイル駆動のバックテストを回すとき |
+| `docs/pdca/agent-guide.md` | エージェント向け総合ガイド（機能概要・使い方・ヒント・アンチパターン） | PDCA 機能を初めて触るとき・他エージェントを引き継ぐとき |
 | `backend/.env.example` | 環境変数テンプレート | 設定項目を確認するとき |

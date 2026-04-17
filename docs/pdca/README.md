@@ -9,6 +9,7 @@ LTC/JPY 向けの戦略最適化サイクル記録ディレクトリ。Claude Co
 - 本番戦略（`production.json`）とは独立した実験プロファイルで仮説検証 → 良いものだけ手動で本番昇格。
 
 仕様の詳細は [`docs/superpowers/specs/2026-04-16-pdca-strategy-optimizer-design.md`](../superpowers/specs/2026-04-16-pdca-strategy-optimizer-design.md) を参照。
+エージェントがこの機能を使うときの実践ガイド・使用例・ヒント・アンチパターンは [`docs/pdca/agent-guide.md`](./agent-guide.md) を参照。
 
 ## ディレクトリ構成
 
