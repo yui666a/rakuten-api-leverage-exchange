@@ -42,6 +42,8 @@ dist/
 *.log
 yarn.lock
 package-lock.json
+.pnpm-store/
+frontend/.pnpm-store/
 
 # Database
 data/
@@ -53,3 +55,6 @@ results/
 go.sum
 
 .gocache
+
+
+.playwright-mcp
