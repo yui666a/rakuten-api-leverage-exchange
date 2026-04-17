@@ -18,6 +18,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-builder /out/backend-server /usr/local/bin/backend-server
+COPY --from=backend-builder /app/backend/profiles /app/backend/profiles
 RUN mkdir -p /app/backend/data
 
 EXPOSE 8080
