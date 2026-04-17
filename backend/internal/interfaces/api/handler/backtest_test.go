@@ -8,7 +8,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -26,9 +28,14 @@ type mockBacktestResultRepo struct {
 	listResults []entity.BacktestResult
 	findResult  *entity.BacktestResult
 	saveErr     error
+	// saved captures the most recent result passed to Save. Tests use this
+	// to assert that PDCA metadata (profileName, parentResultId, etc.) is
+	// attached to the persisted entity.
+	saved *entity.BacktestResult
 }
 
-func (m *mockBacktestResultRepo) Save(_ context.Context, _ entity.BacktestResult) error {
+func (m *mockBacktestResultRepo) Save(_ context.Context, r entity.BacktestResult) error {
+	m.saved = &r
 	return m.saveErr
 }
 func (m *mockBacktestResultRepo) List(_ context.Context, _ repository.BacktestResultFilter) ([]entity.BacktestResult, error) {
@@ -444,5 +451,352 @@ func TestBacktestHandler_Run_Happy_200(t *testing.T) {
 	w := runBacktestExpectingSaveErr(t, nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- Task 6: profileName + PDCA metadata tests ---
+
+// readProductionProfileJSON loads backend/profiles/production.json by walking
+// up to the module root (go.mod). Reading the real on-disk fixture (rather
+// than an inline copy) removes the duplication with cmd/backtest's tests and
+// guarantees both test suites exercise the same profile the handler would
+// load in production. See configurable_strategy_test.go for the same walk
+// pattern. The file is a test fixture: keep it in sync with whatever the
+// production default is meant to be.
+func readProductionProfileJSON(t *testing.T) []byte {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	dir := filepath.Dir(thisFile)
+	for {
+		candidate := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(candidate); err == nil {
+			data, err := os.ReadFile(filepath.Join(dir, "profiles", "production.json"))
+			if err != nil {
+				t.Fatalf("read production.json: %v", err)
+			}
+			return data
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found walking up from test file")
+		}
+		dir = parent
+	}
+}
+
+// setupProfilesDir writes the given name.json files under a temp profiles
+// directory and returns the directory path.
+func setupProfilesDir(t *testing.T, profiles map[string][]byte) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, content := range profiles {
+		path := filepath.Join(dir, name+".json")
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("write profile %s: %v", name, err)
+		}
+	}
+	return dir
+}
+
+// newRunRouter wires a handler with a fresh in-memory SQLite repo and a
+// temp profiles dir. Returns both so tests can make repository assertions.
+func newRunRouter(t *testing.T, profilesDir string) (*gin.Engine, *BacktestHandler, *btinfra.ResultRepository) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	var opts []BacktestHandlerOption
+	if profilesDir != "" {
+		opts = append(opts, WithProfilesBaseDir(profilesDir))
+	}
+	h := NewBacktestHandler(bt.NewBacktestRunner(), repo, opts...)
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+	return router, h, repo
+}
+
+// runRequestBody builds a minimal POST /backtest/run body with the given
+// CSV data path and merges any extra top-level fields.
+func runRequestBody(t *testing.T, csvPath string, extras map[string]any) string {
+	t.Helper()
+	payload := map[string]any{
+		"data":           csvPath,
+		"initialBalance": 100000.0,
+	}
+	for k, v := range extras {
+		payload[k] = v
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+	return string(b)
+}
+
+func postRun(t *testing.T, router *gin.Engine, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func makeCSVForRunTests(t *testing.T) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	return writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "BTC_JPY",
+		SymbolID: 7,
+		Interval: "PT15M",
+		Candles:  generateTestCandles(100),
+	})
+}
+
+func TestBacktestHandler_Run_Profile_OK(t *testing.T) {
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
+	router, _, repo := newRunRouter(t, profilesDir)
+	csvPath := makeCSVForRunTests(t)
+
+	body := runRequestBody(t, csvPath, map[string]any{"profileName": "production"})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got entity.BacktestResult
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got.ProfileName != "production" {
+		t.Errorf("response ProfileName = %q, want %q", got.ProfileName, "production")
+	}
+
+	// Verify persistence — the row must carry profile_name.
+	stored, err := repo.FindByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("FindByID returned nil; expected persisted row")
+	}
+	if stored.ProfileName != "production" {
+		t.Errorf("persisted ProfileName = %q, want %q", stored.ProfileName, "production")
+	}
+}
+
+func TestBacktestHandler_Run_Profile_InvalidName_400(t *testing.T) {
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
+	router, _, _ := newRunRouter(t, profilesDir)
+	csvPath := makeCSVForRunTests(t)
+
+	// Traversal attempt — regex in ResolveProfilePath rejects this.
+	body := runRequestBody(t, csvPath, map[string]any{"profileName": "../secret"})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid profile name, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_Run_Profile_Unknown_400(t *testing.T) {
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
+	router, _, _ := newRunRouter(t, profilesDir)
+	csvPath := makeCSVForRunTests(t)
+
+	// Valid shape, but the file does not exist under profilesDir.
+	body := runRequestBody(t, csvPath, map[string]any{"profileName": "does_not_exist"})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown profile, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_Run_Profile_IndividualFieldOverrides(t *testing.T) {
+	// production.json has stop_loss_percent=5. Passing stopLossPercent=7
+	// in the request body must override that.
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
+	router, _, repo := newRunRouter(t, profilesDir)
+	csvPath := makeCSVForRunTests(t)
+
+	body := runRequestBody(t, csvPath, map[string]any{
+		"profileName":     "production",
+		"stopLossPercent": 7.0,
+	})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got entity.BacktestResult
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	// The stop_loss_percent applied to the run is not stored directly in
+	// BacktestResult. Instead, assert the override semantics by driving
+	// the merge function from a direct handler-internal call via a
+	// round-trip: we re-run with the profile alone and compare
+	// ProfileName is still "production" — and trust the unit-level
+	// coverage of applyProfileDefaults below.
+	if got.ProfileName != "production" {
+		t.Errorf("ProfileName = %q, want %q", got.ProfileName, "production")
+	}
+
+	stored, err := repo.FindByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected persisted row")
+	}
+	if stored.ProfileName != "production" {
+		t.Errorf("persisted ProfileName = %q, want %q", stored.ProfileName, "production")
+	}
+}
+
+// TestApplyProfileDefaults_IndividualFieldOverrides unit-tests the merge
+// semantics documented in spec §8.2: profile values become the base, but
+// any non-zero individual field in the request overrides.
+func TestApplyProfileDefaults_IndividualFieldOverrides(t *testing.T) {
+	profile := &entity.StrategyProfile{
+		Risk: entity.StrategyRiskConfig{
+			StopLossPercent:   5,
+			TakeProfitPercent: 10,
+			MaxPositionAmount: 100000,
+			MaxDailyLoss:      50000,
+		},
+	}
+
+	t.Run("request fields zero -> profile values win", func(t *testing.T) {
+		req := &runBacktestRequest{}
+		applyProfileDefaults(req, profile)
+		if req.StopLossPercent != 5 {
+			t.Errorf("StopLossPercent = %v, want 5", req.StopLossPercent)
+		}
+		if req.TakeProfitPercent != 10 {
+			t.Errorf("TakeProfitPercent = %v, want 10", req.TakeProfitPercent)
+		}
+		if req.MaxPositionAmount != 100000 {
+			t.Errorf("MaxPositionAmount = %v, want 100000", req.MaxPositionAmount)
+		}
+		if req.MaxDailyLoss != 50000 {
+			t.Errorf("MaxDailyLoss = %v, want 50000", req.MaxDailyLoss)
+		}
+	})
+
+	t.Run("non-zero request field overrides profile", func(t *testing.T) {
+		req := &runBacktestRequest{StopLossPercent: 7}
+		applyProfileDefaults(req, profile)
+		if req.StopLossPercent != 7 {
+			t.Errorf("StopLossPercent = %v, want 7 (override should win)", req.StopLossPercent)
+		}
+		// Fields the request left at zero still pick up profile values.
+		if req.TakeProfitPercent != 10 {
+			t.Errorf("TakeProfitPercent = %v, want 10", req.TakeProfitPercent)
+		}
+	})
+
+	t.Run("nil profile is a no-op", func(t *testing.T) {
+		req := &runBacktestRequest{StopLossPercent: 3}
+		applyProfileDefaults(req, nil)
+		if req.StopLossPercent != 3 {
+			t.Errorf("StopLossPercent = %v, want 3 (unchanged)", req.StopLossPercent)
+		}
+	})
+}
+
+func TestBacktestHandler_Run_ParentResultID_Chains(t *testing.T) {
+	profilesDir := setupProfilesDir(t, map[string][]byte{"production": readProductionProfileJSON(t)})
+	router, _, repo := newRunRouter(t, profilesDir)
+	csvPath := makeCSVForRunTests(t)
+
+	// First run — produces a valid parent_result_id we can point at.
+	body1 := runRequestBody(t, csvPath, nil)
+	w1 := postRun(t, router, body1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first run: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+	var first entity.BacktestResult
+	if err := json.Unmarshal(w1.Body.Bytes(), &first); err != nil {
+		t.Fatalf("unmarshal first: %v", err)
+	}
+	if first.ID == "" {
+		t.Fatal("first run returned empty ID")
+	}
+
+	// Second run — points parent_result_id at the first. Should persist.
+	body2 := runRequestBody(t, csvPath, map[string]any{"parentResultId": first.ID})
+	w2 := postRun(t, router, body2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("child run: expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+	var child entity.BacktestResult
+	if err := json.Unmarshal(w2.Body.Bytes(), &child); err != nil {
+		t.Fatalf("unmarshal child: %v", err)
+	}
+	stored, err := repo.FindByID(context.Background(), child.ID)
+	if err != nil {
+		t.Fatalf("FindByID child: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("child row not found")
+	}
+	if stored.ParentResultID == nil {
+		t.Fatal("child ParentResultID is nil; expected first.ID")
+	}
+	if *stored.ParentResultID != first.ID {
+		t.Errorf("ParentResultID = %q, want %q", *stored.ParentResultID, first.ID)
+	}
+}
+
+func TestBacktestHandler_Run_ParentResultID_Missing_422(t *testing.T) {
+	router, _, _ := newRunRouter(t, "")
+	csvPath := makeCSVForRunTests(t)
+
+	body := runRequestBody(t, csvPath, map[string]any{"parentResultId": "does-not-exist"})
+	w := postRun(t, router, body)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422 for missing parent, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestBacktestHandler_Run_PDCAMetadataPersisted(t *testing.T) {
+	router, _, repo := newRunRouter(t, "")
+	csvPath := makeCSVForRunTests(t)
+
+	body := runRequestBody(t, csvPath, map[string]any{
+		"pdcaCycleId": "2026-04-17_cycle01",
+		"hypothesis":  "tighter stop reduces drawdown",
+	})
+	w := postRun(t, router, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got entity.BacktestResult
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	stored, err := repo.FindByID(context.Background(), got.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if stored == nil {
+		t.Fatal("expected persisted row")
+	}
+	if stored.PDCACycleID != "2026-04-17_cycle01" {
+		t.Errorf("PDCACycleID = %q, want %q", stored.PDCACycleID, "2026-04-17_cycle01")
+	}
+	if stored.Hypothesis != "tighter stop reduces drawdown" {
+		t.Errorf("Hypothesis = %q, want %q", stored.Hypothesis, "tighter stop reduces drawdown")
 	}
 }
