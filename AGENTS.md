@@ -66,4 +66,5 @@
 | `docs/clean-architecture.md` | レイヤー構成と依存ルール | Backend のコードを追加・変更するとき |
 | `docs/rakuten-api/error-codes.md` | 楽天 API エラーコード一覧と対処法 | API エラーのデバッグ・エラーハンドリング実装時 |
 | `docs/design/` | 設計書・実装計画 | 各機能の設計意図を確認するとき |
+| `docs/pdca/README.md` | PDCA 戦略最適化の運用ガイド + サイクル記録 | プロファイル駆動のバックテストを回すとき |
 | `backend/.env.example` | 環境変数テンプレート | 設定項目を確認するとき |
