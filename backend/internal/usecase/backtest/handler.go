@@ -277,12 +277,25 @@ type TickRiskExecutor interface {
 }
 
 // TickRiskHandler evaluates SL/TP/TrailingStop on synthetic ticks.
+//
+// Trailing distance policy (PR-12):
+//   - TrailingATRMultiplier > 0 かつ currentATR > 0 → ATR × multiplier
+//   - それ以外 → EntryPrice × StopLossPercent / 100 （従来挙動）
+//   - 両方に値があるときは「より大きい距離（保守的＝早期決済を抑える）」を採用
+//
+// StopLossATRMultiplier はエントリー時の静的 SL に反映される。TP/SL 判定に
+// 使うハード SL 価格をエントリー価格からの距離で計算する calcSLTP に
+// 流し込む設計にするため、現行の SL 計算も同等のポリシー（percent
+// フォールバック＋ ATR 上書き）で扱う。
 type TickRiskHandler struct {
-	PrimaryInterval   string
-	Executor          TickRiskExecutor
-	StopLossPercent   float64
-	TakeProfitPercent float64
-	highWaterMarks    map[int64]float64
+	PrimaryInterval       string
+	Executor              TickRiskExecutor
+	StopLossPercent       float64
+	StopLossATRMultiplier float64 // >0 なら ATR×mult の大きい方を SL 距離として採用
+	TrailingATRMultiplier float64 // >0 ならトレイリング距離も ATR ベース
+	TakeProfitPercent     float64
+	highWaterMarks        map[int64]float64
+	currentATR            float64
 }
 
 func NewTickRiskHandler(primaryInterval string, executor TickRiskExecutor, stopLossPercent, takeProfitPercent float64) *TickRiskHandler {
@@ -295,7 +308,65 @@ func NewTickRiskHandler(primaryInterval string, executor TickRiskExecutor, stopL
 	}
 }
 
+// SetATRMultipliers configures the ATR-based stop-loss and trailing-stop
+// multipliers after construction. Zero multipliers keep the handler on its
+// legacy percent-based behaviour.
+func (h *TickRiskHandler) SetATRMultipliers(stopLossATR, trailingATR float64) {
+	h.StopLossATRMultiplier = stopLossATR
+	h.TrailingATRMultiplier = trailingATR
+}
+
+// UpdateATR is called by the IndicatorHandler (or a test fixture) whenever a
+// fresh primary-interval ATR value is available. Zero or NaN is ignored.
+func (h *TickRiskHandler) UpdateATR(atr float64) {
+	if atr <= 0 || atr != atr { // NaN check
+		return
+	}
+	h.currentATR = atr
+}
+
+// stopLossDistance returns the per-side SL distance in price units used by
+// the SL/TP check and by trailing-stop reversal. When both a percent SL and
+// an ATR SL are active, the farther (more conservative) one wins so a
+// volatile tick cannot immediately stop the position out.
+func (h *TickRiskHandler) stopLossDistance(entryPrice float64) float64 {
+	percentDist := entryPrice * h.StopLossPercent / 100.0
+	atrDist := 0.0
+	if h.StopLossATRMultiplier > 0 && h.currentATR > 0 {
+		atrDist = h.currentATR * h.StopLossATRMultiplier
+	}
+	if atrDist > percentDist {
+		return atrDist
+	}
+	return percentDist
+}
+
+// trailingDistance applies the same policy for the trailing reversal: ATR
+// when configured and known, otherwise fall back to the percent-derived
+// distance; take the bigger of the two when both are active.
+func (h *TickRiskHandler) trailingDistance(entryPrice float64) float64 {
+	percentDist := entryPrice * h.StopLossPercent / 100.0
+	atrDist := 0.0
+	if h.TrailingATRMultiplier > 0 && h.currentATR > 0 {
+		atrDist = h.currentATR * h.TrailingATRMultiplier
+	}
+	if atrDist > percentDist {
+		return atrDist
+	}
+	return percentDist
+}
+
 func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
+	// ATR は IndicatorEvent から抽出。IndicatorHandler が CandleEvent を
+	// 受けて IndicatorEvent を emit するので、その直後に ATR が最新化される。
+	// Trailing stop / ATR SL はこの最新値を使う。
+	if indicatorEvent, ok := event.(entity.IndicatorEvent); ok {
+		if indicatorEvent.Primary.ATR14 != nil {
+			h.UpdateATR(*indicatorEvent.Primary.ATR14)
+		}
+		return nil, nil
+	}
+
 	tickEvent, ok := event.(entity.TickEvent)
 	if !ok {
 		return nil, nil
@@ -319,7 +390,9 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 
 		// TP/SL: decide with bar range and worst-case policy.
 		if h.StopLossPercent > 0 && h.TakeProfitPercent > 0 {
-			stopLossPrice, takeProfitPrice := calcSLTP(pos, h.StopLossPercent, h.TakeProfitPercent)
+			slDistance := h.stopLossDistance(pos.EntryPrice)
+			tpDistance := pos.EntryPrice * h.TakeProfitPercent / 100.0
+			stopLossPrice, takeProfitPrice := calcSLTPFromDistances(pos, slDistance, tpDistance)
 			exitPrice, reason, hit := h.Executor.SelectSLTPExit(
 				pos.Side,
 				stopLossPrice,
@@ -354,7 +427,7 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 		}
 		h.highWaterMarks[pos.PositionID] = best
 
-		distance := pos.EntryPrice * h.StopLossPercent / 100.0
+		distance := h.trailingDistance(pos.EntryPrice)
 		if distance <= 0 {
 			continue
 		}
@@ -551,6 +624,21 @@ func intervalDurationMillis(interval string) (int64, error) {
 		return int64(n) * int64(time.Hour/time.Millisecond), nil
 	}
 	return 0, fmt.Errorf("unsupported interval: %s", interval)
+}
+
+// calcSLTPFromDistances produces the same (stopLossPrice, takeProfitPrice)
+// shape as calcSLTP but from pre-computed price-unit distances. PR-12 uses
+// this so the SL distance can be ATR-derived without re-encoding the
+// per-side sign handling.
+func calcSLTPFromDistances(pos eventengine.Position, slDistance, tpDistance float64) (stopLossPrice float64, takeProfitPrice float64) {
+	if pos.Side == entity.OrderSideSell {
+		stopLossPrice = pos.EntryPrice + slDistance
+		takeProfitPrice = pos.EntryPrice - tpDistance
+	} else {
+		stopLossPrice = pos.EntryPrice - slDistance
+		takeProfitPrice = pos.EntryPrice + tpDistance
+	}
+	return
 }
 
 func calcSLTP(pos eventengine.Position, stopLossPercent, takeProfitPercent float64) (stopLossPrice float64, takeProfitPrice float64) {

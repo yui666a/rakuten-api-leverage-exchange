@@ -85,6 +85,8 @@ type runFlags struct {
 	Slippage       float64
 	TradeAmount    float64
 	StopLoss       float64
+	StopLossATR    float64 // PR-12
+	TrailingATR    float64 // PR-12
 	TakeProfit     float64
 	OutputDir      string
 	Profile        string
@@ -107,6 +109,8 @@ func registerRunFlags(fs *flag.FlagSet, f *runFlags) {
 	fs.Float64Var(&f.Slippage, "slippage", 0, "slippage percent")
 	fs.Float64Var(&f.TradeAmount, "trade-amount", 0.01, "trade amount")
 	fs.Float64Var(&f.StopLoss, "stop-loss", 5, "stop loss percent")
+	fs.Float64Var(&f.StopLossATR, "stop-loss-atr", 0, "stop loss ATR multiplier (0=disabled)")
+	fs.Float64Var(&f.TrailingATR, "trailing-atr", 0, "trailing stop ATR multiplier (0=disabled)")
 	fs.Float64Var(&f.TakeProfit, "take-profit", 10, "take profit percent")
 	fs.StringVar(&f.OutputDir, "output", "", "output directory for trades/result")
 	fs.StringVar(&f.Profile, "profile", "", "strategy profile name (resolves to profiles/<name>.json). "+
@@ -597,6 +601,8 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 	// Base values come from the flags (which already carry the Go defaults).
 	stopLoss := f.StopLoss
 	takeProfit := f.TakeProfit
+	stopLossATR := f.StopLossATR   // PR-12
+	trailingATR := f.TrailingATR   // PR-12
 	maxPositionAmount := 1_000_000_000.0
 	maxDailyLoss := 1_000_000_000.0
 
@@ -608,6 +614,12 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		}
 		if !f.Set["take-profit"] && profile.Risk.TakeProfitPercent > 0 {
 			takeProfit = profile.Risk.TakeProfitPercent
+		}
+		if !f.Set["stop-loss-atr"] && profile.Risk.StopLossATRMultiplier > 0 {
+			stopLossATR = profile.Risk.StopLossATRMultiplier
+		}
+		if !f.Set["trailing-atr"] && profile.Risk.TrailingATRMultiplier > 0 {
+			trailingATR = profile.Risk.TrailingATRMultiplier
 		}
 		if profile.Risk.MaxPositionAmount > 0 {
 			maxPositionAmount = profile.Risk.MaxPositionAmount
@@ -639,13 +651,15 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
 		RiskConfig: entity.RiskConfig{
-			MaxPositionAmount:    maxPositionAmount,
-			MaxDailyLoss:         maxDailyLoss,
-			StopLossPercent:      stopLoss,
-			TakeProfitPercent:    takeProfit,
-			InitialCapital:       f.InitialBalance,
-			MaxConsecutiveLosses: 0,
-			CooldownMinutes:      0,
+			MaxPositionAmount:     maxPositionAmount,
+			MaxDailyLoss:          maxDailyLoss,
+			StopLossPercent:       stopLoss,
+			StopLossATRMultiplier: stopLossATR,
+			TrailingATRMultiplier: trailingATR,
+			TakeProfitPercent:     takeProfit,
+			InitialCapital:        f.InitialBalance,
+			MaxConsecutiveLosses:  0,
+			CooldownMinutes:       0,
 		},
 	}, nil
 }
