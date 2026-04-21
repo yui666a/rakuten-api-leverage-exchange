@@ -325,6 +325,63 @@ export type MultiPeriodResultListResponse = {
   results: MultiPeriodResult[]
 }
 
+// --- Walk-forward (PR-13 follow-up / #120) ---
+//
+// The BE `result` blob is a full WalkForwardResult. Mirror enough of its
+// shape to drive the summary table; deep per-window BacktestResult data
+// is accessed via the nested `oosResult.summary` and `isResults[*].summary`.
+
+export type WalkForwardISResult = {
+  parameters: Record<string, number>
+  summary: BacktestSummary
+  score: number
+  resultId?: string
+}
+
+export type WalkForwardWindowResult = {
+  index: number
+  inSampleFrom: number
+  inSampleTo: number
+  oosFrom: number
+  oosTo: number
+  bestParameters: Record<string, number>
+  isResults: WalkForwardISResult[]
+  oosResult: BacktestResult
+}
+
+export type WalkForwardResultEnvelope = {
+  id: string
+  createdAt: number
+  baseProfile: string
+  objective: string
+  pdcaCycleId?: string
+  hypothesis?: string
+  parentResultId?: string | null
+  windows: WalkForwardWindowResult[]
+  aggregateOOS: MultiPeriodAggregate
+}
+
+// walkForwardResponse from GET /:id and GET list. request/result/aggregateOOS
+// arrive as pre-parsed JSON (json.RawMessage on the BE) so the typed shape is
+// `unknown` here; the page parses them narrowly where needed.
+export type WalkForwardEnvelopeResponse = {
+  id: string
+  createdAt: number
+  baseProfile: string
+  objective: string
+  pdcaCycleId?: string
+  hypothesis?: string
+  parentResultId?: string | null
+  request?: unknown
+  result?: WalkForwardResultEnvelope
+  aggregateOOS?: MultiPeriodAggregate
+}
+
+export type WalkForwardListResponse = {
+  items: WalkForwardEnvelopeResponse[]
+  total: number
+}
+
 export type BacktestCSVMeta = {
   data: string
   symbol: string
