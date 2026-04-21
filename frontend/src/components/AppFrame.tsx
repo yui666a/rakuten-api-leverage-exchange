@@ -13,6 +13,7 @@ const navItems = [
   { to: '/settings', label: '設定' },
   { to: '/history', label: '履歴' },
   { to: '/backtest', label: 'バックテスト' },
+  { to: '/backtest-multi', label: 'マルチ期間' },
 ] as const
 
 export function AppFrame({ title, subtitle, children }: AppFrameProps) {

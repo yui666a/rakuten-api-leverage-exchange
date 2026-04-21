@@ -290,6 +290,41 @@ export type BacktestResultListResponse = {
   results: BacktestResult[]
 }
 
+// MultiPeriodAggregate mirrors entity.MultiPeriodAggregate. Scalar fields
+// are nullable because BE emits JSON null for NaN / ±Inf (ruin path).
+export type MultiPeriodAggregate = {
+  geomMeanReturn: number | null
+  returnStdDev: number | null
+  worstReturn: number | null
+  bestReturn: number | null
+  worstDrawdown: number | null
+  allPositive: boolean
+  robustnessScore: number | null
+}
+
+export type LabeledBacktestResult = {
+  label: string
+  result: BacktestResult
+}
+
+export type MultiPeriodResult = {
+  id: string
+  createdAt: number
+  profileName: string
+  pdcaCycleId?: string
+  hypothesis?: string
+  parentResultId?: string | null
+  periods: LabeledBacktestResult[]
+  aggregate: MultiPeriodAggregate
+}
+
+// MultiPeriodResultListResponse: GET /backtest/multi-results returns
+// {results: [...]} — per-period bodies are empty here (envelope only) and
+// must be rehydrated via GET /backtest/multi-results/:id when needed.
+export type MultiPeriodResultListResponse = {
+  results: MultiPeriodResult[]
+}
+
 export type BacktestCSVMeta = {
   data: string
   symbol: string
