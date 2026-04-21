@@ -52,7 +52,7 @@ v3 昇格時点の状況:
 
 | # | タイトル | 工数 | 備考 |
 |---|---|---|---|
-| PR-12 | ATR Trailing Stop | 2 日 | **最優先**: 現 prod の SL=20% を健全化。未配線の `stop_loss_atr_multiplier` を実装 |
+| PR-12 | ATR Trailing Stop | 2 日 | **最優先**: 現 prod の SL=20% を健全化。バックテスト経路で未配線の `stop_loss_atr_multiplier` を実装 |
 | PR-13 | Walk-forward 最適化 | 3 日 | **過学習の根本対策**。in-sample 最適化 × out-of-sample 検証を複数窓で |
 | PR-14 | Regime-conditional プロファイル | 2 日 | PR-5 の上に構築。regime ごとに別の SL/TP/シグナル重み |
 | PR-15 | 部分約定 / 分割利確 (partial TP) | 2 日 | 「50% を +3% で確定、残り 50% は trailing」 |
@@ -186,7 +186,7 @@ main
 - `usecase.RiskManager` に trailing stop 状態管理:
   - ポジションごとの最高値 (LONG) / 最安値 (SHORT) を追跡
   - 各 tick で ATR × multiplier 分離れたら決済
-- 既存未配線の `strategy_risk.stop_loss_atr_multiplier` を適用
+- 既存の `strategy_risk.stop_loss_atr_multiplier`（live は env 経由で動作、backtest 経路のみ未配線）を backtest にも適用
   - `stop_loss_atr_multiplier > 0` かつ `stop_loss_percent` も指定されている場合、**より遠い方**を SL とする（保守的）
 - profile に:
   ```json

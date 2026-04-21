@@ -133,13 +133,18 @@ ALTER TABLE backtest_results ADD COLUMN breakdown_json TEXT DEFAULT NULL;
 
 ## DoD（as-built）
 
+PR-1 (BE) のスコープ内で達成した項目のみ [x]。FE 表示は当初スコープ外に切り出した（下記「フォローアップ」参照）。
+
 - [x] unit test 15 本 passing（当初見積 4 本から拡大: parseSignalSource 10 ケース + computeBreakdown 5 ケース）
 - [x] integration test 3 本 passing（reporter / repo round-trip / legacy 互換）
 - [x] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る（挙動不変）
 - [x] 新規マイグレーション が `migrations_test.go` で idempotent、`breakdown_json` 列存在を明示 assert
 - [x] レガシー行（breakdown_json NULL）を読めることを確認
-- [ ] Frontend にテーブル 2 個追加、`pnpm test` pass — **持ち越し**: FE 実装は別 PR で（PR-1 merge 時点は BE API のみ完了）
 - [x] PR 本文: 直近 6 ヶ月 production バックテスト結果の各 map を貼付（#108 本文参照）
+
+### フォローアップ（別 PR）
+
+- Frontend にバケット別テーブル 2 個を追加し、`pnpm test` を pass させる。BE の JSON には既に含まれているため、FE 側は表示コンポーネントのみ
 
 ## ロールバック
 
