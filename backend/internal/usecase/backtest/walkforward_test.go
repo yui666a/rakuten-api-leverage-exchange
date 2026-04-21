@@ -53,6 +53,54 @@ func TestComputeWindows_TooShortReturnsError(t *testing.T) {
 	}
 }
 
+// TestComputeWindows_MonthEndDoesNotDrift is the regression lock for the
+// Codex review finding on PR #115: stdlib time.AddDate would roll
+// 2024-01-31 + 1mo into 2024-03-02, silently skipping February and
+// drifting later windows later and later. After the clamping fix, the
+// window set must still be anchored on the last day of each month.
+func TestComputeWindows_MonthEndDoesNotDrift(t *testing.T) {
+	// 2024-01-31 start, 1-month IS, 1-month OOS, 1-month step.
+	// The first window ends at IS(2024-02-29) because 2024 is a leap
+	// year; OOS then ends at 2024-03-31.
+	from := time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 6, 30, 0, 0, 0, 0, time.UTC)
+	ws, err := ComputeWindows(from, to, 1, 1, 1)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(ws) < 2 {
+		t.Fatalf("want at least 2 windows, got %d", len(ws))
+	}
+	// w0: [2024-01-31 .. 2024-02-29] IS, [2024-02-29 .. 2024-03-31] OOS
+	wantISEnd0 := time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC)
+	wantOOSEnd0 := time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC)
+	if !ws[0].InSampleTo.Equal(wantISEnd0) {
+		t.Fatalf("w0.InSampleTo = %v, want %v (leap-year clamp)", ws[0].InSampleTo, wantISEnd0)
+	}
+	if !ws[0].OOSTo.Equal(wantOOSEnd0) {
+		t.Fatalf("w0.OOSTo = %v, want %v", ws[0].OOSTo, wantOOSEnd0)
+	}
+	// w1 must start at 2024-02-29 (clamped) — with AddDate this would have
+	// been 2024-03-02 and the test would fail.
+	wantW1Start := time.Date(2024, 2, 29, 0, 0, 0, 0, time.UTC)
+	if !ws[1].InSampleFrom.Equal(wantW1Start) {
+		t.Fatalf("w1.InSampleFrom = %v, want %v", ws[1].InSampleFrom, wantW1Start)
+	}
+}
+
+func TestComputeWindows_NonLeapYearClampsFebTo28(t *testing.T) {
+	from := time.Date(2023, 1, 31, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2023, 6, 30, 0, 0, 0, 0, time.UTC)
+	ws, err := ComputeWindows(from, to, 1, 1, 1)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	wantISEnd0 := time.Date(2023, 2, 28, 0, 0, 0, 0, time.UTC)
+	if !ws[0].InSampleTo.Equal(wantISEnd0) {
+		t.Fatalf("non-leap year clamp: InSampleTo = %v, want %v", ws[0].InSampleTo, wantISEnd0)
+	}
+}
+
 func TestComputeWindows_InvalidInputs(t *testing.T) {
 	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -137,6 +185,27 @@ func TestExpandGrid_RejectsEmptyValues(t *testing.T) {
 	_, err := ExpandGrid([]ParameterOverride{{Path: "a", Values: nil}})
 	if err == nil {
 		t.Fatalf("expected error on empty values list")
+	}
+}
+
+// TestExpandGrid_RejectsDuplicatePaths locks in the Codex PR-13 follow-up:
+// if two overrides share the same Path, the later one silently overwrites
+// the earlier one in every combo, so the caller's "N×M" grid actually
+// produces only M distinct combos and its scoring signal is compromised.
+func TestExpandGrid_RejectsDuplicatePaths(t *testing.T) {
+	_, err := ExpandGrid([]ParameterOverride{
+		{Path: "a", Values: []float64{1, 2}},
+		{Path: "a", Values: []float64{3, 4}},
+	})
+	if err == nil {
+		t.Fatalf("expected error on duplicate path")
+	}
+}
+
+func TestExpandGrid_RejectsEmptyPath(t *testing.T) {
+	_, err := ExpandGrid([]ParameterOverride{{Path: "", Values: []float64{1}}})
+	if err == nil {
+		t.Fatalf("expected error on empty path")
 	}
 }
 

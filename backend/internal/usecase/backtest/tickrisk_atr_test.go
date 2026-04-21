@@ -2,6 +2,7 @@ package backtest
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -103,6 +104,46 @@ func TestTickRiskHandler_StopLossDistance_ATRBiggerThanPercent(t *testing.T) {
 // TestTickRiskHandler_UpdateATRFromIndicatorEvent verifies the event wiring:
 // when an IndicatorEvent with a Primary.ATR14 arrives, Handle feeds the value
 // into the handler so the next TickEvent sees the updated distance.
+// TestTickRiskHandler_UpdateATRAcceptsZero is the Codex PR-12 follow-up:
+// previously UpdateATR rejected zero (treated it like NaN), which meant a
+// flat-market bar could not clear a stale positive ATR, and the handler
+// would keep "max(percent, old ATR)" in effect when it should have fallen
+// back to percent-only.
+func TestTickRiskHandler_UpdateATRAcceptsZero(t *testing.T) {
+	h := NewTickRiskHandler("PT15M", &atrTestExecutor{}, 5, 10)
+	h.SetATRMultipliers(2.0, 2.0)
+
+	// Seed with a real ATR.
+	h.UpdateATR(500)
+	if h.currentATR != 500 {
+		t.Fatalf("seed: currentATR = %v, want 500", h.currentATR)
+	}
+	// Market goes flat: ATR should zero out. Before the fix this was a
+	// no-op.
+	h.UpdateATR(0)
+	if h.currentATR != 0 {
+		t.Fatalf("zero should be accepted, currentATR = %v", h.currentATR)
+	}
+	// trailingDistance now falls back to percent because ATR*mult == 0.
+	got := h.trailingDistance(10_000)
+	if got != 500 {
+		t.Fatalf("trailing distance with ATR=0 should revert to percent=500, got %v", got)
+	}
+}
+
+// TestTickRiskHandler_UpdateATRRejectsNaN keeps the NaN-rejection
+// behaviour (NaN is emitted by the indicator calculator when data is
+// insufficient; treating that as "flat market" would be wrong).
+func TestTickRiskHandler_UpdateATRRejectsNaN(t *testing.T) {
+	h := NewTickRiskHandler("PT15M", &atrTestExecutor{}, 5, 10)
+	h.SetATRMultipliers(2.0, 2.0)
+	h.UpdateATR(500)
+	h.UpdateATR(math.NaN())
+	if h.currentATR != 500 {
+		t.Fatalf("NaN should be ignored, currentATR = %v, want 500", h.currentATR)
+	}
+}
+
 func TestTickRiskHandler_UpdateATRFromIndicatorEvent(t *testing.T) {
 	h := NewTickRiskHandler("PT15M", &atrTestExecutor{}, 5, 10)
 	h.SetATRMultipliers(0, 2.0)
