@@ -10,7 +10,7 @@ import {
 } from '../hooks/useBacktest'
 import { useSymbols } from '../hooks/useSymbols'
 import { EquityCurveChart } from '../components/EquityCurveChart'
-import type { BacktestResult, BacktestRunRequest, BacktestTrade } from '../lib/api'
+import type { BacktestResult, BacktestRunRequest, BacktestTrade, DrawdownPeriod, SummaryBreakdown } from '../lib/api'
 
 export const Route = createFileRoute('/backtest')({ component: BacktestPage })
 
@@ -753,6 +753,69 @@ function DetailPanel({ result }: { result: BacktestResult }) {
         />
       </div>
 
+      {/* PR-3: Time-in-market + expectancy KPIs. Rendered only when the
+          payload carries them — legacy rows fall through to the Equity curve
+          without a blank section. */}
+      {hasPR3Metrics(summary) && (
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {summary.timeInMarketRatio != null && (
+            <KpiCard
+              label="Time in Market"
+              value={`${(summary.timeInMarketRatio * 100).toFixed(1)}%`}
+            />
+          )}
+          {summary.longestFlatStreakBars != null && (
+            <KpiCard
+              label="Longest Flat Streak"
+              value={`${summary.longestFlatStreakBars} bars`}
+            />
+          )}
+          {summary.expectancyPerTrade != null && (
+            <KpiCard
+              label="Expectancy / Trade"
+              value={`\u00a5${summary.expectancyPerTrade.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+              color={pnlColor(summary.expectancyPerTrade)}
+            />
+          )}
+          {summary.avgWinJpy != null && summary.avgLossJpy != null && (
+            <KpiCard
+              label="Avg Win / Loss"
+              value={`\u00a5${summary.avgWinJpy.toLocaleString('ja-JP', { maximumFractionDigits: 0 })} / \u00a5${summary.avgLossJpy.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+            />
+          )}
+        </div>
+      )}
+
+      {/* PR-1: exit-reason + signal-source breakdown tables. */}
+      {summary.byExitReason && Object.keys(summary.byExitReason).length > 0 && (
+        <div className="mt-6">
+          <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Breakdown</p>
+          <h3 className="mt-2 text-lg font-semibold text-white">Exit Reason 別</h3>
+          <BreakdownTable rows={summary.byExitReason} />
+        </div>
+      )}
+      {summary.bySignalSource && Object.keys(summary.bySignalSource).length > 0 && (
+        <div className="mt-6">
+          <h3 className="mt-2 text-lg font-semibold text-white">Signal Source 別</h3>
+          <BreakdownTable rows={summary.bySignalSource} />
+        </div>
+      )}
+
+      {/* PR-3: drawdown history. Omits the table entirely when no drawdown
+          crossed the threshold — don't show an empty grid. */}
+      {summary.drawdownPeriods && summary.drawdownPeriods.length > 0 && (
+        <div className="mt-6">
+          <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">Drawdown History</p>
+          <h3 className="mt-2 text-lg font-semibold text-white">
+            Drawdown 履歴 (depth ≥ {summary.drawdownThreshold ? `${(summary.drawdownThreshold * 100).toFixed(1)}%` : 'threshold'})
+          </h3>
+          <DrawdownTable
+            periods={summary.drawdownPeriods}
+            unrecovered={summary.unrecoveredDrawdown ?? null}
+          />
+        </div>
+      )}
+
       {/* Equity curve */}
       {result.trades && result.trades.length > 0 && (
         <div className="mt-6">
@@ -914,4 +977,136 @@ function formatHoldTime(seconds: number): string {
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`
   if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`
   return `${(seconds / 86400).toFixed(1)}d`
+}
+
+// hasPR3Metrics returns true when at least one of the PR-3 summary fields
+// arrived with data worth rendering. We inspect properties individually
+// (rather than a single flag) because legacy rows may fill some fields and
+// leave others undefined, and we want each populated KPI to show up without
+// forcing a full-suite payload.
+function hasPR3Metrics(s: BacktestResult['summary']): boolean {
+  return (
+    s.timeInMarketRatio != null ||
+    s.longestFlatStreakBars != null ||
+    s.expectancyPerTrade != null ||
+    s.avgWinJpy != null ||
+    s.avgLossJpy != null
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* PR-1: breakdown tables (exit reason / signal source)                */
+/* ------------------------------------------------------------------ */
+
+function BreakdownTable({ rows }: { rows: Record<string, SummaryBreakdown> }) {
+  // Sort keys by absolute total PnL so the biggest contributors sit at the
+  // top — this is the ranking that matters most during PDCA triage.
+  const entries = Object.entries(rows).sort(
+    (a, b) => Math.abs(b[1].totalPnL) - Math.abs(a[1].totalPnL),
+  )
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full min-w-[640px] text-sm">
+        <thead>
+          <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
+            <th className="px-3 py-2">Key</th>
+            <th className="px-3 py-2 text-right">Trades</th>
+            <th className="px-3 py-2 text-right">Win / Loss</th>
+            <th className="px-3 py-2 text-right">Win Rate</th>
+            <th className="px-3 py-2 text-right">Total PnL</th>
+            <th className="px-3 py-2 text-right">Avg PnL</th>
+            <th className="px-3 py-2 text-right">PF</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([key, br]) => (
+            <tr key={key} className="border-b border-white/5">
+              <td className="px-3 py-2 text-white">{key}</td>
+              <td className="px-3 py-2 text-right text-white">{br.trades}</td>
+              <td className="px-3 py-2 text-right text-text-secondary">
+                {br.winTrades} / {br.lossTrades}
+              </td>
+              <td className="px-3 py-2 text-right text-white">{br.winRate.toFixed(1)}%</td>
+              <td className={`px-3 py-2 text-right ${pnlColor(br.totalPnL)}`}>
+                {`\u00a5${br.totalPnL.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+              </td>
+              <td className={`px-3 py-2 text-right ${pnlColor(br.avgPnL)}`}>
+                {`\u00a5${br.avgPnL.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+              </td>
+              <td className={`px-3 py-2 text-right ${br.profitFactor >= 1 ? 'text-accent-green' : 'text-accent-red'}`}>
+                {br.profitFactor.toFixed(2)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* PR-3: drawdown history table                                         */
+/* ------------------------------------------------------------------ */
+
+function DrawdownTable({
+  periods,
+  unrecovered,
+}: {
+  periods: DrawdownPeriod[]
+  unrecovered: DrawdownPeriod | null
+}) {
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full min-w-[720px] text-sm">
+        <thead>
+          <tr className="border-b border-white/8 text-left text-xs uppercase tracking-wider text-text-secondary">
+            <th className="px-3 py-2">From</th>
+            <th className="px-3 py-2">Trough</th>
+            <th className="px-3 py-2 text-right">Depth</th>
+            <th className="px-3 py-2 text-right">Trough Balance</th>
+            <th className="px-3 py-2 text-right">Duration (bars)</th>
+            <th className="px-3 py-2 text-right">Recovery (bars)</th>
+            <th className="px-3 py-2">Recovered</th>
+          </tr>
+        </thead>
+        <tbody>
+          {periods.map((dp, i) => {
+            const row = <DrawdownRow key={`dp-${i}`} dp={dp} />
+            return row
+          })}
+          {unrecovered && (
+            <>
+              <tr>
+                <td colSpan={7} className="px-3 pt-4 pb-1 text-xs uppercase tracking-wider text-accent-red">
+                  Unrecovered (run ended in drawdown)
+                </td>
+              </tr>
+              <DrawdownRow dp={unrecovered} isUnrecovered />
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function DrawdownRow({ dp, isUnrecovered = false }: { dp: DrawdownPeriod; isUnrecovered?: boolean }) {
+  const fromDate = new Date(dp.fromTimestamp).toLocaleDateString('ja-JP')
+  const troughDate = new Date(dp.toTimestamp).toLocaleDateString('ja-JP')
+  const recovered = dp.recoveredAt > 0 ? new Date(dp.recoveredAt).toLocaleDateString('ja-JP') : '—'
+  return (
+    <tr className={`border-b border-white/5 ${isUnrecovered ? 'bg-accent-red/5' : ''}`}>
+      <td className="px-3 py-2 text-text-secondary text-xs">{fromDate}</td>
+      <td className="px-3 py-2 text-text-secondary text-xs">{troughDate}</td>
+      <td className="px-3 py-2 text-right text-accent-red">{formatPercent(dp.depth)}</td>
+      <td className="px-3 py-2 text-right text-white">
+        {`\u00a5${dp.depthBalance.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+      </td>
+      <td className="px-3 py-2 text-right text-white">{dp.durationBars}</td>
+      <td className="px-3 py-2 text-right text-white">
+        {dp.recoveryBars >= 0 ? dp.recoveryBars : '—'}
+      </td>
+      <td className="px-3 py-2 text-text-secondary text-xs">{recovered}</td>
+    </tr>
+  )
 }

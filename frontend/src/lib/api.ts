@@ -180,6 +180,67 @@ export type RealtimeEventMessage =
 
 // --- Backtest types ---
 
+// SummaryBreakdown mirrors entity.SummaryBreakdown (PR-1). Used for the
+// per-exit-reason / per-signal-source tables surfaced in DetailPanel.
+export type SummaryBreakdown = {
+  trades: number
+  winTrades: number
+  lossTrades: number
+  winRate: number
+  totalPnL: number
+  avgPnL: number
+  profitFactor: number
+}
+
+// DrawdownPeriod mirrors entity.DrawdownPeriod (PR-3). recoveredAt=0 and
+// recoveryBars=-1 mark an unrecovered episode.
+export type DrawdownPeriod = {
+  fromTimestamp: number
+  toTimestamp: number
+  recoveredAt: number
+  depth: number
+  depthBalance: number
+  durationBars: number
+  recoveryBars: number
+}
+
+// BacktestSummary mirrors entity.BacktestSummary. Legacy rows (persisted
+// before PR-1 / PR-3) may omit the optional fields entirely; UI renders
+// each section only when the payload contains non-empty data.
+export type BacktestSummary = {
+  periodFrom: number
+  periodTo: number
+  initialBalance: number
+  finalBalance: number
+  totalReturn: number
+  totalTrades: number
+  winTrades: number
+  lossTrades: number
+  winRate: number
+  profitFactor: number
+  maxDrawdown: number
+  maxDrawdownBalance: number
+  sharpeRatio: number
+  avgHoldSeconds: number
+  totalCarryingCost: number
+  totalSpreadCost: number
+  biweeklyWinRate?: number
+
+  // PR-1: per-exit-reason / per-signal-source breakdowns.
+  byExitReason?: Record<string, SummaryBreakdown>
+  bySignalSource?: Record<string, SummaryBreakdown>
+
+  // PR-3: drawdown history + time-in-market + expectancy.
+  drawdownPeriods?: DrawdownPeriod[]
+  drawdownThreshold?: number
+  unrecoveredDrawdown?: DrawdownPeriod | null
+  timeInMarketRatio?: number
+  longestFlatStreakBars?: number
+  expectancyPerTrade?: number
+  avgWinJpy?: number
+  avgLossJpy?: number
+}
+
 export type BacktestTrade = {
   tradeId: number
   symbolId: number
@@ -212,24 +273,7 @@ export type BacktestResult = {
     dailyCarryCost: number
     slippagePercent: number
   }
-  summary: {
-    periodFrom: number
-    periodTo: number
-    initialBalance: number
-    finalBalance: number
-    totalReturn: number
-    totalTrades: number
-    winTrades: number
-    lossTrades: number
-    winRate: number
-    profitFactor: number
-    maxDrawdown: number
-    maxDrawdownBalance: number
-    sharpeRatio: number
-    avgHoldSeconds: number
-    totalCarryingCost: number
-    totalSpreadCost: number
-  }
+  summary: BacktestSummary
   trades?: BacktestTrade[]
   // PDCA metadata — introduced by spec §5. Optional on the wire because:
   //   - profileName / pdcaCycleId / hypothesis use Go's `omitempty` tag so
