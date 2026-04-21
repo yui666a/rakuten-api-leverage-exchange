@@ -181,6 +181,20 @@ func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
 
 // ApplyOverrides returns a deep copy of base with the requested
 // dot-separated fields set to their override values.
+//
+// Supported override paths (keep this comment in lockstep with the switch
+// below — unknown paths error out, so the switch is the authoritative list):
+//   strategy_risk.stop_loss_percent
+//   strategy_risk.take_profit_percent
+//   strategy_risk.stop_loss_atr_multiplier
+//   strategy_risk.trailing_atr_multiplier
+//   strategy_risk.max_position_amount
+//   strategy_risk.max_daily_loss
+//   signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
+//   signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max}
+//   signal_rules.breakout.{volume_ratio_min,adx_min}
+//   stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
+//   htf_filter.alignment_boost
 func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (entity.StrategyProfile, error) {
 	out := base
 	for path, value := range overrides {
@@ -193,6 +207,10 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 			out.Risk.StopLossATRMultiplier = value
 		case "strategy_risk.trailing_atr_multiplier":
 			out.Risk.TrailingATRMultiplier = value
+		case "strategy_risk.max_position_amount":
+			out.Risk.MaxPositionAmount = value
+		case "strategy_risk.max_daily_loss":
+			out.Risk.MaxDailyLoss = value
 		case "signal_rules.trend_follow.rsi_buy_max":
 			out.SignalRules.TrendFollow.RSIBuyMax = value
 		case "signal_rules.trend_follow.rsi_sell_min":

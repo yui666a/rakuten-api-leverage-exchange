@@ -50,6 +50,26 @@ func productionProfile(t *testing.T) *entity.StrategyProfile {
 	return profile
 }
 
+// baselineProfile loads profiles/baseline.json, a pinned copy of the
+// DefaultStrategy defaults. It exists because production.json is allowed
+// to diverge from defaults after each PDCA v-bump (v4 introduces ADX
+// gates and a tighter TP that intentionally do NOT match the default
+// StrategyEngine). The "configurable strategy stays bit-for-bit
+// equivalent to DefaultStrategy under the default settings" invariant
+// continues to be tested, just against baseline.json instead of
+// production.json.
+func baselineProfile(t *testing.T) *entity.StrategyProfile {
+	t.Helper()
+	path := productionProfilePath(t)
+	baseDir := filepath.Dir(path)
+	loader := strategyprofile.NewLoader(baseDir)
+	profile, err := loader.Load("baseline")
+	if err != nil {
+		t.Fatalf("load baseline profile: %v", err)
+	}
+	return profile
+}
+
 func TestConfigurableStrategy_Name(t *testing.T) {
 	profile := productionProfile(t)
 	s, err := NewConfigurableStrategy(profile)
@@ -213,11 +233,14 @@ func scenariosForEquivalence() []indicatorScenario {
 	}
 }
 
-// TestConfigurableStrategy_EquivalentToDefault is the spec-mandated critical
-// test: production.json must produce signals identical to DefaultStrategy
-// across multiple representative branches.
+// TestConfigurableStrategy_EquivalentToDefault is the spec-mandated
+// critical test: the pinned baseline.json (== DefaultStrategy defaults)
+// must produce signals identical to DefaultStrategy across multiple
+// representative branches. Production profile is allowed to diverge
+// from defaults after each PDCA v-bump; baseline.json is the stable
+// anchor that keeps ConfigurableStrategy honest.
 func TestConfigurableStrategy_EquivalentToDefault(t *testing.T) {
-	profile := productionProfile(t)
+	profile := baselineProfile(t)
 	configurable, err := NewConfigurableStrategy(profile)
 	if err != nil {
 		t.Fatalf("NewConfigurableStrategy: %v", err)
@@ -294,11 +317,15 @@ func TestConfigurableStrategy_DisabledTrendFollow(t *testing.T) {
 
 // TestConfigurableStrategy_CustomRSIThresholds verifies a profile-level
 // threshold override actually changes the decision. RSI 65 passes the
-// production RSIBuyMax=70 ceiling but is blocked by a tightened 60 ceiling.
+// baseline RSIBuyMax=70 ceiling but is blocked by a tightened 60 ceiling.
+//
+// Uses baseline.json (== DefaultStrategy) rather than production.json so
+// the test is stable across PDCA v-bumps. Production may add ADX/etc.
+// gates that would mask the RSI change we want to isolate here.
 func TestConfigurableStrategy_CustomRSIThresholds(t *testing.T) {
-	profile := productionProfile(t)
+	profile := baselineProfile(t)
 
-	// Sanity: baseline (production, RSIBuyMax=70) produces a BUY.
+	// Sanity: baseline (RSIBuyMax=70) produces a BUY.
 	baseline, err := NewConfigurableStrategy(profile)
 	if err != nil {
 		t.Fatalf("NewConfigurableStrategy baseline: %v", err)

@@ -195,21 +195,29 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 			if len(higherCandles) == 0 {
 				cfg.HigherTFInterval = ""
 			}
+			// Risk config must come from the per-combination profile —
+			// otherwise parameter axes like strategy_risk.take_profit_percent
+			// listed in the grid are silently ignored because every window
+			// run would use the shared request-level value. Fall back to
+			// the shared values (applied from baseProfile by
+			// applyProfileDefaults) only when the per-combination profile
+			// left a field at zero.
+			risk := entity.RiskConfig{
+				MaxPositionAmount:     nonZeroFloat(profile.Risk.MaxPositionAmount, shared.MaxPositionAmount),
+				MaxDailyLoss:          nonZeroFloat(profile.Risk.MaxDailyLoss, shared.MaxDailyLoss),
+				StopLossPercent:       nonZeroFloat(profile.Risk.StopLossPercent, shared.StopLossPercent),
+				StopLossATRMultiplier: nonZeroFloat(profile.Risk.StopLossATRMultiplier, shared.StopLossATRMultiplier),
+				TrailingATRMultiplier: nonZeroFloat(profile.Risk.TrailingATRMultiplier, shared.TrailingATRMultiplier),
+				TakeProfitPercent:     nonZeroFloat(profile.Risk.TakeProfitPercent, shared.TakeProfitPercent),
+				InitialCapital:        shared.InitialBalance,
+			}
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
 			result, err := windowRunner.Run(ctx, bt.RunInput{
 				Config:         cfg,
 				TradeAmount:    shared.TradeAmount,
 				PrimaryCandles: primary.Candles,
 				HigherCandles:  higherCandles,
-				RiskConfig: entity.RiskConfig{
-					MaxPositionAmount:     shared.MaxPositionAmount,
-					MaxDailyLoss:          shared.MaxDailyLoss,
-					StopLossPercent:       shared.StopLossPercent,
-					StopLossATRMultiplier: shared.StopLossATRMultiplier,
-					TrailingATRMultiplier: shared.TrailingATRMultiplier,
-					TakeProfitPercent:     shared.TakeProfitPercent,
-					InitialCapital:        shared.InitialBalance,
-				},
+				RiskConfig:     risk,
 			})
 			if err != nil {
 				return nil, err
@@ -224,4 +232,16 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+// nonZeroFloat returns primary when it is strictly positive, otherwise the
+// fallback. This matches the profile/request precedence used elsewhere in
+// the backtest handlers (applyProfileDefaults), so a zero in the per-
+// combination profile means "inherit the shared / baseline value" rather
+// than "literally disable".
+func nonZeroFloat(primary, fallback float64) float64 {
+	if primary > 0 {
+		return primary
+	}
+	return fallback
 }

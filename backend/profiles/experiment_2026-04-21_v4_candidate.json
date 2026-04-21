@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted from experiment_2026-04-21_v4b_candidate on 2026-04-21. This is the fix follow-up to the v4 promotion (PR #117) after Codex caught that the WFO handler was not threading strategy_risk.take_profit_percent overrides into the per-window RiskConfig. Re-running the corrected WFO showed contrarian.adx_max was NOT a robust IS winner once TP was actually part of the grid — so this v4b revision drops it (adx_max=0). Multi-period numbers on HEAD: 1yr -0.23%, 2yr -5.32%, 3yr +9.56% (first promotion to hit a net-positive multi-year window). WFO 10-window OOS geomMean -0.8%, worst -3.9%, DD stays under 9% across 1/2/3yr.",
+  "name": "experiment_2026-04-21_v4_candidate",
+  "description": "v4 promotion candidate derived from walk-forward optimisation (PR-13) on 2026-04-21 cycle17-19. Final tuning on cycle19 suggested trend_follow.adx_min=28 (5/9 IS best) over 30. Other fields: contrarian.adx_max=25 (9/9 in cycle16a), trend_follow.rsi_buy_max=60 (8/9), take_profit_percent=4 (9/9). Expected WFO geomOOS: -3.3% (baseline) -> -0.6%. Multi-period: 2yr -19.9% -> -3.9%, 3yr -12.4% -> -6.4%, DD 10-27% -> 5-7%.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -33,7 +33,7 @@
       "rsi_entry": 30,
       "rsi_exit": 70,
       "macd_histogram_limit": 10,
-      "adx_max": 0
+      "adx_max": 25
     },
     "breakout": {
       "enabled": true,

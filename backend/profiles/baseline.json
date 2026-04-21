@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted from experiment_2026-04-21_v4b_candidate on 2026-04-21. This is the fix follow-up to the v4 promotion (PR #117) after Codex caught that the WFO handler was not threading strategy_risk.take_profit_percent overrides into the per-window RiskConfig. Re-running the corrected WFO showed contrarian.adx_max was NOT a robust IS winner once TP was actually part of the grid — so this v4b revision drops it (adx_max=0). Multi-period numbers on HEAD: 1yr -0.23%, 2yr -5.32%, 3yr +9.56% (first promotion to hit a net-positive multi-year window). WFO 10-window OOS geomMean -0.8%, worst -3.9%, DD stays under 9% across 1/2/3yr.",
+  "name": "baseline",
+  "description": "Baseline profile kept bit-for-bit equal to the DefaultStrategy defaults. Used by TestConfigurableStrategy_EquivalentToDefault to guarantee that ConfigurableStrategy never silently diverges from the hard-coded legacy behaviour. Do NOT modify unless you are also changing StrategyEngineOptions defaults in lockstep.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -24,9 +24,9 @@
       "enabled": true,
       "require_macd_confirm": true,
       "require_ema_cross": true,
-      "rsi_buy_max": 60,
-      "rsi_sell_min": 40,
-      "adx_min": 28
+      "rsi_buy_max": 70,
+      "rsi_sell_min": 30,
+      "adx_min": 0
     },
     "contrarian": {
       "enabled": true,
@@ -44,7 +44,7 @@
   },
   "strategy_risk": {
     "stop_loss_percent": 5,
-    "take_profit_percent": 4,
+    "take_profit_percent": 10,
     "stop_loss_atr_multiplier": 0,
     "trailing_atr_multiplier": 0,
     "max_position_amount": 100000,

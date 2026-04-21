@@ -3,6 +3,7 @@ package backtest
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -121,6 +122,68 @@ func TestWalkForwardRunner_RejectsEmptyGrid(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error on empty grid")
+	}
+}
+
+// TestWalkForwardRunner_RiskFieldOverrideFlowsToCallback is the Codex PR-117
+// follow-up: the WalkForwardRunner must feed the per-combo profile (with
+// overrides applied) into RunWindow, and the handler in turn must use that
+// profile's risk fields — not a shared request-level value. We verify the
+// runner half here by asserting that strategy_risk.* overrides surface as
+// non-zero fields on the profile parameter passed to RunWindow.
+func TestWalkForwardRunner_RiskFieldOverrideFlowsToCallback(t *testing.T) {
+	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2024, 10, 1, 0, 0, 0, 0, time.UTC)
+	windows, err := ComputeWindows(from, to, 3, 3, 3)
+	if err != nil {
+		t.Fatalf("windows: %v", err)
+	}
+	grid, err := ExpandGrid([]ParameterOverride{
+		{Path: "strategy_risk.take_profit_percent", Values: []float64{4, 7, 10}},
+	})
+	if err != nil {
+		t.Fatalf("grid: %v", err)
+	}
+
+	base := entity.StrategyProfile{
+		Name: "base",
+		Risk: entity.StrategyRiskConfig{StopLossPercent: 5, TakeProfitPercent: 10},
+	}
+	// Protect seenTPs with a mutex: RunWindow callbacks run concurrently
+	// inside the errgroup, so a bare append would race under -race.
+	var mu sync.Mutex
+	var seenTPs []float64
+	run := NewWalkForwardRunner()
+	_, err = run.Run(context.Background(), WalkForwardInput{
+		BaseProfile: base,
+		Windows:     windows,
+		Grid:        grid,
+		Objective:   "return",
+		RunWindow: func(ctx context.Context, phase WalkForwardPhase, p entity.StrategyProfile, wf, wt time.Time) (*entity.BacktestResult, error) {
+			if phase == WalkForwardPhaseInSample {
+				mu.Lock()
+				seenTPs = append(seenTPs, p.Risk.TakeProfitPercent)
+				mu.Unlock()
+			}
+			return &entity.BacktestResult{
+				Summary: entity.BacktestSummary{TotalReturn: p.Risk.TakeProfitPercent / 100.0},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Per window × combo, the callback must observe each grid value at
+	// least once. If the per-combo profile were ignored, seenTPs would
+	// contain only the base value (10).
+	seen := map[float64]int{}
+	for _, v := range seenTPs {
+		seen[v]++
+	}
+	for _, want := range []float64{4, 7, 10} {
+		if seen[want] == 0 {
+			t.Fatalf("grid value %v never surfaced in RunWindow callback; seenTPs=%v", want, seenTPs)
+		}
 	}
 }
 
