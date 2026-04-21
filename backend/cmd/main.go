@@ -58,6 +58,7 @@ func main() {
 	clientOrderRepo := database.NewClientOrderRepo(db)
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	multiPeriodRepo := backtestinfra.NewMultiPeriodResultRepository(db, backtestResultRepo)
+	walkForwardRepo := backtestinfra.NewWalkForwardResultRepository(db)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	// The StrategyRegistry lives in the strategy package and is exercised by
@@ -163,6 +164,7 @@ func main() {
 		BacktestRunner:        backtestRunner,
 		BacktestResultRepo:    backtestResultRepo,
 		MultiPeriodResultRepo: multiPeriodRepo,
+		WalkForwardResultRepo: walkForwardRepo,
 		OnSymbolSwitch:        onSymbolSwitch,
 		DailyPnLCalculator:    dailyPnLCalc,
 	})

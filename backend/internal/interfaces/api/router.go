@@ -37,6 +37,9 @@ type Dependencies struct {
 	// MultiPeriodResultRepo is optional; when nil the /backtest/run-multi
 	// and /backtest/multi-results endpoints respond with 503.
 	MultiPeriodResultRepo repository.MultiPeriodResultRepository
+	// WalkForwardResultRepo is optional; when nil the walk-forward endpoint
+	// still computes but does not persist, and GET endpoints return 503.
+	WalkForwardResultRepo repository.WalkForwardResultRepository
 	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
 	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
 	OnSymbolSwitch func(oldID, newID int64)
@@ -134,6 +137,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.MultiPeriodResultRepo != nil {
 			opts = append(opts, handler.WithMultiPeriodRepo(deps.MultiPeriodResultRepo))
 		}
+		if deps.WalkForwardResultRepo != nil {
+			opts = append(opts, handler.WithWalkForwardRepo(deps.WalkForwardResultRepo))
+		}
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		v1.POST("/backtest/run", backtestHandler.Run)
 		v1.GET("/backtest/csv-meta", backtestHandler.CSVMeta)
@@ -144,9 +150,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			v1.GET("/backtest/multi-results", backtestHandler.ListMultiResults)
 			v1.GET("/backtest/multi-results/:id", backtestHandler.GetMultiResult)
 		}
-		// PR-13: Walk-forward optimisation. MVP is compute-only (response
-		// only, no DB). GET / list / CLI come in a follow-up PR.
+		// PR-13 follow-up (#120): walk-forward now persists to the DB.
+		// GET endpoints require the repo; POST always computes but only
+		// persists when the repo is wired.
 		v1.POST("/backtest/walk-forward", backtestHandler.RunWalkForward)
+		if deps.WalkForwardResultRepo != nil {
+			v1.GET("/backtest/walk-forward", backtestHandler.ListWalkForward)
+			v1.GET("/backtest/walk-forward/:id", backtestHandler.GetWalkForward)
+		}
 	}
 
 	return r

@@ -219,4 +219,72 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 			t.Errorf("expected index %q on multi_period_results", idx)
 		}
 	}
+
+	// PR-13 follow-up (#120): walk_forward_results table + indexes.
+	wantWFCols := map[string]bool{
+		"id":                 false,
+		"created_at":         false,
+		"base_profile":       false,
+		"pdca_cycle_id":      false,
+		"hypothesis":         false,
+		"objective":          false,
+		"parent_result_id":   false,
+		"request_json":       false,
+		"result_json":        false,
+		"aggregate_oos_json": false,
+	}
+	wfRows, err := db.Query("PRAGMA table_info(walk_forward_results)")
+	if err != nil {
+		t.Fatalf("pragma table_info(walk_forward_results): %v", err)
+	}
+	defer wfRows.Close()
+	for wfRows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    interface{}
+			pk      int
+		)
+		if err := wfRows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan walk_forward_results table_info: %v", err)
+		}
+		if _, ok := wantWFCols[name]; ok {
+			wantWFCols[name] = true
+		}
+	}
+	if err := wfRows.Err(); err != nil {
+		t.Fatalf("iterate walk_forward_results table_info: %v", err)
+	}
+	for col, seen := range wantWFCols {
+		if !seen {
+			t.Errorf("expected column %q in walk_forward_results", col)
+		}
+	}
+
+	wantWFIndexes := map[string]bool{
+		"idx_wf_created": false,
+		"idx_wf_profile": false,
+		"idx_wf_pdca":    false,
+	}
+	wfIdxRows, err := db.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='walk_forward_results'")
+	if err != nil {
+		t.Fatalf("query walk_forward indexes: %v", err)
+	}
+	defer wfIdxRows.Close()
+	for wfIdxRows.Next() {
+		var name string
+		if err := wfIdxRows.Scan(&name); err != nil {
+			t.Fatalf("scan walk_forward index name: %v", err)
+		}
+		if _, ok := wantWFIndexes[name]; ok {
+			wantWFIndexes[name] = true
+		}
+	}
+	for idx, seen := range wantWFIndexes {
+		if !seen {
+			t.Errorf("expected index %q on walk_forward_results", idx)
+		}
+	}
 }
