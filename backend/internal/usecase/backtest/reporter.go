@@ -71,26 +71,50 @@ func (r *SummaryReporter) BuildSummary(
 		return parseSignalSource(t.ReasonEntry)
 	})
 
+	recoveredDDs, unrecoveredDD := DetectDrawdowns(equityPoints, DefaultDrawdownThreshold)
+	expectancy, avgWin, avgLoss := ComputeExpectancy(trades)
+
+	// Derive per-bar timestamps from the equity curve itself. runner.go pushes
+	// exactly one EquityPoint per primary-interval candle plus a seed point,
+	// so skipping the seed yields the bar timeline we need. This avoids
+	// threading the full candle slice into the reporter.
+	var barTimestamps []int64
+	if len(equityPoints) > 1 {
+		barTimestamps = make([]int64, 0, len(equityPoints)-1)
+		for _, p := range equityPoints[1:] {
+			barTimestamps = append(barTimestamps, p.Timestamp)
+		}
+	}
+	timeInMarket, longestFlat := ComputeTimeInMarket(trades, barTimestamps, len(barTimestamps))
+
 	return entity.BacktestSummary{
-		PeriodFrom:         config.FromTimestamp,
-		PeriodTo:           config.ToTimestamp,
-		InitialBalance:     config.InitialBalance,
-		FinalBalance:       finalBalance,
-		TotalReturn:        calcTotalReturn(config.InitialBalance, finalBalance),
-		TotalTrades:        totalTrades,
-		WinTrades:          winTrades,
-		LossTrades:         lossTrades,
-		WinRate:            winRate,
-		ProfitFactor:       profitFactor,
-		MaxDrawdown:        maxDDRatio,
-		MaxDrawdownBalance: maxDDBalance,
-		SharpeRatio:        sharpe,
-		AvgHoldSeconds:     avgHold,
-		TotalCarryingCost:  carryingCost,
-		TotalSpreadCost:    spreadCost,
-		BiweeklyWinRate:    biweekly,
-		ByExitReason:       byExit,
-		BySignalSource:     bySource,
+		PeriodFrom:          config.FromTimestamp,
+		PeriodTo:            config.ToTimestamp,
+		InitialBalance:      config.InitialBalance,
+		FinalBalance:        finalBalance,
+		TotalReturn:         calcTotalReturn(config.InitialBalance, finalBalance),
+		TotalTrades:         totalTrades,
+		WinTrades:           winTrades,
+		LossTrades:          lossTrades,
+		WinRate:             winRate,
+		ProfitFactor:        profitFactor,
+		MaxDrawdown:         maxDDRatio,
+		MaxDrawdownBalance:  maxDDBalance,
+		SharpeRatio:         sharpe,
+		AvgHoldSeconds:      avgHold,
+		TotalCarryingCost:   carryingCost,
+		TotalSpreadCost:     spreadCost,
+		BiweeklyWinRate:     biweekly,
+		ByExitReason:        byExit,
+		BySignalSource:      bySource,
+		DrawdownPeriods:     recoveredDDs,
+		DrawdownThreshold:   DefaultDrawdownThreshold,
+		UnrecoveredDrawdown: unrecoveredDD,
+		ExpectancyPerTrade:    expectancy,
+		AvgWinJPY:             avgWin,
+		AvgLossJPY:            avgLoss,
+		TimeInMarketRatio:     timeInMarket,
+		LongestFlatStreakBars: longestFlat,
 	}
 }
 

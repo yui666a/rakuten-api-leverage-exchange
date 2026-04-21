@@ -109,6 +109,53 @@ func mustJSTMillis(y int, m time.Month, d, h, min int) int64 {
 	return time.Date(y, m, d, h, min, 0, 0, loc).UnixMilli()
 }
 
+func TestSummaryReporter_BuildSummary_IncludesDrawdownTimeInMarketExpectancy(t *testing.T) {
+	reporter := NewSummaryReporter()
+	cfg := entity.BacktestConfig{
+		FromTimestamp:  1_000,
+		ToTimestamp:    10_000,
+		InitialBalance: 1000,
+	}
+	// 5 equity points: seed + 4 bars.
+	// peak 1000 -> trough 950 (-5%) -> recover 1000 -> new peak 1100 -> 1050 (-4.5% unrecovered)
+	equity := []EquityPoint{
+		{Timestamp: 1_000, Equity: 1000}, // seed
+		{Timestamp: 2_000, Equity: 950},  // trough of recovered DD (5%)
+		{Timestamp: 3_000, Equity: 1000}, // recovered (= peak)
+		{Timestamp: 4_000, Equity: 1100}, // new peak
+		{Timestamp: 5_000, Equity: 1050}, // -4.5% DD unrecovered at end
+	}
+	// Two trades cover bars 2-3 (in-market) and bar 5 (in-market). Bar 4
+	// (timestamp 4_000) is flat. Bar timestamps = 2_000, 3_000, 4_000, 5_000.
+	trades := []entity.BacktestTradeRecord{
+		{TradeID: 1, EntryTime: 2_000, ExitTime: 3_000, PnL: 50},
+		{TradeID: 2, EntryTime: 5_000, ExitTime: 5_000, PnL: -10},
+	}
+	s := reporter.BuildSummary(cfg, 1050, trades, equity)
+
+	if len(s.DrawdownPeriods) != 1 {
+		t.Fatalf("DrawdownPeriods = %d, want 1; got %+v", len(s.DrawdownPeriods), s.DrawdownPeriods)
+	}
+	if s.DrawdownThreshold != DefaultDrawdownThreshold {
+		t.Fatalf("DrawdownThreshold = %v, want %v", s.DrawdownThreshold, DefaultDrawdownThreshold)
+	}
+	if s.UnrecoveredDrawdown == nil {
+		t.Fatalf("UnrecoveredDrawdown should be set at run end")
+	}
+	if s.TimeInMarketRatio < 0.74 || s.TimeInMarketRatio > 0.76 {
+		t.Fatalf("TimeInMarketRatio = %v, want ~0.75", s.TimeInMarketRatio)
+	}
+	if s.LongestFlatStreakBars != 1 {
+		t.Fatalf("LongestFlatStreakBars = %d, want 1", s.LongestFlatStreakBars)
+	}
+	if s.ExpectancyPerTrade != 20 {
+		t.Fatalf("ExpectancyPerTrade = %v, want 20", s.ExpectancyPerTrade)
+	}
+	if s.AvgWinJPY != 50 || s.AvgLossJPY != 10 {
+		t.Fatalf("avg win/loss = %v/%v", s.AvgWinJPY, s.AvgLossJPY)
+	}
+}
+
 func TestSummaryReporter_BuildSummary_IncludesBreakdowns(t *testing.T) {
 	reporter := NewSummaryReporter()
 	cfg := entity.BacktestConfig{
