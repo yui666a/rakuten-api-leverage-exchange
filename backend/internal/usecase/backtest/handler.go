@@ -317,9 +317,17 @@ func (h *TickRiskHandler) SetATRMultipliers(stopLossATR, trailingATR float64) {
 }
 
 // UpdateATR is called by the IndicatorHandler (or a test fixture) whenever a
-// fresh primary-interval ATR value is available. Zero or NaN is ignored.
+// fresh primary-interval ATR value is available. NaN is ignored (the
+// indicator calculator emits NaN when there is insufficient data). Zero
+// *is* accepted so the handler correctly returns to the percent-only
+// fallback path when the market genuinely has zero range — a previous
+// version silently retained a stale positive ATR in that case, breaking
+// the max(percent, ATR) policy when ATR transitioned back to 0.
 func (h *TickRiskHandler) UpdateATR(atr float64) {
-	if atr <= 0 || atr != atr { // NaN check
+	if atr != atr { // NaN check
+		return
+	}
+	if atr < 0 {
 		return
 	}
 	h.currentATR = atr

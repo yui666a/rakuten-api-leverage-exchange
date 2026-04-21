@@ -47,12 +47,18 @@ func ComputeWindows(from, to time.Time, inSampleMonths, oosMonths, stepMonths in
 		return nil, fmt.Errorf("walk-forward: from must be before to")
 	}
 
+	// addMonthsClamped is used instead of time.Time.AddDate directly because
+	// AddDate normalises an out-of-range day into the next month:
+	// e.g. 2024-01-31 + 1m => 2024-03-02, which silently skips February
+	// and progressively drifts later windows. Clamping to the target
+	// month's last day keeps month-aligned schedules stable through
+	// 30/31-day and leap-year boundaries.
 	var out []WalkForwardWindow
 	idx := 0
 	isStart := from
 	for {
-		isEnd := isStart.AddDate(0, inSampleMonths, 0)
-		oosEnd := isEnd.AddDate(0, oosMonths, 0)
+		isEnd := addMonthsClamped(isStart, inSampleMonths)
+		oosEnd := addMonthsClamped(isEnd, oosMonths)
 		if oosEnd.After(to) {
 			break
 		}
@@ -64,13 +70,56 @@ func ComputeWindows(from, to time.Time, inSampleMonths, oosMonths, stepMonths in
 			OOSTo:        oosEnd,
 		})
 		idx++
-		isStart = isStart.AddDate(0, stepMonths, 0)
+		isStart = addMonthsClamped(isStart, stepMonths)
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("walk-forward: [%s, %s] is too short for in=%d oos=%d months",
 			from.Format("2006-01-02"), to.Format("2006-01-02"), inSampleMonths, oosMonths)
 	}
 	return out, nil
+}
+
+// addMonthsClamped adds n calendar months to t with two invariants the
+// stdlib time.Time.AddDate violates:
+//
+//  1. If t is already on the last day of its month, the result is also
+//     on the last day of the target month. e.g. 2024-01-31 + 1m =>
+//     2024-02-29 (and subsequent monthly steps stay anchored on the last
+//     day, never drifting to 02-29 -> 03-29 -> 04-29).
+//  2. If t's day-of-month does not exist in the target month, clamp to
+//     the target's last day. e.g. 2024-03-31 + 1m => 2024-04-30.
+//
+// Without these, AddDate(0,1,0) on 2024-01-31 returns 2024-03-02, which
+// silently skips February and breaks any walk-forward schedule whose
+// cadence depends on "month +1" meaning "same point of the next month".
+func addMonthsClamped(t time.Time, months int) time.Time {
+	y, m, d := t.Date()
+
+	// Normalise target year/month with a negative-safe modulo.
+	total := int(m) - 1 + months
+	targetYear := y + total/12
+	targetMonthIdx := total % 12
+	if targetMonthIdx < 0 {
+		targetYear--
+		targetMonthIdx += 12
+	}
+	targetMonth := time.Month(targetMonthIdx + 1)
+
+	// Last day of source month and target month: "day 0 of next month".
+	srcLastDay := time.Date(y, m+1, 0, 0, 0, 0, 0, t.Location()).Day()
+	targetLastDay := time.Date(targetYear, targetMonth+1, 0, 0, 0, 0, 0, t.Location()).Day()
+
+	switch {
+	case d == srcLastDay:
+		// Month-end anchor: stay on month-end across calls.
+		d = targetLastDay
+	case d > targetLastDay:
+		// Source day doesn't exist in target month — clamp down.
+		d = targetLastDay
+	}
+
+	return time.Date(targetYear, targetMonth, d,
+		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 }
 
 // ExpandGrid computes the full cartesian product of the supplied
@@ -81,8 +130,20 @@ func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
 		return []map[string]float64{{}}, nil
 	}
 
+	// Reject duplicate paths up-front: a later axis would silently overwrite
+	// the earlier one in the combo map, producing visible combo count >
+	// distinct combos and a scoring signal that is not what the caller
+	// asked for.
+	seenPaths := make(map[string]struct{}, len(overrides))
 	total := 1
 	for _, o := range overrides {
+		if o.Path == "" {
+			return nil, fmt.Errorf("walk-forward: override path must not be empty")
+		}
+		if _, dup := seenPaths[o.Path]; dup {
+			return nil, fmt.Errorf("walk-forward: duplicate override path %q", o.Path)
+		}
+		seenPaths[o.Path] = struct{}{}
 		if len(o.Values) == 0 {
 			return nil, fmt.Errorf("walk-forward: override %q has no values", o.Path)
 		}

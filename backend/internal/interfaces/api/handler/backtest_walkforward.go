@@ -102,6 +102,31 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		return
 	}
 
+	// Validate the objective at the API boundary so a typo (e.g.
+	// "returns" vs "return") fails the request up front instead of
+	// silently defaulting to TotalReturn in SelectByObjective and
+	// producing results that disagree with the caller's intent.
+	switch req.Objective {
+	case "", "return", "sharpe", "profit_factor":
+		// ok; "" resolves to TotalReturn in SelectByObjective.
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("invalid objective %q: must be one of return, sharpe, profit_factor", req.Objective),
+		})
+		return
+	}
+
+	// Pre-validate that every override path is supported by ApplyOverrides,
+	// so an unsupported path surfaces as HTTP 400 up front instead of
+	// deep inside WalkForwardRunner.Run where it would currently bubble
+	// out as HTTP 500.
+	for _, ov := range req.ParameterGrid {
+		if _, err := bt.ApplyOverrides(entity.StrategyProfile{}, map[string]float64{ov.Path: 0}); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	baseDir := h.profilesBaseDir
 	if baseDir == "" {
 		baseDir = defaultProfilesBaseDir
