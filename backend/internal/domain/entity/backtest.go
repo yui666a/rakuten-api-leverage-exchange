@@ -127,14 +127,61 @@ type LabeledBacktestResult struct {
 // geometric mean is not well-defined. We deliberately set
 // GeomMeanReturn = NaN so downstream consumers cannot accidentally use it
 // as a score, and clamp AllPositive=false to signal the ruin path.
+//
+// JSON: NaN and ±Inf are not valid JSON numbers, so the custom
+// MarshalJSON/UnmarshalJSON below emit/accept JSON null for those values.
+// Persistence and HTTP responses both round-trip through these hooks.
 type MultiPeriodAggregate struct {
-	GeomMeanReturn  float64 `json:"geomMeanReturn"`
-	ReturnStdDev    float64 `json:"returnStdDev"`
-	WorstReturn     float64 `json:"worstReturn"`
-	BestReturn      float64 `json:"bestReturn"`
-	WorstDrawdown   float64 `json:"worstDrawdown"`
+	GeomMeanReturn  float64 `json:"-"`
+	ReturnStdDev    float64 `json:"-"`
+	WorstReturn     float64 `json:"-"`
+	BestReturn      float64 `json:"-"`
+	WorstDrawdown   float64 `json:"-"`
 	AllPositive     bool    `json:"allPositive"`
-	RobustnessScore float64 `json:"robustnessScore"`
+	RobustnessScore float64 `json:"-"`
+}
+
+// aggregateJSONShape is the wire/persistence shape. Pointer fields let NaN /
+// ±Inf round-trip through JSON as `null` (the stdlib json package rejects
+// non-finite floats as plain number fields).
+type aggregateJSONShape struct {
+	GeomMeanReturn  *float64 `json:"geomMeanReturn"`
+	ReturnStdDev    *float64 `json:"returnStdDev"`
+	WorstReturn     *float64 `json:"worstReturn"`
+	BestReturn      *float64 `json:"bestReturn"`
+	WorstDrawdown   *float64 `json:"worstDrawdown"`
+	AllPositive     bool     `json:"allPositive"`
+	RobustnessScore *float64 `json:"robustnessScore"`
+}
+
+// MarshalJSON emits the aggregate with NaN and ±Inf mapped to JSON null.
+func (a MultiPeriodAggregate) MarshalJSON() ([]byte, error) {
+	return jsonMarshal(aggregateJSONShape{
+		GeomMeanReturn:  finiteOrNil(a.GeomMeanReturn),
+		ReturnStdDev:    finiteOrNil(a.ReturnStdDev),
+		WorstReturn:     finiteOrNil(a.WorstReturn),
+		BestReturn:      finiteOrNil(a.BestReturn),
+		WorstDrawdown:   finiteOrNil(a.WorstDrawdown),
+		AllPositive:     a.AllPositive,
+		RobustnessScore: finiteOrNil(a.RobustnessScore),
+	})
+}
+
+// UnmarshalJSON reverses MarshalJSON. `null` entries decode back to NaN so
+// ruin semantics are preserved across the persistence boundary.
+func (a *MultiPeriodAggregate) UnmarshalJSON(data []byte) error {
+	var s aggregateJSONShape
+	if err := jsonUnmarshal(data, &s); err != nil {
+		return err
+	}
+	a.GeomMeanReturn = nilToNaN(s.GeomMeanReturn)
+	a.ReturnStdDev = nilToNaN(s.ReturnStdDev)
+	a.WorstReturn = nilToNaN(s.WorstReturn)
+	a.BestReturn = nilToNaN(s.BestReturn)
+	a.WorstDrawdown = nilToNaN(s.WorstDrawdown)
+	a.AllPositive = s.AllPositive
+	a.RobustnessScore = nilToNaN(s.RobustnessScore)
+	return nil
 }
 
 // MultiPeriodResult is the persisted output of a single multi-period run: N

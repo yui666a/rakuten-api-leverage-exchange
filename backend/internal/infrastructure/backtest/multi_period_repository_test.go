@@ -2,6 +2,7 @@ package backtest
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -106,6 +107,60 @@ func TestMultiPeriodRepository_SaveFindRehydratesPeriods(t *testing.T) {
 	}
 	if got.Periods[1].Result.Summary.TotalReturn != 0.05 {
 		t.Fatalf("period 1 TotalReturn round-trip failed: %v", got.Periods[1].Result.Summary.TotalReturn)
+	}
+}
+
+func TestMultiPeriodRepository_SaveAndRoundTripRuinAggregate(t *testing.T) {
+	// Codex PR #111 BLOCKING: Save must not fail when the aggregate contains
+	// NaN (the ruin signal). This regression test persists a ruined envelope
+	// and asserts it comes back with the NaN preserved via the JSON null
+	// round-trip on MultiPeriodAggregate.
+	mpRepo, btRepo := newMultiPeriodTestRepo(t)
+	ctx := context.Background()
+
+	bt := entity.BacktestResult{
+		ID:        "bt-ruin",
+		CreatedAt: time.Now().Unix(),
+		Config: entity.BacktestConfig{
+			Symbol: "LTC_JPY", SymbolID: 10, PrimaryInterval: "PT15M",
+			FromTimestamp: 1000, ToTimestamp: 2000,
+		},
+		Summary: entity.BacktestSummary{InitialBalance: 100000, FinalBalance: 0, TotalReturn: -1.0},
+	}
+	if err := btRepo.Save(ctx, bt); err != nil {
+		t.Fatalf("save bt: %v", err)
+	}
+
+	ruin := entity.MultiPeriodResult{
+		ID:        "mp-ruin",
+		CreatedAt: time.Now().Unix(),
+		Periods:   []entity.LabeledBacktestResult{{Label: "ruin-window", Result: bt}},
+		Aggregate: entity.MultiPeriodAggregate{
+			GeomMeanReturn:  math.NaN(),
+			ReturnStdDev:    0.01,
+			WorstReturn:     -1.0,
+			BestReturn:      -1.0,
+			WorstDrawdown:   1.0,
+			AllPositive:     false,
+			RobustnessScore: math.NaN(),
+		},
+	}
+	if err := mpRepo.Save(ctx, ruin); err != nil {
+		t.Fatalf("save ruin envelope should succeed, got: %v", err)
+	}
+
+	got, err := mpRepo.FindByID(ctx, "mp-ruin")
+	if err != nil {
+		t.Fatalf("find ruin: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("expected ruin envelope")
+	}
+	if !math.IsNaN(got.Aggregate.GeomMeanReturn) || !math.IsNaN(got.Aggregate.RobustnessScore) {
+		t.Fatalf("NaN should survive persistence round-trip: %+v", got.Aggregate)
+	}
+	if got.Aggregate.AllPositive {
+		t.Fatalf("ruin aggregate must not be AllPositive")
 	}
 }
 

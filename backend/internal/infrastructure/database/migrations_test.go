@@ -187,4 +187,29 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 			t.Errorf("expected column %q in multi_period_results", col)
 		}
 	}
+
+	wantMultiIndexes := map[string]bool{
+		"idx_multi_period_created": false,
+		"idx_multi_period_profile": false,
+		"idx_multi_period_pdca":    false,
+	}
+	mpIdxRows, err := db.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='multi_period_results'")
+	if err != nil {
+		t.Fatalf("query multi_period indexes: %v", err)
+	}
+	defer mpIdxRows.Close()
+	for mpIdxRows.Next() {
+		var name string
+		if err := mpIdxRows.Scan(&name); err != nil {
+			t.Fatalf("scan multi_period index name: %v", err)
+		}
+		if _, ok := wantMultiIndexes[name]; ok {
+			wantMultiIndexes[name] = true
+		}
+	}
+	for idx, seen := range wantMultiIndexes {
+		if !seen {
+			t.Errorf("expected index %q on multi_period_results", idx)
+		}
+	}
 }
