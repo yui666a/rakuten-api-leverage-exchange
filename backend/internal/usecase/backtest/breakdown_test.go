@@ -63,6 +63,18 @@ func TestParseSignalSource(t *testing.T) {
 			reason: "  trend follow: EMA12 > EMA26",
 			want:   "trend_follow",
 		},
+		{
+			// Guards against a future phrase like "trend follower xyz" silently
+			// hijacking the trend_follow bucket. Must hit the colon-terminated prefix.
+			name:   "similar word without colon is unknown",
+			reason: "trend follower xyz",
+			want:   "unknown",
+		},
+		{
+			name:   "contrarian-adjacent word without colon is unknown",
+			reason: "contrarian-ish pattern",
+			want:   "unknown",
+		},
 	}
 
 	for _, tc := range tests {

@@ -82,6 +82,7 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 		"hypothesis":        false,
 		"parent_result_id":  false,
 		"biweekly_win_rate": false,
+		"breakdown_json":    false, // PR-1: per-exit-reason / per-signal-source breakdowns
 	}
 	rows, err := db.Query("PRAGMA table_info(backtest_results)")
 	if err != nil {
