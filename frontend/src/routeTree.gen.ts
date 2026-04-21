@@ -9,12 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WalkForwardRouteImport } from './routes/walk-forward'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as HistoryRouteImport } from './routes/history'
 import { Route as BacktestMultiRouteImport } from './routes/backtest-multi'
 import { Route as BacktestRouteImport } from './routes/backtest'
 import { Route as IndexRouteImport } from './routes/index'
 
+const WalkForwardRoute = WalkForwardRouteImport.update({
+  id: '/walk-forward',
+  path: '/walk-forward',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -47,6 +53,7 @@ export interface FileRoutesByFullPath {
   '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
+  '/walk-forward': typeof WalkForwardRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByTo {
   '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
+  '/walk-forward': typeof WalkForwardRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,12 +70,25 @@ export interface FileRoutesById {
   '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
+  '/walk-forward': typeof WalkForwardRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/backtest' | '/backtest-multi' | '/history' | '/settings'
+  fullPaths:
+    | '/'
+    | '/backtest'
+    | '/backtest-multi'
+    | '/history'
+    | '/settings'
+    | '/walk-forward'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/backtest' | '/backtest-multi' | '/history' | '/settings'
+  to:
+    | '/'
+    | '/backtest'
+    | '/backtest-multi'
+    | '/history'
+    | '/settings'
+    | '/walk-forward'
   id:
     | '__root__'
     | '/'
@@ -75,6 +96,7 @@ export interface FileRouteTypes {
     | '/backtest-multi'
     | '/history'
     | '/settings'
+    | '/walk-forward'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -83,10 +105,18 @@ export interface RootRouteChildren {
   BacktestMultiRoute: typeof BacktestMultiRoute
   HistoryRoute: typeof HistoryRoute
   SettingsRoute: typeof SettingsRoute
+  WalkForwardRoute: typeof WalkForwardRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/walk-forward': {
+      id: '/walk-forward'
+      path: '/walk-forward'
+      fullPath: '/walk-forward'
+      preLoaderRoute: typeof WalkForwardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -131,6 +161,7 @@ const rootRouteChildren: RootRouteChildren = {
   BacktestMultiRoute: BacktestMultiRoute,
   HistoryRoute: HistoryRoute,
   SettingsRoute: SettingsRoute,
+  WalkForwardRoute: WalkForwardRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
