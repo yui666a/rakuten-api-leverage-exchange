@@ -1,0 +1,54 @@
+{
+  "name": "experiment_2026-04-21_healthy_v3",
+  "description": "v3 candidate rolled back from production.json on 2026-04-21 (PR-1). Identical to experiment_2026-04-21_LGb but retained under a stable name so docs/pdca/promotion_v3.md can reference a durable artifact while production.json is restored to HEAD (v1). Re-promote after PR-12 (ATR trailing) replaces the SL=20 unhealthy workaround. Validation: 1yr +9.616% DD 4.58% PF 1.274, 2yr +9.905% DD 7.90% PF 1.107, 3yr +25.013% DD 6.90% PF 1.184.",
+  "indicators": {
+    "sma_short": 20,
+    "sma_long": 50,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_multiplier": 2.0,
+    "atr_period": 14
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 5,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 62,
+      "rsi_sell_min": 38
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 20,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
