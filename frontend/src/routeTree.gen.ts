@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as HistoryRouteImport } from './routes/history'
+import { Route as BacktestMultiRouteImport } from './routes/backtest-multi'
 import { Route as BacktestRouteImport } from './routes/backtest'
 import { Route as IndexRouteImport } from './routes/index'
 
@@ -22,6 +23,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const HistoryRoute = HistoryRouteImport.update({
   id: '/history',
   path: '/history',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BacktestMultiRoute = BacktestMultiRouteImport.update({
+  id: '/backtest-multi',
+  path: '/backtest-multi',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BacktestRoute = BacktestRouteImport.update({
@@ -38,12 +44,14 @@ const IndexRoute = IndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backtest': typeof BacktestRoute
+  '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backtest': typeof BacktestRoute
+  '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
 }
@@ -51,20 +59,28 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backtest': typeof BacktestRoute
+  '/backtest-multi': typeof BacktestMultiRoute
   '/history': typeof HistoryRoute
   '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/backtest' | '/history' | '/settings'
+  fullPaths: '/' | '/backtest' | '/backtest-multi' | '/history' | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/backtest' | '/history' | '/settings'
-  id: '__root__' | '/' | '/backtest' | '/history' | '/settings'
+  to: '/' | '/backtest' | '/backtest-multi' | '/history' | '/settings'
+  id:
+    | '__root__'
+    | '/'
+    | '/backtest'
+    | '/backtest-multi'
+    | '/history'
+    | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BacktestRoute: typeof BacktestRoute
+  BacktestMultiRoute: typeof BacktestMultiRoute
   HistoryRoute: typeof HistoryRoute
   SettingsRoute: typeof SettingsRoute
 }
@@ -83,6 +99,13 @@ declare module '@tanstack/react-router' {
       path: '/history'
       fullPath: '/history'
       preLoaderRoute: typeof HistoryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/backtest-multi': {
+      id: '/backtest-multi'
+      path: '/backtest-multi'
+      fullPath: '/backtest-multi'
+      preLoaderRoute: typeof BacktestMultiRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/backtest': {
@@ -105,6 +128,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BacktestRoute: BacktestRoute,
+  BacktestMultiRoute: BacktestMultiRoute,
   HistoryRoute: HistoryRoute,
   SettingsRoute: SettingsRoute,
 }
