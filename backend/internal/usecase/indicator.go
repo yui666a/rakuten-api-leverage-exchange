@@ -69,6 +69,13 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 
 	result.ATR14 = toPtr(indicator.ATR(highs, lows, prices, 14))
 
+	// PR-6: ADX family. ADX/PlusDI/MinusDI return NaN until 2*period+1
+	// bars are available; toPtr collapses that to nil for the caller.
+	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, prices, 14)
+	result.ADX14 = toPtr(adxVal)
+	result.PlusDI14 = toPtr(plusDI)
+	result.MinusDI14 = toPtr(minusDI)
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, cd := range candles {

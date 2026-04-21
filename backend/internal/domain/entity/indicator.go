@@ -20,5 +20,13 @@ type IndicatorSet struct {
 	VolumeSMA20    *float64 `json:"volumeSma20"`   // 出来高20期間SMA
 	VolumeRatio    *float64 `json:"volumeRatio"`   // 最新出来高 / VolumeSMA20
 	RecentSqueeze  *bool    `json:"recentSqueeze"` // 直近5本以内に BBBandwidth < 0.02
-	Timestamp      int64    `json:"timestamp"`
+
+	// PR-6: ADX (Average Directional Index) family. ADX14 = 0-100 trend
+	// strength, PlusDI14 / MinusDI14 = Wilder-smoothed directional pressure.
+	// nil when insufficient data (need 2*period+1 bars).
+	ADX14     *float64 `json:"adx14"`
+	PlusDI14  *float64 `json:"plusDi14"`
+	MinusDI14 *float64 `json:"minusDi14"`
+
+	Timestamp int64 `json:"timestamp"`
 }

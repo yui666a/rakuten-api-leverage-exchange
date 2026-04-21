@@ -62,17 +62,20 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 		RSISellMin:         profile.SignalRules.TrendFollow.RSISellMin,
 		RequireMACDConfirm: profile.SignalRules.TrendFollow.RequireMACDConfirm,
 		RequireEMACross:    profile.SignalRules.TrendFollow.RequireEMACross,
+		TrendFollowADXMin:  profile.SignalRules.TrendFollow.ADXMin, // PR-6
 
 		// Contrarian
 		EnableContrarian:   profile.SignalRules.Contrarian.Enabled,
 		ContrarianRSIEntry: profile.SignalRules.Contrarian.RSIEntry,
 		ContrarianRSIExit:  profile.SignalRules.Contrarian.RSIExit,
 		MACDHistogramLimit: profile.SignalRules.Contrarian.MACDHistogramLimit,
+		ContrarianADXMax:   profile.SignalRules.Contrarian.ADXMax, // PR-6
 
 		// Breakout
 		EnableBreakout:             profile.SignalRules.Breakout.Enabled,
 		BreakoutVolumeRatio:        profile.SignalRules.Breakout.VolumeRatioMin,
 		BreakoutRequireMACDConfirm: profile.SignalRules.Breakout.RequireMACDConfirm,
+		BreakoutADXMin:             profile.SignalRules.Breakout.ADXMin, // PR-6
 
 		// HTF filter
 		HTFEnabled:           profile.HTFFilter.Enabled,

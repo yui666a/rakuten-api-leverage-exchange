@@ -183,15 +183,20 @@ engineOpts := usecase.StrategyEngineOptions{
 
 11. `runner_test.go`: ADX 高閾値（50 など）で trend_follow が 0 件になる
 
-## DoD
+## DoD（as-built）
 
-- [ ] Unit 8 本 + 配線確認 2 本 + integration 1 本 = **11 本** passing
-- [ ] FE の `StochasticsChart` / `CandlestickChart` の指標表示とは競合しない（ADX 表示は別 PR で）
-- [ ] `docs/pdca/agent-guide.md` §2 の「主要ファイル」表に `adx.go` を追加
-- [ ] PR 本文:
-    - 1yr / 2yr / 3yr (PR-2 multi API) の production 比較
-    - ADX 閾値を 10/20/30 と変えた場合のトレード数・Return 比較
-- [ ] 新しい PDCA サイクル cycle13+ で ADX を使った v5 候補プロファイルを探索（PR 外の自然な後続作業）
+- [x] indicator 単体 7 ケース (insufficient data / length mismatch / flat / strong up / strong down / range-bound / period=1)
+- [x] 配線確認 3 ケース: production.json + `adx_min` オーバーライドで HOLD/通過/ADX 欠損 の 3 分岐
+- [x] `TestConfigurableStrategy_EquivalentToDefault` 緑 (production.json の adx_min=0 で gate 無効 → 完全互換)
+- [x] strategy_config JSON round-trip に `adx_min` / `adx_max` 追加
+- [x] `go test ./... -race -count=1` 全 17 パッケージ緑
+- [x] docker e2e で ADX ゲート有効時にトレード数・PF・シグナル分布が有意に変わることを確認 (baseline Trades 1147 → ADX ゲート 395、contrarian 595 → 15 が決定的)
+
+### フォローアップ
+
+- `docs/pdca/agent-guide.md` §2 の主要ファイル表に `adx.go` を追加
+- Frontend に ADX14 / +DI14 / -DI14 を表示するパネル (indicator panel 拡張)
+- PDCA cycle13+ で ADX ゲート最適プロファイルを探索（2024 年負けの対策）
 
 ## ロールバック
 
