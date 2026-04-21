@@ -144,6 +144,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			v1.GET("/backtest/multi-results", backtestHandler.ListMultiResults)
 			v1.GET("/backtest/multi-results/:id", backtestHandler.GetMultiResult)
 		}
+		// PR-13: Walk-forward optimisation. MVP is compute-only (response
+		// only, no DB). GET / list / CLI come in a follow-up PR.
+		v1.POST("/backtest/walk-forward", backtestHandler.RunWalkForward)
 	}
 
 	return r

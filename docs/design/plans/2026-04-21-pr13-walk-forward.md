@@ -192,9 +192,23 @@ go run ./cmd/backtest walk-forward \
 6. 並列性: 4 並列で所要時間が直列の 1/2 〜 1/3 程度
 7. DB 往復: Save → Get で結果が一致
 
-## DoD
+## Scope 変更（as-built）
 
-- [ ] Unit 4 本 + Integration 3 本 = **7 本** passing
+MVP として PR-13 は **pure core + API ハンドラのみ** 実装する。DB 永続化と Frontend / CLI は別 follow-up PR に分離する:
+
+- 本 PR: `ComputeWindows` / `ExpandGrid` / `ApplyOverrides` / `SelectByObjective` / `WalkForwardRunner` + `POST /backtest/walk-forward`
+- 別 PR: `walk_forward_results` テーブル、`GET /backtest/walk-forward/:id`、CLI、Frontend
+
+理由: **一次目的は「PDCA で WFO を回せる状態を作る」**。個別の BacktestResult はすでに通常の backtest 保存経路に乗る（per-window IS/OOS 実行が BacktestRunner を呼ぶ）ので、まずはレスポンスで結果を取れる状態で MVP を出し、使いながら envelope 永続化の形を固める方が堅実。
+
+## DoD（as-built、scope 変更反映）
+
+- [x] Pure function 14 ケース passing: `ComputeWindows` (3) / `ExpandGrid` (5) / `ApplyOverrides` (3) / `SelectByObjective` (3)
+- [x] `WalkForwardRunner` 4 ケース passing: full IS+OOS orchestration / reject empty windows / reject empty grid / propagate run errors
+- [x] `go test ./... -race -count=1` 全 17 パッケージ緑
+- [ ] API handler `POST /backtest/walk-forward` — 本 PR で追加
+- [ ] docker e2e で小スケール WFO が完走
+- [ ] DB 永続化 / GET / CLI / Frontend — **別 PR**
 - [ ] CLI E2E で WFO ジョブが完走
 - [ ] Frontend ページ実装 + `pnpm test` pass
 - [ ] PR 本文: **現 production の 3 年 WFO 結果** を貼付（窓別 OOS + aggregate）
