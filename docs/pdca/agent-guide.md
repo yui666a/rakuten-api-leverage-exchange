@@ -372,7 +372,7 @@ A. 多くは期間不足（< 14 日）か、トレード数不足でカバレッ
 - PR-1: Exit 理由別 / シグナル別サマリ
 - PR-2: 複数期間一括バックテスト API + 頑健性スコア
 - PR-3: Drawdown 詳細 / Time-in-market / Expectancy
-- PR-12: ATR Trailing Stop（未配線の `stop_loss_atr_multiplier` 実装。現 prod の SL=20% 不健全を解消）
+- PR-12: ATR Trailing Stop（バックテスト経路で未配線の `stop_loss_atr_multiplier` を実装。現 prod の SL=20% 不健全を解消）
 - PR-6: ADX (+DI/-DI) — 2024 年負けの最有力対策
 - PR-13: Walk-forward 最適化 — 過学習の根本対策
 

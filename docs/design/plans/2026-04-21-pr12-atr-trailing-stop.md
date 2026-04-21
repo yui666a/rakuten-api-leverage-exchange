@@ -158,7 +158,7 @@ func (rm *RiskManager) UpdateTrailing(posID int64, bar entity.Candle, atr float6
 
 - [ ] Unit 4 本 + 配線確認 2 本 + integration 1 本 = **7 本** passing
 - [ ] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る
-- [ ] `docs/pdca/agent-guide.md` §8 の「未配線フィールド」表から `stop_loss_atr_multiplier` を削除
+- [ ] `docs/pdca/agent-guide.md` §8 の「バックテスト経路で無効 / 効果限定のフィールド」表から `stop_loss_atr_multiplier` を削除
 - [ ] PR 本文: v3 production (SL=20%) と、SL=5% + trailing=2.0 × ATR の profile で 1yr/2yr/3yr 比較（PR-2 の multi API 使用）
 - [ ] v4 候補 profile（健全化版）を 1 つ作り、PDCA サイクル記録 `docs/pdca/YYYY-MM-DD_cycleNN.md` を追加
 
