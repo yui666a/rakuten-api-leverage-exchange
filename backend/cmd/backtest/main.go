@@ -57,6 +57,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "backtest download failed: %v\n", err)
 			os.Exit(1)
 		}
+	case "walk-forward":
+		if err := walkForwardCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "backtest walk-forward failed: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -69,6 +74,7 @@ func usage() {
 	fmt.Println("  go run ./cmd/backtest optimize --data <primary.csv> --param \"stop_loss_percent=1:10:1\" [flags]")
 	fmt.Println("  go run ./cmd/backtest refine --data <primary.csv> --param \"stop_loss_percent=1:10:1\" [--top 5] [--step-div 4] [flags]")
 	fmt.Println("  go run ./cmd/backtest download ...")
+	fmt.Println("  go run ./cmd/backtest walk-forward --data <primary.csv> --from <YYYY-MM-DD> --to <YYYY-MM-DD> --profile <name> [--grid path=v1,v2,v3] [--grid-file path.json]")
 }
 
 // runFlags is the parsed set of CLI flags for the `run` subcommand. Kept in

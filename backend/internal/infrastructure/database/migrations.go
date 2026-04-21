@@ -312,5 +312,47 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	// PR-13 follow-up (#120): walk-forward envelope. Mirrors the
+	// multi_period_results layout — per-window BacktestResult rows are saved
+	// independently into backtest_results; this table only stores the
+	// envelope (request, aggregate, per-window metadata + ID references).
+	//   - request_json:       the original POST body so a window can be
+	//                         re-run deterministically from the saved row.
+	//   - result_json:        full WalkForwardResult minus the embedded
+	//                         BacktestResult bodies (those live in
+	//                         backtest_results and are rehydrated on read).
+	//   - aggregate_oos_json: denormalised copy of result_json.aggregateOOS
+	//                         so list views can rank by RobustnessScore
+	//                         without parsing the full result_json.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS walk_forward_results (
+		id                 TEXT PRIMARY KEY,
+		created_at         INTEGER NOT NULL,
+		base_profile       TEXT NOT NULL,
+		pdca_cycle_id      TEXT NOT NULL DEFAULT '',
+		hypothesis         TEXT NOT NULL DEFAULT '',
+		objective          TEXT NOT NULL DEFAULT 'return',
+		parent_result_id   TEXT DEFAULT NULL,
+		request_json       TEXT NOT NULL,
+		result_json        TEXT NOT NULL,
+		aggregate_oos_json TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create walk_forward_results: %w", err)
+	}
+	walkForwardIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_wf_created
+			ON walk_forward_results(created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_wf_profile
+			ON walk_forward_results(base_profile)
+			WHERE base_profile <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_wf_pdca
+			ON walk_forward_results(pdca_cycle_id)
+			WHERE pdca_cycle_id <> ''`,
+	}
+	for _, stmt := range walkForwardIndexes {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create walk_forward index: %w", err)
+		}
+	}
+
 	return nil
 }

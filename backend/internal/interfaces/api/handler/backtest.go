@@ -32,6 +32,12 @@ type BacktestHandler struct {
 	// This keeps legacy construction paths working without forcing all
 	// callers to wire the new repo at once.
 	multiRepo repository.MultiPeriodResultRepository
+
+	// wfRepo is optional; when nil, walk-forward runs execute but are not
+	// persisted and the GET endpoints return 503. PR-13 shipped compute-
+	// only; wiring this repo re-enables /backtest/walk-forward/:id and
+	// GET listing without touching the happy path.
+	wfRepo repository.WalkForwardResultRepository
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -56,6 +62,15 @@ func WithProfilesBaseDir(dir string) BacktestHandlerOption {
 func WithMultiPeriodRepo(repo repository.MultiPeriodResultRepository) BacktestHandlerOption {
 	return func(h *BacktestHandler) {
 		h.multiRepo = repo
+	}
+}
+
+// WithWalkForwardRepo wires the WalkForwardResultRepository so POST
+// /backtest/walk-forward persists the envelope and the GET counterparts
+// become available. Nil keeps the compute-only behaviour of PR-13.
+func WithWalkForwardRepo(repo repository.WalkForwardResultRepository) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.wfRepo = repo
 	}
 }
 

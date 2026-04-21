@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
@@ -231,7 +234,131 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// PR-13 follow-up (#120): persist the envelope so GET endpoints can
+	// serve saved runs. Save failures do not fail the request — the caller
+	// already got a valid result envelope back — but are logged via the
+	// response body so the operator notices.
+	if h.wfRepo != nil && out != nil {
+		resultJSON, mErr := json.Marshal(out)
+		reqJSON, rErr := json.Marshal(req)
+		aggJSON, aErr := json.Marshal(out.AggregateOOS)
+		if mErr == nil && rErr == nil && aErr == nil {
+			rec := entity.WalkForwardPersisted{
+				ID:               out.ID,
+				CreatedAt:        out.CreatedAt,
+				BaseProfile:      out.BaseProfile,
+				Objective:        out.Objective,
+				PDCACycleID:      out.PDCACycleID,
+				Hypothesis:       out.Hypothesis,
+				ParentResultID:   out.ParentResultID,
+				RequestJSON:      string(reqJSON),
+				ResultJSON:       string(resultJSON),
+				AggregateOOSJSON: string(aggJSON),
+			}
+			if err := h.wfRepo.Save(c.Request.Context(), rec); err != nil {
+				c.Header("X-WalkForward-Persist-Error", err.Error())
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, out)
+}
+
+// GetWalkForward handles GET /backtest/walk-forward/:id. Returns 404 when
+// the row is absent, 503 when the repo is not wired.
+func (h *BacktestHandler) GetWalkForward(c *gin.Context) {
+	if h.wfRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "walk-forward repository not configured"})
+		return
+	}
+	id := c.Param("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id is required"})
+		return
+	}
+	rec, err := h.wfRepo.FindByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if rec == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "walk-forward result not found"})
+		return
+	}
+	c.JSON(http.StatusOK, walkForwardPersistedToResponse(*rec))
+}
+
+// ListWalkForward handles GET /backtest/walk-forward?baseProfile=X&pdcaCycleId=Y
+// with optional limit/offset. Returns envelope-only rows (no per-window
+// bodies) — callers call GetWalkForward for the full payload.
+func (h *BacktestHandler) ListWalkForward(c *gin.Context) {
+	if h.wfRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "walk-forward repository not configured"})
+		return
+	}
+	filter := repository.WalkForwardResultFilter{
+		BaseProfile: c.Query("baseProfile"),
+		PDCACycleID: c.Query("pdcaCycleId"),
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			filter.Offset = n
+		}
+	}
+	list, err := h.wfRepo.List(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]walkForwardResponse, 0, len(list))
+	for _, rec := range list {
+		out = append(out, walkForwardPersistedToResponse(rec))
+	}
+	c.JSON(http.StatusOK, gin.H{"items": out, "total": len(out)})
+}
+
+// walkForwardResponse is the JSON shape surfaced by GET endpoints. The
+// *_json columns are exposed as already-parsed objects so clients do not
+// need to re-parse strings; raw JSON string form is kept only in the DB.
+type walkForwardResponse struct {
+	ID             string          `json:"id"`
+	CreatedAt      int64           `json:"createdAt"`
+	BaseProfile    string          `json:"baseProfile"`
+	Objective      string          `json:"objective"`
+	PDCACycleID    string          `json:"pdcaCycleId,omitempty"`
+	Hypothesis     string          `json:"hypothesis,omitempty"`
+	ParentResultID *string         `json:"parentResultId,omitempty"`
+	Request        json.RawMessage `json:"request,omitempty"`
+	Result         json.RawMessage `json:"result,omitempty"`
+	AggregateOOS   json.RawMessage `json:"aggregateOOS,omitempty"`
+}
+
+func walkForwardPersistedToResponse(rec entity.WalkForwardPersisted) walkForwardResponse {
+	resp := walkForwardResponse{
+		ID:             rec.ID,
+		CreatedAt:      rec.CreatedAt,
+		BaseProfile:    rec.BaseProfile,
+		Objective:      rec.Objective,
+		PDCACycleID:    rec.PDCACycleID,
+		Hypothesis:     rec.Hypothesis,
+		ParentResultID: rec.ParentResultID,
+	}
+	if rec.RequestJSON != "" {
+		resp.Request = json.RawMessage(rec.RequestJSON)
+	}
+	if rec.ResultJSON != "" {
+		resp.Result = json.RawMessage(rec.ResultJSON)
+	}
+	if rec.AggregateOOSJSON != "" {
+		resp.AggregateOOS = json.RawMessage(rec.AggregateOOSJSON)
+	}
+	return resp
 }
 
 // nonZeroFloat returns primary when it is strictly positive, otherwise the
