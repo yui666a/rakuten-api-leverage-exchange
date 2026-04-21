@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
+import { ADXChart } from './ADXChart'
 import { MACDChart } from './MACDChart'
 import { RSIChart } from './RSIChart'
 import { StochasticsChart } from './StochasticsChart'
@@ -839,6 +840,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
           <MACDChart candles={candles} />
           <RSIChart candles={candles} />
           <StochasticsChart candles={candles} />
+          <ADXChart candles={candles} />
         </>
       )}
     </div>
