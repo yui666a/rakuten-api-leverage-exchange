@@ -65,11 +65,13 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 		TrendFollowADXMin:  profile.SignalRules.TrendFollow.ADXMin, // PR-6
 
 		// Contrarian
-		EnableContrarian:   profile.SignalRules.Contrarian.Enabled,
-		ContrarianRSIEntry: profile.SignalRules.Contrarian.RSIEntry,
-		ContrarianRSIExit:  profile.SignalRules.Contrarian.RSIExit,
-		MACDHistogramLimit: profile.SignalRules.Contrarian.MACDHistogramLimit,
-		ContrarianADXMax:   profile.SignalRules.Contrarian.ADXMax, // PR-6
+		EnableContrarian:        profile.SignalRules.Contrarian.Enabled,
+		ContrarianRSIEntry:      profile.SignalRules.Contrarian.RSIEntry,
+		ContrarianRSIExit:       profile.SignalRules.Contrarian.RSIExit,
+		MACDHistogramLimit:      profile.SignalRules.Contrarian.MACDHistogramLimit,
+		ContrarianADXMax:        profile.SignalRules.Contrarian.ADXMax, // PR-6
+		ContrarianStochEntryMax: profile.SignalRules.Contrarian.StochEntryMax, // PR-7
+		ContrarianStochExitMin:  profile.SignalRules.Contrarian.StochExitMin,  // PR-7
 
 		// Breakout
 		EnableBreakout:             profile.SignalRules.Breakout.Enabled,

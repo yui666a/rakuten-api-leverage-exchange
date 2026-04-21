@@ -72,6 +72,15 @@ type StrategyEngineOptions struct {
 	ContrarianADXMax  float64
 	BreakoutADXMin    float64
 
+	// PR-7: Stochastics gates on contrarian signals. 0 = gate disabled.
+	//   - ContrarianStochEntryMax: contrarian BUY requires %K <= this
+	//     (oversold). Typical: 20.
+	//   - ContrarianStochExitMin: contrarian SELL requires %K >= this
+	//     (overbought). Typical: 80.
+	// Missing %K is treated as a failed gate, same philosophy as ADX.
+	ContrarianStochEntryMax float64
+	ContrarianStochExitMin  float64
+
 	// defaulted tracks whether applyDefaults has already been called so we
 	// don't flip booleans to true twice (e.g. on a caller that explicitly
 	// wants them false).
@@ -314,7 +323,21 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				return adxBlock("contrarian: ADX above threshold"), nil
 			}
 		}
-		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix), nil
+		sig := e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix)
+		// PR-7: Stochastics gates apply only when a direction was emitted.
+		// BUY requires %K <= StochEntryMax (truly oversold); SELL requires
+		// %K >= StochExitMin (truly overbought). Missing %K fails the gate.
+		if sig.Action == entity.SignalActionBuy && e.options.ContrarianStochEntryMax > 0 {
+			if indicators.StochK14_3 == nil || *indicators.StochK14_3 > e.options.ContrarianStochEntryMax {
+				return adxBlock("contrarian: Stoch %K not oversold enough"), nil
+			}
+		}
+		if sig.Action == entity.SignalActionSell && e.options.ContrarianStochExitMin > 0 {
+			if indicators.StochK14_3 == nil || *indicators.StochK14_3 < e.options.ContrarianStochExitMin {
+				return adxBlock("contrarian: Stoch %K not overbought enough"), nil
+			}
+		}
+		return sig, nil
 	case entity.MarketStanceBreakout:
 		if !e.options.EnableBreakout {
 			return &entity.Signal{

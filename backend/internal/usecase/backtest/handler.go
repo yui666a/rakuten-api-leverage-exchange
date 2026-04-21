@@ -577,6 +577,13 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 	result.PlusDI14 = floatToPtr(plusDI)
 	result.MinusDI14 = floatToPtr(minusDI)
 
+	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Mirror the
+	// live-pipeline calculator.
+	stochK, stochD := indicator.Stochastics(highs, lows, closes, 14, 3, 3)
+	result.StochK14_3 = floatToPtr(stochK)
+	result.StochD14_3 = floatToPtr(stochD)
+	result.StochRSI14 = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, c := range candles {

@@ -76,6 +76,13 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.PlusDI14 = toPtr(plusDI)
 	result.MinusDI14 = toPtr(minusDI)
 
+	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Both return
+	// NaN -> nil pointer when the warmup window is not filled yet.
+	stochK, stochD := indicator.Stochastics(highs, lows, prices, 14, 3, 3)
+	result.StochK14_3 = toPtr(stochK)
+	result.StochD14_3 = toPtr(stochD)
+	result.StochRSI14 = toPtr(indicator.StochasticRSI(prices, 14, 14))
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, cd := range candles {
