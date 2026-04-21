@@ -303,6 +303,129 @@ func TestResultRepository_BreakdownRoundTrip(t *testing.T) {
 	}
 }
 
+// TestResultRepository_DrawdownDetailRoundTrip verifies that the PR-3
+// fields (DrawdownPeriods, UnrecoveredDrawdown, TimeInMarketRatio,
+// LongestFlatStreakBars, ExpectancyPerTrade, AvgWinJPY, AvgLossJPY,
+// DrawdownThreshold) survive the persistence boundary.
+//
+// The resultColumns list is 35 entries long and INSERT bindings / SELECT
+// scan ordering are maintained by hand; a round-trip test for every new
+// field family is the only reliable guard against a silent column-order
+// drift.
+func TestResultRepository_DrawdownDetailRoundTrip(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	result := entity.BacktestResult{
+		ID:        "bt-pr3-1",
+		CreatedAt: time.Now().Unix(),
+		Config: entity.BacktestConfig{
+			Symbol:          "LTC_JPY",
+			SymbolID:        10,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   1000,
+			ToTimestamp:     2000,
+		},
+		Summary: entity.BacktestSummary{
+			InitialBalance: 100000,
+			FinalBalance:   110000,
+			DrawdownPeriods: []entity.DrawdownPeriod{
+				{FromTimestamp: 100, ToTimestamp: 200, RecoveredAt: 300, Depth: 0.05, DepthBalance: 95000, DurationBars: 5, RecoveryBars: 10},
+				{FromTimestamp: 400, ToTimestamp: 500, RecoveredAt: 600, Depth: 0.03, DepthBalance: 97000, DurationBars: 3, RecoveryBars: 7},
+			},
+			DrawdownThreshold: 0.02,
+			UnrecoveredDrawdown: &entity.DrawdownPeriod{
+				FromTimestamp: 700, ToTimestamp: 900,
+				Depth: 0.08, DepthBalance: 92000, DurationBars: 20, RecoveryBars: -1,
+			},
+			TimeInMarketRatio:     0.72,
+			LongestFlatStreakBars: 15,
+			ExpectancyPerTrade:    25.5,
+			AvgWinJPY:             80,
+			AvgLossJPY:            40,
+		},
+	}
+	if err := repo.Save(ctx, result); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, result.ID)
+	if err != nil || found == nil {
+		t.Fatalf("find: err=%v found=%v", err, found)
+	}
+	if len(found.Summary.DrawdownPeriods) != 2 {
+		t.Fatalf("DrawdownPeriods len=%d, want 2", len(found.Summary.DrawdownPeriods))
+	}
+	if found.Summary.DrawdownPeriods[0].Depth != 0.05 ||
+		found.Summary.DrawdownPeriods[0].RecoveryBars != 10 ||
+		found.Summary.DrawdownPeriods[0].DurationBars != 5 {
+		t.Fatalf("DrawdownPeriods[0] round-trip failed: %+v", found.Summary.DrawdownPeriods[0])
+	}
+	if found.Summary.DrawdownPeriods[1].Depth != 0.03 ||
+		found.Summary.DrawdownPeriods[1].RecoveryBars != 7 ||
+		found.Summary.DrawdownPeriods[1].DurationBars != 3 {
+		t.Fatalf("DrawdownPeriods[1] round-trip failed: %+v", found.Summary.DrawdownPeriods[1])
+	}
+	if found.Summary.UnrecoveredDrawdown == nil {
+		t.Fatalf("UnrecoveredDrawdown missing")
+	}
+	if found.Summary.UnrecoveredDrawdown.RecoveryBars != -1 ||
+		found.Summary.UnrecoveredDrawdown.Depth != 0.08 {
+		t.Fatalf("UnrecoveredDrawdown round-trip failed: %+v", found.Summary.UnrecoveredDrawdown)
+	}
+	if found.Summary.DrawdownThreshold != 0.02 {
+		t.Fatalf("DrawdownThreshold = %v, want 0.02", found.Summary.DrawdownThreshold)
+	}
+	if found.Summary.TimeInMarketRatio != 0.72 {
+		t.Fatalf("TimeInMarketRatio = %v, want 0.72", found.Summary.TimeInMarketRatio)
+	}
+	if found.Summary.LongestFlatStreakBars != 15 {
+		t.Fatalf("LongestFlatStreakBars = %d, want 15", found.Summary.LongestFlatStreakBars)
+	}
+	if found.Summary.ExpectancyPerTrade != 25.5 ||
+		found.Summary.AvgWinJPY != 80 ||
+		found.Summary.AvgLossJPY != 40 {
+		t.Fatalf("expectancy round-trip failed: E=%v AvgWin=%v AvgLoss=%v",
+			found.Summary.ExpectancyPerTrade, found.Summary.AvgWinJPY, found.Summary.AvgLossJPY)
+	}
+
+	// List path should also honour the new columns.
+	list, err := repo.List(ctx, repository.BacktestResultFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var listed *entity.BacktestResult
+	for i := range list {
+		if list[i].ID == result.ID {
+			listed = &list[i]
+			break
+		}
+	}
+	if listed == nil {
+		t.Fatalf("result not returned by List")
+	}
+	// List must hit the same scan path as FindByID, so every PR-3 field we
+	// care about round-tripping must come through it too.
+	if listed.Summary.ExpectancyPerTrade != 25.5 {
+		t.Fatalf("List failed to populate ExpectancyPerTrade: %v", listed.Summary.ExpectancyPerTrade)
+	}
+	if listed.Summary.DrawdownThreshold != 0.02 {
+		t.Fatalf("List DrawdownThreshold = %v, want 0.02", listed.Summary.DrawdownThreshold)
+	}
+	if listed.Summary.TimeInMarketRatio != 0.72 {
+		t.Fatalf("List TimeInMarketRatio = %v, want 0.72", listed.Summary.TimeInMarketRatio)
+	}
+	if listed.Summary.LongestFlatStreakBars != 15 {
+		t.Fatalf("List LongestFlatStreakBars = %d, want 15", listed.Summary.LongestFlatStreakBars)
+	}
+	if listed.Summary.UnrecoveredDrawdown == nil {
+		t.Fatalf("List dropped UnrecoveredDrawdown")
+	}
+	if listed.Summary.UnrecoveredDrawdown.RecoveryBars != -1 {
+		t.Fatalf("List UnrecoveredDrawdown.RecoveryBars = %d, want -1", listed.Summary.UnrecoveredDrawdown.RecoveryBars)
+	}
+}
+
 // TestResultRepository_LegacyRowWithoutBreakdown confirms backward
 // compatibility: rows persisted before PR-1 (breakdown_json = NULL) must
 // still load successfully with empty breakdown maps on the Summary.

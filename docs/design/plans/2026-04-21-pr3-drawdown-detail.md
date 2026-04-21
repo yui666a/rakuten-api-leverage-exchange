@@ -157,13 +157,18 @@ Expectancy = WR * AvgWin - (1 - WR) * AvgLoss  -- JPY/trade
 
 1. `runner_test.go`: 既存シナリオで `summary.DrawdownPeriods` に 1 件以上、`TimeInMarketRatio` が 0-1 の範囲、`ExpectancyPerTrade` が finite
 
-## DoD
+## DoD（as-built）
 
-- [ ] Unit 5 本 passing
-- [ ] Integration 1 本 passing
-- [ ] 既存テストすべて通る（挙動不変）
-- [ ] Frontend に 3 種類のビュー追加
-- [ ] PR 本文: v3 production の DD 履歴 / TimeInMarket / Expectancy を貼付
+- [x] Unit 12 本 passing: DetectDrawdowns 4 ケース (2 episodes, unrecovered, below threshold, empty) + ComputeTimeInMarket 4 ケース (full, no trades, always-in-market, empty bars) + ComputeExpectancy 4 ケース (mixed WR, no trades, all wins, all losses)
+- [x] Integration 2 本: reporter.BuildSummary に新フィールドが詰まる + repository round-trip (drawdown periods + unrecovered + time-in-market + expectancy)
+- [x] 既存テスト全 17 パッケージ緑
+- [x] migrations_test に PR-3 カラム 7 本の assertion を追加
+- [x] docker e2e: 6mo production で `/backtest/run` を叩き、unrecoveredDrawdown/timeInMarketRatio/expectancyPerTrade が返ることを確認
+
+### フォローアップ（別 PR）
+
+- Frontend に DD 履歴テーブル / TimeInMarket カード / Expectancy カードを追加
+- PR 本文: 直近 6 ヶ月 production の数値を貼付（下記 #XYZ PR 本文に実測値）
 
 ## ロールバック
 

@@ -77,12 +77,19 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 
 	// 新カラムの存在を PRAGMA table_info で確認。
 	wantColumns := map[string]bool{
-		"profile_name":      false,
-		"pdca_cycle_id":     false,
-		"hypothesis":        false,
-		"parent_result_id":  false,
-		"biweekly_win_rate": false,
-		"breakdown_json":    false, // PR-1: per-exit-reason / per-signal-source breakdowns
+		"profile_name":             false,
+		"pdca_cycle_id":            false,
+		"hypothesis":               false,
+		"parent_result_id":         false,
+		"biweekly_win_rate":        false,
+		"breakdown_json":           false, // PR-1
+		"drawdown_periods_json":    false, // PR-3
+		"drawdown_threshold":       false, // PR-3
+		"time_in_market_ratio":     false, // PR-3
+		"longest_flat_streak_bars": false, // PR-3
+		"expectancy_per_trade":     false, // PR-3
+		"avg_win_jpy":              false, // PR-3
+		"avg_loss_jpy":             false, // PR-3
 	}
 	rows, err := db.Query("PRAGMA table_info(backtest_results)")
 	if err != nil {

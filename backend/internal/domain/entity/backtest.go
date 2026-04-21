@@ -48,6 +48,44 @@ type BacktestSummary struct {
 	// ("trend_follow" / "contrarian" / "breakout" / "unknown"). Empty map for
 	// legacy rows persisted before PR-1.
 	BySignalSource map[string]SummaryBreakdown `json:"bySignalSource,omitempty"`
+
+	// ---- PR-3: drawdown detail / time-in-market / expectancy ----
+
+	// DrawdownPeriods is the list of all drawdowns whose depth reached at
+	// least DrawdownThreshold, in chronological order. Empty for legacy rows.
+	DrawdownPeriods []DrawdownPeriod `json:"drawdownPeriods,omitempty"`
+	// DrawdownThreshold is the minimum depth (0-1) a drawdown must reach to
+	// be recorded in DrawdownPeriods. Fixed at 0.02 (2%) for now.
+	DrawdownThreshold float64 `json:"drawdownThreshold,omitempty"`
+	// UnrecoveredDrawdown is set when the run ends while still in a drawdown
+	// that has not recovered to the prior peak. nil otherwise.
+	UnrecoveredDrawdown *DrawdownPeriod `json:"unrecoveredDrawdown,omitempty"`
+
+	// TimeInMarketRatio is (bars with an open position at bar close) /
+	// (total primary-interval bars). 0 = fully flat, 1 = always in market.
+	TimeInMarketRatio float64 `json:"timeInMarketRatio,omitempty"`
+	// LongestFlatStreakBars is the longest consecutive run of bars with no
+	// open position.
+	LongestFlatStreakBars int `json:"longestFlatStreakBars,omitempty"`
+
+	// ExpectancyPerTrade = WR * AvgWinJPY - (1-WR) * AvgLossJPY.
+	// Positive = the strategy is expected to earn JPY per trade on average.
+	ExpectancyPerTrade float64 `json:"expectancyPerTrade,omitempty"`
+	AvgWinJPY          float64 `json:"avgWinJpy,omitempty"`
+	AvgLossJPY         float64 `json:"avgLossJpy,omitempty"` // absolute value
+}
+
+// DrawdownPeriod captures one peak-to-recovery drawdown episode. For an
+// unrecovered drawdown at the end of a run, RecoveredAt is 0 and
+// RecoveryBars is -1 so consumers can distinguish recovered from pending.
+type DrawdownPeriod struct {
+	FromTimestamp int64   `json:"fromTimestamp"` // prior peak's timestamp
+	ToTimestamp   int64   `json:"toTimestamp"`   // trough timestamp
+	RecoveredAt   int64   `json:"recoveredAt"`   // 0 if still unrecovered
+	Depth         float64 `json:"depth"`         // 0-1
+	DepthBalance  float64 `json:"depthBalance"`  // equity at trough
+	DurationBars  int     `json:"durationBars"`  // peak -> trough
+	RecoveryBars  int     `json:"recoveryBars"`  // trough -> recovered; -1 if unrecovered
 }
 
 // SummaryBreakdown holds aggregated metrics for a subset of trades grouped by

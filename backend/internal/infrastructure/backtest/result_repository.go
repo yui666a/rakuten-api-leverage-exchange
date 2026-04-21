@@ -23,11 +23,13 @@ const resultColumns = `id, created_at, symbol, symbol_id, primary_interval, high
 	win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
 	sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost,
 	profile_name, pdca_cycle_id, hypothesis, parent_result_id, biweekly_win_rate,
-	breakdown_json`
+	breakdown_json,
+	drawdown_periods_json, drawdown_threshold, time_in_market_ratio, longest_flat_streak_bars,
+	expectancy_per_trade, avg_win_jpy, avg_loss_jpy`
 
-// resultColumnPlaceholders は resultColumns と同じ個数 (28) の INSERT プレースホルダ。
+// resultColumnPlaceholders は resultColumns と同じ個数 (35) の INSERT プレースホルダ。
 // resultColumns のカラム数を変更した場合はここも必ず同期させること。
-const resultColumnPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+const resultColumnPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 
 type ResultRepository struct {
 	db *sql.DB
@@ -80,6 +82,21 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		breakdownBlob = sql.NullString{String: string(b), Valid: true}
 	}
 
+	// PR-3: DrawdownPeriods + UnrecoveredDrawdown を 1 本の JSON にまとめる。
+	// レガシー行 (両方ゼロ/nil) は NULL 保存で後方互換。
+	ddBlob := sql.NullString{}
+	if len(result.Summary.DrawdownPeriods) > 0 || result.Summary.UnrecoveredDrawdown != nil {
+		payload := drawdownPayload{
+			Periods:     result.Summary.DrawdownPeriods,
+			Unrecovered: result.Summary.UnrecoveredDrawdown,
+		}
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal drawdowns: %w", err)
+		}
+		ddBlob = sql.NullString{String: string(b), Valid: true}
+	}
+
 	_, err = tx.ExecContext(ctx, `INSERT INTO backtest_results (`+resultColumns+`) VALUES (`+resultColumnPlaceholders+`)`,
 		result.ID,
 		result.CreatedAt,
@@ -109,6 +126,13 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		parentID,
 		result.Summary.BiweeklyWinRate,
 		breakdownBlob,
+		ddBlob,
+		result.Summary.DrawdownThreshold,
+		result.Summary.TimeInMarketRatio,
+		result.Summary.LongestFlatStreakBars,
+		result.Summary.ExpectancyPerTrade,
+		result.Summary.AvgWinJPY,
+		result.Summary.AvgLossJPY,
 	)
 	if err != nil {
 		return fmt.Errorf("insert backtest result: %w", err)
@@ -305,9 +329,17 @@ type breakdownPayload struct {
 	BySignalSource map[string]entity.SummaryBreakdown `json:"bySignalSource,omitempty"`
 }
 
+// drawdownPayload は drawdown_periods_json カラムの中身。回復済み episodes と
+// 期間末まで未回復の 1 件を 1 本の JSON に詰める。
+type drawdownPayload struct {
+	Periods     []entity.DrawdownPeriod `json:"periods,omitempty"`
+	Unrecovered *entity.DrawdownPeriod  `json:"unrecovered,omitempty"`
+}
+
 func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 	var parentID sql.NullString
 	var breakdownBlob sql.NullString
+	var ddBlob sql.NullString
 	err := scanner.Scan(
 		&result.ID,
 		&result.CreatedAt,
@@ -337,6 +369,13 @@ func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 		&parentID,
 		&result.Summary.BiweeklyWinRate,
 		&breakdownBlob,
+		&ddBlob,
+		&result.Summary.DrawdownThreshold,
+		&result.Summary.TimeInMarketRatio,
+		&result.Summary.LongestFlatStreakBars,
+		&result.Summary.ExpectancyPerTrade,
+		&result.Summary.AvgWinJPY,
+		&result.Summary.AvgLossJPY,
 	)
 	if err != nil {
 		return err
@@ -353,6 +392,13 @@ func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 		if err := json.Unmarshal([]byte(breakdownBlob.String), &payload); err == nil {
 			result.Summary.ByExitReason = payload.ByExitReason
 			result.Summary.BySignalSource = payload.BySignalSource
+		}
+	}
+	if ddBlob.Valid && ddBlob.String != "" {
+		var payload drawdownPayload
+		if err := json.Unmarshal([]byte(ddBlob.String), &payload); err == nil {
+			result.Summary.DrawdownPeriods = payload.Periods
+			result.Summary.UnrecoveredDrawdown = payload.Unrecovered
 		}
 	}
 	result.Summary.PeriodFrom = result.Config.FromTimestamp
