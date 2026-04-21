@@ -8,7 +8,8 @@ v3 昇格時点の状況:
 
 - 1yr/2yr/3yr すべてでプラスリターンを達成（+9.6% / +9.9% / +25.0%）
 - ただし **SL = 20% という実質無効化の設定**で頑健性を確保している（不健全）
-- **`stop_loss_atr_multiplier` / `htf_filter.alignment_boost` が未配線**（profile で変えても結果不変）
+- **`stop_loss_atr_multiplier` がバックテスト経路で未配線**（profile で変えても backtest 結果不変。live では env `RISK_STOP_LOSS_ATR_MULTIPLIER` 経由で動作）
+- **`htf_filter.alignment_boost` は配線済みだが effect が薄い**（`StrategyEngine` で `signal.Confidence` を最大 0.1 押し上げるだけ、**トレード発火判定には影響しないため Return は不変**になりやすい。cycle09 の baseline 一致はこれが原因で、「未配線」ではなく「影響が confidence のみ」が正確）
 - **複数期間の頑健性は手動で curl を何度も叩いて集計**（1yr/2yr/3yr を別々に実行）
 - **exit 理由 / シグナル別の寄与度**が見えない → cycle05/06 で `enabled=false` にして差分推定する非効率
 - **ADX / Stochastics / Ichimoku** など実装済み指標が Strategy 側に配線されていない（FE では描画済み）

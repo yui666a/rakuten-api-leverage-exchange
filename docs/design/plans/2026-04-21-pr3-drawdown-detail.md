@@ -132,8 +132,12 @@ Expectancy = WR * AvgWin - (1 - WR) * AvgLoss  -- JPY/trade
 
 ### DB / API / Frontend
 
-- 新規フィールドは `BacktestSummary` に追加。既存 DB 列 `summary_json`（前提: JSON 格納）に含まれるので **マイグレーション不要**。仮に summary が個別列に展開されていたら `summary_extra_json TEXT DEFAULT '{}'` を追加
-- API レスポンスで返るだけ
+- 現行スキーマでは `BacktestSummary` の各フィールドは `backtest_results` テーブルに **個別カラム** として展開されている（`total_return` / `max_drawdown` / `sharpe_ratio` / `biweekly_win_rate` ... の列、`resultColumns` 定数参照）。一方で PR-1 で追加した `breakdown_json` カラムは複数のサブ集計をまとめて JSON で格納している
+- 本 PR の新規フィールドは **マイグレーションを伴う**選択肢が 2 つある:
+  - **案 A**: 個別カラム追加（`time_in_market_ratio` / `expectancy_per_trade` / `longest_flat_streak_bars` など）+ `drawdownPeriods` だけ JSON 列（`drawdown_periods_json TEXT DEFAULT NULL`）。既存パターンと揃えやすい
+  - **案 B**: 新規 `summary_extra_json TEXT DEFAULT '{}'` 1 本を追加して PR-3 / 将来拡張をここに集約。スキーマ変更頻度を抑えられる
+  - 現時点では **案 A を採用予定**（type-safety と既存 PRAGMA テストパターンに揃うため）。実装時に再評価
+- API レスポンスで新フィールドが返る
 - Frontend: バックテスト詳細に
   - 「Drawdown 履歴」テーブル（列: 開始日、底日、深さ、継続期間、回復期間）
   - 「Time-in-market」カード

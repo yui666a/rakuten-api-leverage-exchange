@@ -4,6 +4,7 @@
 **Phase**: A（観測側強化）
 **Stacked PR 順序**: #1 / 6（main の直上）
 **見積もり**: 1 日
+**ステータス**: ✅ **merged** — #108 にて main に取り込み済み (2026-04-21)。本 Doc は as-built として残す。
 
 ## 動機
 
@@ -46,24 +47,26 @@ type BacktestSummary struct {
 
 `BacktestTradeRecord.ReasonEntry` は既に人間可読な文字列（`"trend follow: EMA12 > EMA26, SMA aligned, RSI not overbought, MACD confirmed"` のような形式）。
 
+実装は **コロンで終端するプレフィックス**で判定する（`"trend follow:"` 等）。コロンを含めることで、仮に将来 `"trend follower xyz"` のような別フレーズが出てもハイジャックされないよう守っている。
+
 ```go
-// reporter.go (または新ファイル breakdown.go)
+// backend/internal/usecase/backtest/breakdown.go（実装済み）
 func parseSignalSource(reasonEntry string) string {
-    lower := strings.ToLower(reasonEntry)
+    lower := strings.ToLower(strings.TrimSpace(reasonEntry))
     switch {
-    case strings.HasPrefix(lower, "trend follow"):
-        return "trend_follow"
-    case strings.HasPrefix(lower, "contrarian"):
-        return "contrarian"
-    case strings.HasPrefix(lower, "breakout"):
-        return "breakout"
+    case strings.HasPrefix(lower, "trend follow:"):
+        return SignalSourceTrendFollow
+    case strings.HasPrefix(lower, "contrarian:"):
+        return SignalSourceContrarian
+    case strings.HasPrefix(lower, "breakout:"):
+        return SignalSourceBreakout
     default:
-        return "unknown"
+        return SignalSourceUnknown
     }
 }
 ```
 
-**設計判断**: enum を新設するより文字列プレフィックス判定で十分（発火箇所が `strategy.go` の 3 種しかなく、文言は安定）。リスクは strategy.go の reason 文言が変わった時に breakdown が `unknown` に流れること。これを防ぐため `parseSignalSource` と strategy.go 双方の定数化は次の大きなリファクタで対応する（PR-1 のスコープ外）。
+**設計判断**: enum を新設するより文字列プレフィックス判定で十分（発火箇所が `strategy.go` の数か所のみで、文言は安定）。リスクは strategy.go の reason 文言が変わった時に breakdown が `unknown` に流れること。これを防ぐため `parseSignalSource` と strategy.go 双方の定数化は次の大きなリファクタで対応する（PR-1 のスコープ外）。
 
 ### 集計関数
 
@@ -128,15 +131,15 @@ ALTER TABLE backtest_results ADD COLUMN breakdown_json TEXT DEFAULT NULL;
 2. `result_repository_test.go`: Save → Load で breakdown が往復する（JSON 永続化の確認）
 3. `migrations_test.go`: マイグレーション再実行で壊れない（既存 idempotent テストの枠内）
 
-## DoD
+## DoD（as-built）
 
-- [ ] unit test 4 本 passing
-- [ ] integration test 3 本 passing
-- [ ] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る（挙動不変）
-- [ ] 新規マイグレーション が `migrations_test.go` で idempotent
-- [ ] レガシー行（breakdown_json NULL）を読めることを確認
-- [ ] Frontend にテーブル 2 個追加、`pnpm test` pass
-- [ ] PR 本文: 直近 6 ヶ月 production バックテスト結果の各 map を貼付
+- [x] unit test 15 本 passing（当初見積 4 本から拡大: parseSignalSource 10 ケース + computeBreakdown 5 ケース）
+- [x] integration test 3 本 passing（reporter / repo round-trip / legacy 互換）
+- [x] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る（挙動不変）
+- [x] 新規マイグレーション が `migrations_test.go` で idempotent、`breakdown_json` 列存在を明示 assert
+- [x] レガシー行（breakdown_json NULL）を読めることを確認
+- [ ] Frontend にテーブル 2 個追加、`pnpm test` pass — **持ち越し**: FE 実装は別 PR で（PR-1 merge 時点は BE API のみ完了）
+- [x] PR 本文: 直近 6 ヶ月 production バックテスト結果の各 map を貼付（#108 本文参照）
 
 ## ロールバック
 

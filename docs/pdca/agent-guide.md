@@ -390,12 +390,12 @@ A. 多くは期間不足（< 14 日）か、トレード数不足でカバレッ
 
 ### 未配線フィールド（Phase B で解消）
 
-以下は profile 上に存在するが `StrategyEngine` に届いていない。いじっても結果が baseline と完全一致する。
+以下は profile 上に存在するがバックテストで期待通りに効かないフィールド。
 
 | フィールド | 現状 | 解消予定 |
 |---|---|---|
-| `strategy_risk.stop_loss_atr_multiplier` | 未配線 | PR-12 (ATR Trailing Stop) |
-| `htf_filter.alignment_boost` | 影響が極小か未配線か不明 | PR-6 以降で再調査 |
+| `strategy_risk.stop_loss_atr_multiplier` | バックテスト経路で未配線（API ハンドラ `handler/backtest.go` と CLI `cmd/backtest/main.go` の `RiskConfig` 組立で profile の値を流していない）。live pipeline は env `RISK_STOP_LOSS_ATR_MULTIPLIER` 経由で動作し、`RiskManager.stopLossDistance` でも参照済み | PR-12 (ATR Trailing Stop) で backtest 側を配線 |
+| `htf_filter.alignment_boost` | 配線済み（`configurable_strategy.go` → `StrategyEngineOptions.HTFAlignmentBoost` → `StrategyEngine.applyHTFFilter`）。ただし effect は生成済みシグナルの `Confidence` を最大 0.1 押し上げるのみ。**トレード発火判定には影響しないため Return/WR は不変**になりやすい。cycle09 で baseline 同値だったのはこれが理由 | 別 PR で「confidence に応じたポジションサイジング」が入れば意味が出る |
 
 いずれも cycle08/09 のように「変えても baseline と同じ」という罠になるので、新指標を追加する PR では必ず **配線確認テスト**（値を変えたらバックテスト結果も変わる assertion）を DoD に含めること。
 
