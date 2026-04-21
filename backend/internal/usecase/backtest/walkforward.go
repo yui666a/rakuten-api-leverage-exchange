@@ -191,7 +191,7 @@ func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
 //   strategy_risk.max_position_amount
 //   strategy_risk.max_daily_loss
 //   signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
-//   signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max}
+//   signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max,stoch_entry_max,stoch_exit_min}
 //   signal_rules.breakout.{volume_ratio_min,adx_min}
 //   stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
 //   htf_filter.alignment_boost
@@ -225,6 +225,10 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 			out.SignalRules.Contrarian.MACDHistogramLimit = value
 		case "signal_rules.contrarian.adx_max":
 			out.SignalRules.Contrarian.ADXMax = value
+		case "signal_rules.contrarian.stoch_entry_max":
+			out.SignalRules.Contrarian.StochEntryMax = value
+		case "signal_rules.contrarian.stoch_exit_min":
+			out.SignalRules.Contrarian.StochExitMin = value
 		case "signal_rules.breakout.volume_ratio_min":
 			out.SignalRules.Breakout.VolumeRatioMin = value
 		case "signal_rules.breakout.adx_min":
