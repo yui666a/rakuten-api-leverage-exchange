@@ -258,5 +258,37 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	// PR-2: 複数期間一括バックテスト (multi-period run) のまとめを保存する
+	// 専用テーブル。個別期間の BacktestResult は backtest_results テーブルに
+	// 独立に保存され、ここにはその ID 配列 (period_result_ids) と集約スコア
+	// (aggregate_json) だけを持つ envelope を格納する。
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS multi_period_results (
+		id TEXT PRIMARY KEY,
+		created_at INTEGER NOT NULL,
+		profile_name TEXT NOT NULL DEFAULT '',
+		pdca_cycle_id TEXT NOT NULL DEFAULT '',
+		hypothesis TEXT NOT NULL DEFAULT '',
+		parent_result_id TEXT DEFAULT NULL,
+		aggregate_json TEXT NOT NULL,
+		period_result_ids TEXT NOT NULL
+	)`); err != nil {
+		return fmt.Errorf("create multi_period_results: %w", err)
+	}
+	multiPeriodIndexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_multi_period_created
+			ON multi_period_results(created_at DESC, id DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_multi_period_profile
+			ON multi_period_results(profile_name)
+			WHERE profile_name <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_multi_period_pdca
+			ON multi_period_results(pdca_cycle_id)
+			WHERE pdca_cycle_id <> ''`,
+	}
+	for _, stmt := range multiPeriodIndexes {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create multi_period index: %w", err)
+		}
+	}
+
 	return nil
 }

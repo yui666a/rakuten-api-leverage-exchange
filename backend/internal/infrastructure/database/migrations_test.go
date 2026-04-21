@@ -144,4 +144,72 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 			t.Errorf("expected index %q to exist", idx)
 		}
 	}
+
+	// PR-2: multi_period_results テーブルとそのカラム・インデックスが揃って
+	// いることを確認。PR-1 の breakdown_json 列と同様、将来の migration
+	// リファクタで退行しないためのガードレール。
+	wantMultiCols := map[string]bool{
+		"id":                false,
+		"created_at":        false,
+		"profile_name":      false,
+		"pdca_cycle_id":     false,
+		"hypothesis":        false,
+		"parent_result_id":  false,
+		"aggregate_json":    false,
+		"period_result_ids": false,
+	}
+	mpRows, err := db.Query("PRAGMA table_info(multi_period_results)")
+	if err != nil {
+		t.Fatalf("pragma table_info(multi_period_results): %v", err)
+	}
+	defer mpRows.Close()
+	for mpRows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    interface{}
+			pk      int
+		)
+		if err := mpRows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan multi_period_results table_info: %v", err)
+		}
+		if _, ok := wantMultiCols[name]; ok {
+			wantMultiCols[name] = true
+		}
+	}
+	if err := mpRows.Err(); err != nil {
+		t.Fatalf("iterate multi_period_results table_info: %v", err)
+	}
+	for col, seen := range wantMultiCols {
+		if !seen {
+			t.Errorf("expected column %q in multi_period_results", col)
+		}
+	}
+
+	wantMultiIndexes := map[string]bool{
+		"idx_multi_period_created": false,
+		"idx_multi_period_profile": false,
+		"idx_multi_period_pdca":    false,
+	}
+	mpIdxRows, err := db.Query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='multi_period_results'")
+	if err != nil {
+		t.Fatalf("query multi_period indexes: %v", err)
+	}
+	defer mpIdxRows.Close()
+	for mpIdxRows.Next() {
+		var name string
+		if err := mpIdxRows.Scan(&name); err != nil {
+			t.Fatalf("scan multi_period index name: %v", err)
+		}
+		if _, ok := wantMultiIndexes[name]; ok {
+			wantMultiIndexes[name] = true
+		}
+	}
+	for idx, seen := range wantMultiIndexes {
+		if !seen {
+			t.Errorf("expected index %q on multi_period_results", idx)
+		}
+	}
 }

@@ -158,14 +158,23 @@ CLI は `multi` サブコマンドを新設（既存 `run` / `optimize` / `refin
 
 1. CLI test: `multi` サブコマンドで JSON 出力が得られる
 
-## DoD
+## DoD（as-built）
 
-- [ ] Unit 3 本 passing
-- [ ] Integration 3 本 passing
-- [ ] CLI E2E 1 本 passing
-- [ ] migrations_test idempotent
-- [ ] Frontend `/backtest/multi` ページ追加 + `pnpm test` pass
-- [ ] PR 本文: production profile を 1yr/2yr/3yr の 3 期間で回した結果を貼付（`RobustnessScore` 付き）
+実装済み項目（PR #111 想定）:
+
+- [x] Unit: `ComputeAggregate` を 7 ケースでカバー（3 positive / mixed / ruin / ruin below -1 / empty / single / worst-drawdown = MAX）
+- [x] Unit: `MultiPeriodRunner` の orchestration を 5 ケースでカバー（並列 assembly / empty periods / duplicate labels / empty label / period error propagation）
+- [x] Integration: `MultiPeriodResultRepository` の round-trip、FindByID missing、List filter（profile/cycle/no filter）
+- [x] Handler tests 5 本: 503 when multi repo missing / 400 empty periods / List filter plumbing / GetMultiResult NotFound / GetMultiResult OK
+- [x] `migrations_test` に `multi_period_results` テーブルを加えても冪等性維持
+- [x] `go test ./... -race -count=1` 全緑
+- [x] docker e2e: production profile × 1yr/2yr/3yr で envelope + 3 per-period が保存され、`/backtest/multi-results/:id` が breakdown 込みで rehydrate されることを確認
+- [x] PR 本文: production profile を 1yr/2yr/3yr の 3 期間で回した結果を貼付
+
+### フォローアップ（別 PR）
+
+- CLI `multi` サブコマンド — `cmd/backtest/main.go` への追加。MVP では API で十分（PDCA チャレンジ中は curl で全部回した）ため、実需が出てから実装
+- Frontend `/backtest/multi` ページ — `/api/v1/backtest/run-multi` と `/api/v1/backtest/multi-results` を叩く UI。BE 側が安定してから FE 作業
 
 ## ロールバック
 
