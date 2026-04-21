@@ -311,6 +311,10 @@ export type BacktestRunRequest = {
   slippage?: number
   tradeAmount?: number
   stopLossPercent?: number
+  // PR-12 (#113): ATR-based stop / trailing. >0 activates the ATR gate
+  // instead of the percent-based fallback.
+  stopLossAtrMultiplier?: number
+  trailingAtrMultiplier?: number
   takeProfitPercent?: number
   maxPositionAmount?: number
   maxDailyLoss?: number

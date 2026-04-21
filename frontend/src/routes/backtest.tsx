@@ -25,6 +25,8 @@ type BacktestRunForm = {
   slippage: string
   tradeAmount: string
   stopLossPercent: string
+  stopLossAtrMultiplier: string
+  trailingAtrMultiplier: string
   takeProfitPercent: string
   maxPositionAmount: string
   maxDailyLoss: string
@@ -43,6 +45,10 @@ const defaultRunForm: BacktestRunForm = {
   slippage: '0',
   tradeAmount: '0.01',
   stopLossPercent: '5',
+  // PR-12: ATR-based risk. "" = disabled; any positive value overrides
+  // the percent-based fallback above.
+  stopLossAtrMultiplier: '',
+  trailingAtrMultiplier: '',
   takeProfitPercent: '10',
   maxPositionAmount: '',
   maxDailyLoss: '',
@@ -107,6 +113,14 @@ function buildRunRequest(form: BacktestRunForm): BacktestRunRequest {
   const slippage = parseOptionalNumber('Slippage', form.slippage)
   const tradeAmount = parseOptionalNumber('Trade Amount', form.tradeAmount)
   const stopLossPercent = parseOptionalNumber('Stop Loss Percent', form.stopLossPercent)
+  const stopLossAtrMultiplier = parseOptionalNumber(
+    'Stop Loss ATR Multiplier',
+    form.stopLossAtrMultiplier,
+  )
+  const trailingAtrMultiplier = parseOptionalNumber(
+    'Trailing ATR Multiplier',
+    form.trailingAtrMultiplier,
+  )
   const takeProfitPercent = parseOptionalNumber('Take Profit Percent', form.takeProfitPercent)
   const maxPositionAmount = parseOptionalNumber('Max Position Amount', form.maxPositionAmount)
   const maxDailyLoss = parseOptionalNumber('Max Daily Loss', form.maxDailyLoss)
@@ -123,6 +137,10 @@ function buildRunRequest(form: BacktestRunForm): BacktestRunRequest {
   if (slippage !== undefined) request.slippage = slippage
   if (tradeAmount !== undefined) request.tradeAmount = tradeAmount
   if (stopLossPercent !== undefined) request.stopLossPercent = stopLossPercent
+  if (stopLossAtrMultiplier !== undefined)
+    request.stopLossAtrMultiplier = stopLossAtrMultiplier
+  if (trailingAtrMultiplier !== undefined)
+    request.trailingAtrMultiplier = trailingAtrMultiplier
   if (takeProfitPercent !== undefined) request.takeProfitPercent = takeProfitPercent
   if (maxPositionAmount !== undefined) request.maxPositionAmount = maxPositionAmount
   if (maxDailyLoss !== undefined) request.maxDailyLoss = maxDailyLoss
@@ -366,6 +384,20 @@ function BacktestPage() {
               label="Stop Loss (%)"
               value={runForm.stopLossPercent}
               onChange={(value) => setRunField('stopLossPercent', value)}
+              type="number"
+              step="0.1"
+            />
+            <RunField
+              label="Stop Loss ATR × (optional)"
+              value={runForm.stopLossAtrMultiplier}
+              onChange={(value) => setRunField('stopLossAtrMultiplier', value)}
+              type="number"
+              step="0.1"
+            />
+            <RunField
+              label="Trailing ATR × (optional)"
+              value={runForm.trailingAtrMultiplier}
+              onChange={(value) => setRunField('trailingAtrMultiplier', value)}
               type="number"
               step="0.1"
             />
