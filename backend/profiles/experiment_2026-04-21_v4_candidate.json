@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted from experiment_2026-04-21_v4_candidate on 2026-04-21 (v4). Walk-forward optimised via PR-13 across 9 windows (IS=6mo, OOS=3mo, step=3mo, from 2023-04-01 to 2026-04-01). Walk-forward OOS geomMean -3.3%% (baseline) -> -0.6%% (v4), worst OOS -7.8%% -> -3.1%%. Multi-period 2yr -19.9%% -> -3.7%%, 3yr -12.4%% -> -6.0%%, all with DD dropping 23-27%% -> 5-7%%. Key changes vs baseline: ADX gates (trend_follow.adx_min=28, contrarian.adx_max=25), tighter trend_follow RSI window (70 -> 60), shorter TP (10 -> 4). Still a slight net-negative expected return — the next cycle's job is to cross zero; v4 just stopped the bleeding.",
+  "name": "experiment_2026-04-21_v4_candidate",
+  "description": "v4 promotion candidate derived from walk-forward optimisation (PR-13) on 2026-04-21 cycle17-19. Final tuning on cycle19 suggested trend_follow.adx_min=28 (5/9 IS best) over 30. Other fields: contrarian.adx_max=25 (9/9 in cycle16a), trend_follow.rsi_buy_max=60 (8/9), take_profit_percent=4 (9/9). Expected WFO geomOOS: -3.3% (baseline) -> -0.6%. Multi-period: 2yr -19.9% -> -3.9%, 3yr -12.4% -> -6.4%, DD 10-27% -> 5-7%.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,

@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted from experiment_2026-04-21_v4_candidate on 2026-04-21 (v4). Walk-forward optimised via PR-13 across 9 windows (IS=6mo, OOS=3mo, step=3mo, from 2023-04-01 to 2026-04-01). Walk-forward OOS geomMean -3.3%% (baseline) -> -0.6%% (v4), worst OOS -7.8%% -> -3.1%%. Multi-period 2yr -19.9%% -> -3.7%%, 3yr -12.4%% -> -6.0%%, all with DD dropping 23-27%% -> 5-7%%. Key changes vs baseline: ADX gates (trend_follow.adx_min=28, contrarian.adx_max=25), tighter trend_follow RSI window (70 -> 60), shorter TP (10 -> 4). Still a slight net-negative expected return — the next cycle's job is to cross zero; v4 just stopped the bleeding.",
+  "name": "baseline",
+  "description": "Baseline profile kept bit-for-bit equal to the DefaultStrategy defaults. Used by TestConfigurableStrategy_EquivalentToDefault to guarantee that ConfigurableStrategy never silently diverges from the hard-coded legacy behaviour. Do NOT modify unless you are also changing StrategyEngineOptions defaults in lockstep.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -24,16 +24,16 @@
       "enabled": true,
       "require_macd_confirm": true,
       "require_ema_cross": true,
-      "rsi_buy_max": 60,
-      "rsi_sell_min": 40,
-      "adx_min": 28
+      "rsi_buy_max": 70,
+      "rsi_sell_min": 30,
+      "adx_min": 0
     },
     "contrarian": {
       "enabled": true,
       "rsi_entry": 30,
       "rsi_exit": 70,
       "macd_histogram_limit": 10,
-      "adx_max": 25
+      "adx_max": 0
     },
     "breakout": {
       "enabled": true,
@@ -44,7 +44,7 @@
   },
   "strategy_risk": {
     "stop_loss_percent": 5,
-    "take_profit_percent": 4,
+    "take_profit_percent": 10,
     "stop_loss_atr_multiplier": 0,
     "trailing_atr_multiplier": 0,
     "max_position_amount": 100000,
