@@ -261,6 +261,33 @@ func TestApplyOverrides_SignalField(t *testing.T) {
 	}
 }
 
+func TestApplyOverrides_RiskMaxFields(t *testing.T) {
+	// Added after the Codex #117 re-review: the handler wires
+	// MaxPositionAmount / MaxDailyLoss through RiskConfig but ApplyOverrides
+	// used to silently reject those paths with an unknown-path error, so
+	// a grid entry like `{"path":"strategy_risk.max_daily_loss"}` failed
+	// at 400 instead of overriding the field.
+	base := entity.StrategyProfile{
+		Risk: entity.StrategyRiskConfig{
+			MaxPositionAmount: 100000,
+			MaxDailyLoss:      50000,
+		},
+	}
+	got, err := ApplyOverrides(base, map[string]float64{
+		"strategy_risk.max_position_amount": 200000,
+		"strategy_risk.max_daily_loss":      25000,
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.Risk.MaxPositionAmount != 200000 {
+		t.Fatalf("MaxPositionAmount = %v", got.Risk.MaxPositionAmount)
+	}
+	if got.Risk.MaxDailyLoss != 25000 {
+		t.Fatalf("MaxDailyLoss = %v", got.Risk.MaxDailyLoss)
+	}
+}
+
 func TestApplyOverrides_UnknownPathReturnsError(t *testing.T) {
 	base := entity.StrategyProfile{}
 	_, err := ApplyOverrides(base, map[string]float64{"not.a.real.path": 5})

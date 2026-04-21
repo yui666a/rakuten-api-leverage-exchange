@@ -10,8 +10,13 @@ HEAD production (v1) は walk-forward OOS 平均 -3.3%、MaxDrawdown 27% で liv
 
 ## 昇格元
 
-- **Profile**: `experiment_2026-04-21_v4_candidate`
-- **WFO 由来 cycle**: 2026-04-21_cycle13-19 (詳細は [`2026-04-21_cycle13-19.md`](./2026-04-21_cycle13-19.md))
+- **Final promoted profile**: `experiment_2026-04-21_v4b_candidate` (v4b)
+- **Rejected intermediate profile**: `experiment_2026-04-21_v4_candidate` (v4) — kept in repo for audit trail
+- **WFO 由来 cycle**: 2026-04-21_cycle13-19 (詳細は [`2026-04-21_cycle13-19.md`](./2026-04-21_cycle13-19.md))、cycle20-21 は bug fix 後の再検証
+- **Walk-forward window**: `from=2023-04-01 to=2026-04-01, inSampleMonths=6, outOfSampleMonths=3, stepMonths=3` (10 窓)
+- **Result IDs** (raw for audit):
+  - v1 baseline multi: `01KPQBSYBY7J97FR3PCDBWGEMQ`
+  - v4b post-promotion multi: `01KPQDP0NN4W2YJJEW94WW1ECF`
 
 ## 差分（v1 baseline → v4b）
 
