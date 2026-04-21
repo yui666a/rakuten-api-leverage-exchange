@@ -563,6 +563,12 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 
 	result.ATR14 = floatToPtr(indicator.ATR(highs, lows, closes, 14))
 
+	// PR-6: ADX family. Mirror the live-pipeline calculator.
+	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, closes, 14)
+	result.ADX14 = floatToPtr(adxVal)
+	result.PlusDI14 = floatToPtr(plusDI)
+	result.MinusDI14 = floatToPtr(minusDI)
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, c := range candles {

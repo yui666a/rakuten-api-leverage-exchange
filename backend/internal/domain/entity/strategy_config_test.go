@@ -233,18 +233,21 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
       "require_macd_confirm": true,
       "require_ema_cross": true,
       "rsi_buy_max": 70,
-      "rsi_sell_min": 30
+      "rsi_sell_min": 30,
+      "adx_min": 0
     },
     "contrarian": {
       "enabled": true,
       "rsi_entry": 30,
       "rsi_exit": 70,
-      "macd_histogram_limit": 10
+      "macd_histogram_limit": 10,
+      "adx_max": 0
     },
     "breakout": {
       "enabled": true,
       "volume_ratio_min": 1.5,
-      "require_macd_confirm": true
+      "require_macd_confirm": true,
+      "adx_min": 0
     }
   },
   "strategy_risk": {

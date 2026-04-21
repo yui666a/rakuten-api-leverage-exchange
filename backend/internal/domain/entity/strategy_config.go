@@ -59,6 +59,8 @@ type TrendFollowConfig struct {
 	RequireEMACross    bool    `json:"require_ema_cross"`
 	RSIBuyMax          float64 `json:"rsi_buy_max"`
 	RSISellMin         float64 `json:"rsi_sell_min"`
+	// PR-6: trend_follow fires only when ADX >= ADXMin (0 = gate disabled).
+	ADXMin float64 `json:"adx_min"`
 }
 
 // ContrarianConfig configures the contrarian signal generator.
@@ -67,6 +69,8 @@ type ContrarianConfig struct {
 	RSIEntry           float64 `json:"rsi_entry"`
 	RSIExit            float64 `json:"rsi_exit"`
 	MACDHistogramLimit float64 `json:"macd_histogram_limit"`
+	// PR-6: contrarian fires only when ADX <= ADXMax (0 = gate disabled).
+	ADXMax float64 `json:"adx_max"`
 }
 
 // BreakoutConfig configures the breakout signal generator.
@@ -74,6 +78,8 @@ type BreakoutConfig struct {
 	Enabled            bool    `json:"enabled"`
 	VolumeRatioMin     float64 `json:"volume_ratio_min"`
 	RequireMACDConfirm bool    `json:"require_macd_confirm"`
+	// PR-6: breakout fires only when ADX >= ADXMin (0 = gate disabled).
+	ADXMin float64 `json:"adx_min"`
 }
 
 // HTFFilterConfig configures the higher-timeframe trend filter.

@@ -60,6 +60,18 @@ type StrategyEngineOptions struct {
 	EnableContrarian  bool // if false, CONTRARIAN stance yields HOLD; default true
 	EnableBreakout    bool // if false, BREAKOUT stance yields HOLD; default true
 
+	// PR-6: ADX-based gates. All zero-by-default so the legacy behaviour
+	// (no ADX filtering) is preserved. >0 values activate the gate.
+	//   - TrendFollowADXMin: trend-follow signals require ADX >= this.
+	//   - ContrarianADXMax:  contrarian signals require ADX <= this.
+	//   - BreakoutADXMin:    breakout signals require ADX >= this.
+	// Missing ADX (indicator.ADX returned NaN -> nil pointer) treats the
+	// gate as a fail, matching the spirit of "if we cannot measure trend
+	// strength, don't fire a trend-conditioned signal".
+	TrendFollowADXMin float64
+	ContrarianADXMax  float64
+	BreakoutADXMin    float64
+
 	// defaulted tracks whether applyDefaults has already been called so we
 	// don't flip booleans to true twice (e.g. on a caller that explicitly
 	// wants them false).
@@ -257,6 +269,19 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 	sma50 := *indicators.SMA50
 	rsi := *indicators.RSI14
 
+	// PR-6: ADX gates run BEFORE the per-stance evaluators so the block
+	// reason surfaces cleanly ("trend follow: ADX below threshold")
+	// instead of being buried inside evaluate*. A missing ADX value
+	// counts as a failed gate when the gate is active.
+	adxBlock := func(reason string) *entity.Signal {
+		return &entity.Signal{
+			SymbolID:  indicators.SymbolID,
+			Action:    entity.SignalActionHold,
+			Reason:    reason,
+			Timestamp: nowUnix,
+		}
+	}
+
 	switch result.Stance {
 	case entity.MarketStanceTrendFollow:
 		if !e.options.EnableTrendFollow {
@@ -266,6 +291,11 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				Reason:    "trend follow: disabled by profile",
 				Timestamp: nowUnix,
 			}, nil
+		}
+		if min := e.options.TrendFollowADXMin; min > 0 {
+			if indicators.ADX14 == nil || *indicators.ADX14 < min {
+				return adxBlock("trend follow: ADX below threshold"), nil
+			}
 		}
 		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceContrarian:
@@ -277,6 +307,13 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				Timestamp: nowUnix,
 			}, nil
 		}
+		if max := e.options.ContrarianADXMax; max > 0 {
+			// When ADX is unknown we assume a strong trend (worst case
+			// for contrarian) and block.
+			if indicators.ADX14 == nil || *indicators.ADX14 > max {
+				return adxBlock("contrarian: ADX above threshold"), nil
+			}
+		}
 		return e.evaluateContrarian(indicators.SymbolID, rsi, indicators.Histogram, nowUnix), nil
 	case entity.MarketStanceBreakout:
 		if !e.options.EnableBreakout {
@@ -286,6 +323,11 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				Reason:    "breakout: disabled by profile",
 				Timestamp: nowUnix,
 			}, nil
+		}
+		if min := e.options.BreakoutADXMin; min > 0 {
+			if indicators.ADX14 == nil || *indicators.ADX14 < min {
+				return adxBlock("breakout: ADX below threshold"), nil
+			}
 		}
 		return e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix), nil
 	default:
