@@ -1,6 +1,8 @@
-# PDCA Promotion v4 — 2026-04-21
+# PDCA Promotion v4b — 2026-04-21
 
-`experiment_2026-04-21_v4_candidate` を `production.json` に昇格。
+`experiment_2026-04-21_v4b_candidate` を `production.json` に昇格（初版 v4 は bug fix 後の再検証で v4b に差し替え）。
+
+> **注記 (v4 → v4b への差し替え経緯)**: 初版 v4 (contrarian.adx_max=25) を cycle13-19 で選定したが、PR #117 Codex レビューで WalkForward handler の **TP override 未配線バグ** が発見された。修正後 cycle20-21 で再検証し、contrarian ADX ゲートは実は頑健な IS winner ではないことが判明。ゲートを off にした v4b の方が 3yr 成績で圧倒的に優れたため、最終 promote は v4b。
 
 ## 目的
 
@@ -11,14 +13,14 @@ HEAD production (v1) は walk-forward OOS 平均 -3.3%、MaxDrawdown 27% で liv
 - **Profile**: `experiment_2026-04-21_v4_candidate`
 - **WFO 由来 cycle**: 2026-04-21_cycle13-19 (詳細は [`2026-04-21_cycle13-19.md`](./2026-04-21_cycle13-19.md))
 
-## 差分（v1 baseline → v4）
+## 差分（v1 baseline → v4b）
 
-| フィールド | v1 | v4 |
+| フィールド | v1 | v4b |
 |---|---|---|
 | `signal_rules.trend_follow.rsi_buy_max` | 70 | **60** |
 | `signal_rules.trend_follow.rsi_sell_min` | 30 | **40** |
 | `signal_rules.trend_follow.adx_min` | 0 (無効) | **28** |
-| `signal_rules.contrarian.adx_max` | 0 (無効) | **25** |
+| `signal_rules.contrarian.adx_max` | 0 (無効) | 0 (無効) ← **v4 の 25 から差し戻し** |
 | `strategy_risk.take_profit_percent` | 10 | **4** |
 
 他は全て v1 と同一。
@@ -36,14 +38,16 @@ HEAD production (v1) は walk-forward OOS 平均 -3.3%、MaxDrawdown 27% で liv
 
 ### Multi-period (1yr/2yr/3yr)
 
-| 指標 | v1 baseline | v4 |
-|---|---|---|
-| 1yr Return | -5.19% | -4.41% |
-| 2yr Return | **-19.90%** | **-3.67%** |
-| 3yr Return | -12.37% | -5.99% |
-| 1yr DD | 10.83% | **5.14%** |
-| 2yr DD | **23.13%** | **5.57%** |
-| 3yr DD | **27.24%** | **6.72%** |
+| 指標 | v1 baseline | v4 (bug あり判定) | **v4b (最終)** |
+|---|---|---|---|
+| 1yr Return | -5.19% | -4.41% | **-0.23%** |
+| 2yr Return | **-19.90%** | -3.67% | -5.32% |
+| 3yr Return | -12.37% | -5.99% | **+9.56%** |
+| 1yr DD | 10.83% | 5.14% | 7.95% |
+| 2yr DD | **23.13%** | 5.57% | 8.35% |
+| 3yr DD | **27.24%** | 6.72% | 8.99% |
+| aggregate geomMean | -12.69% | -4.69% | **+1.15%** |
+| 3yr trades | 9637 | 2399 | 8332 |
 
 ### 観点別判定
 
@@ -55,12 +59,13 @@ HEAD production (v1) は walk-forward OOS 平均 -3.3%、MaxDrawdown 27% で liv
 
 ## 判定
 
-**採用 (v4 promotion)**。
+**採用 (v4b promotion)**。
 
 主な理由:
-1. **DD 27.24% → 6.72% (75% 削減)** — 必須制約違反を解消、live 運用可能水準に
-2. **Walk-forward OOS で明確に baseline 超過** — 過学習ではなく真の改善
-3. **2yr Return -19.9% → -3.7% (16pt 改善)** — 長期頑健性が根本的に違う
+1. **DD 27.24% → 8.99% (67% 削減)** — 必須制約違反を解消、live 運用可能水準に
+2. **3yr Return で初めてプラス到達 (+9.56%)** — 負け戦略を勝ち戦略に転換
+3. **aggregate geomMean +1.15%** — multi-period 合成でも正
+4. **Walk-forward OOS も baseline 超過** (v4 よりやや劣るが許容範囲)
 
 ## 残課題
 

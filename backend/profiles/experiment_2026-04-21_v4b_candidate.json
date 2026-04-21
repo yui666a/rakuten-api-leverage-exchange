@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted from experiment_2026-04-21_v4b_candidate on 2026-04-21. This is the fix follow-up to the v4 promotion (PR #117) after Codex caught that the WFO handler was not threading strategy_risk.take_profit_percent overrides into the per-window RiskConfig. Re-running the corrected WFO showed contrarian.adx_max was NOT a robust IS winner once TP was actually part of the grid — so this v4b revision drops it (adx_max=0). Multi-period numbers on HEAD: 1yr -0.23%, 2yr -5.32%, 3yr +9.56% (first promotion to hit a net-positive multi-year window). WFO 10-window OOS geomMean -0.8%, worst -3.9%, DD stays under 9% across 1/2/3yr.",
+  "name": "experiment_2026-04-21_v4b_candidate",
+  "description": "v4b revision after fixing WFO TP wiring bug (cycle20-21). Same as v4 but contrarian.adx_max removed (0 = gate off) because the corrected WFO showed contrarian.adx_max=0 at 4/10 vs =20/25 each at 3/10 — i.e. the gate was NOT robust once TP was actually part of the grid.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
