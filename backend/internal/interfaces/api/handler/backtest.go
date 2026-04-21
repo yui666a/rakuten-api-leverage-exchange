@@ -27,6 +27,11 @@ type BacktestHandler struct {
 	runner          *bt.BacktestRunner
 	repo            repository.BacktestResultRepository
 	profilesBaseDir string
+
+	// multiRepo is optional; when nil the multi-period endpoints return 503.
+	// This keeps legacy construction paths working without forcing all
+	// callers to wire the new repo at once.
+	multiRepo repository.MultiPeriodResultRepository
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -42,6 +47,15 @@ type BacktestHandlerOption func(*BacktestHandler)
 func WithProfilesBaseDir(dir string) BacktestHandlerOption {
 	return func(h *BacktestHandler) {
 		h.profilesBaseDir = dir
+	}
+}
+
+// WithMultiPeriodRepo wires the MultiPeriodResultRepository so the
+// /backtest/run-multi and /backtest/multi-results endpoints can function.
+// Without it those endpoints return 503 (rather than panicking).
+func WithMultiPeriodRepo(repo repository.MultiPeriodResultRepository) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.multiRepo = repo
 	}
 }
 

@@ -57,6 +57,7 @@ func main() {
 	stanceOverrideRepo := database.NewStanceOverrideRepo(db)
 	clientOrderRepo := database.NewClientOrderRepo(db)
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
+	multiPeriodRepo := backtestinfra.NewMultiPeriodResultRepository(db, backtestResultRepo)
 	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	// The StrategyRegistry lives in the strategy package and is exercised by
@@ -159,10 +160,11 @@ func main() {
 		Pipeline:            pipeline,
 		RESTClient:          restClient,
 		ClientOrderRepo:     clientOrderRepo,
-		BacktestRunner:      backtestRunner,
-		BacktestResultRepo:  backtestResultRepo,
-		OnSymbolSwitch:      onSymbolSwitch,
-		DailyPnLCalculator:  dailyPnLCalc,
+		BacktestRunner:        backtestRunner,
+		BacktestResultRepo:    backtestResultRepo,
+		MultiPeriodResultRepo: multiPeriodRepo,
+		OnSymbolSwitch:        onSymbolSwitch,
+		DailyPnLCalculator:    dailyPnLCalc,
 	})
 
 	sigCh := make(chan os.Signal, 1)

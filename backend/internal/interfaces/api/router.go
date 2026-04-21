@@ -34,6 +34,9 @@ type Dependencies struct {
 	DailyPnLCalculator  *usecase.DailyPnLCalculator
 	BacktestRunner      *backtestuc.BacktestRunner
 	BacktestResultRepo  repository.BacktestResultRepository
+	// MultiPeriodResultRepo is optional; when nil the /backtest/run-multi
+	// and /backtest/multi-results endpoints respond with 503.
+	MultiPeriodResultRepo repository.MultiPeriodResultRepository
 	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
 	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
 	OnSymbolSwitch func(oldID, newID int64)
@@ -127,11 +130,20 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	}
 
 	if deps.BacktestRunner != nil && deps.BacktestResultRepo != nil {
-		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo)
+		opts := []handler.BacktestHandlerOption{}
+		if deps.MultiPeriodResultRepo != nil {
+			opts = append(opts, handler.WithMultiPeriodRepo(deps.MultiPeriodResultRepo))
+		}
+		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		v1.POST("/backtest/run", backtestHandler.Run)
 		v1.GET("/backtest/csv-meta", backtestHandler.CSVMeta)
 		v1.GET("/backtest/results", backtestHandler.ListResults)
 		v1.GET("/backtest/results/:id", backtestHandler.GetResult)
+		if deps.MultiPeriodResultRepo != nil {
+			v1.POST("/backtest/run-multi", backtestHandler.RunMulti)
+			v1.GET("/backtest/multi-results", backtestHandler.ListMultiResults)
+			v1.GET("/backtest/multi-results/:id", backtestHandler.GetMultiResult)
+		}
 	}
 
 	return r
