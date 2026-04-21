@@ -74,21 +74,23 @@ func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResul
 }
 
 type runBacktestRequest struct {
-	DataPath             string  `json:"data" binding:"required"`
-	DataHTFPath          string  `json:"dataHtf"`
-	From                 string  `json:"from"`
-	To                   string  `json:"to"`
-	InitialBalance       float64 `json:"initialBalance"`
-	Spread               float64 `json:"spread"`
-	CarryingCost         float64 `json:"carryingCost"`
-	Slippage             float64 `json:"slippage"`
-	TradeAmount          float64 `json:"tradeAmount"`
-	StopLossPercent      float64 `json:"stopLossPercent"`
-	TakeProfitPercent    float64 `json:"takeProfitPercent"`
-	MaxPositionAmount    float64 `json:"maxPositionAmount"`
-	MaxDailyLoss         float64 `json:"maxDailyLoss"`
-	MaxConsecutiveLosses int     `json:"maxConsecutiveLosses"`
-	CooldownMinutes      int     `json:"cooldownMinutes"`
+	DataPath              string  `json:"data" binding:"required"`
+	DataHTFPath           string  `json:"dataHtf"`
+	From                  string  `json:"from"`
+	To                    string  `json:"to"`
+	InitialBalance        float64 `json:"initialBalance"`
+	Spread                float64 `json:"spread"`
+	CarryingCost          float64 `json:"carryingCost"`
+	Slippage              float64 `json:"slippage"`
+	TradeAmount           float64 `json:"tradeAmount"`
+	StopLossPercent       float64 `json:"stopLossPercent"`
+	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
+	TrailingATRMultiplier float64 `json:"trailingAtrMultiplier"` // PR-12
+	TakeProfitPercent     float64 `json:"takeProfitPercent"`
+	MaxPositionAmount     float64 `json:"maxPositionAmount"`
+	MaxDailyLoss          float64 `json:"maxDailyLoss"`
+	MaxConsecutiveLosses  int     `json:"maxConsecutiveLosses"`
+	CooldownMinutes       int     `json:"cooldownMinutes"`
 
 	// PDCA extensions (spec §8.2). All optional; when ProfileName is set,
 	// the profile's values become the base and non-zero individual fields
@@ -204,13 +206,15 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
 		RiskConfig: entity.RiskConfig{
-			MaxPositionAmount:    req.MaxPositionAmount,
-			MaxDailyLoss:         req.MaxDailyLoss,
-			StopLossPercent:      req.StopLossPercent,
-			TakeProfitPercent:    req.TakeProfitPercent,
-			InitialCapital:       req.InitialBalance,
-			MaxConsecutiveLosses: req.MaxConsecutiveLosses,
-			CooldownMinutes:      req.CooldownMinutes,
+			MaxPositionAmount:     req.MaxPositionAmount,
+			MaxDailyLoss:          req.MaxDailyLoss,
+			StopLossPercent:       req.StopLossPercent,
+			StopLossATRMultiplier: req.StopLossATRMultiplier,
+			TrailingATRMultiplier: req.TrailingATRMultiplier,
+			TakeProfitPercent:     req.TakeProfitPercent,
+			InitialCapital:        req.InitialBalance,
+			MaxConsecutiveLosses:  req.MaxConsecutiveLosses,
+			CooldownMinutes:       req.CooldownMinutes,
 		},
 	})
 	if err != nil {
@@ -281,6 +285,16 @@ func applyProfileDefaults(req *runBacktestRequest, profile *entity.StrategyProfi
 	}
 	if req.MaxDailyLoss <= 0 && profile.Risk.MaxDailyLoss > 0 {
 		req.MaxDailyLoss = profile.Risk.MaxDailyLoss
+	}
+	// PR-12: route ATR multipliers into the backtest path. Prior to this,
+	// stop_loss_atr_multiplier existed in the StrategyProfile entity but was
+	// silently ignored by the backtest handler (only the live pipeline
+	// consumed it via env var). trailing_atr_multiplier is new in PR-12.
+	if req.StopLossATRMultiplier <= 0 && profile.Risk.StopLossATRMultiplier > 0 {
+		req.StopLossATRMultiplier = profile.Risk.StopLossATRMultiplier
+	}
+	if req.TrailingATRMultiplier <= 0 && profile.Risk.TrailingATRMultiplier > 0 {
+		req.TrailingATRMultiplier = profile.Risk.TrailingATRMultiplier
 	}
 }
 

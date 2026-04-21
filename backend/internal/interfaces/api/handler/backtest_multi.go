@@ -18,17 +18,19 @@ import (
 // shares the rest of the parameters (profile, tradeAmount, costs) across
 // every period. Per-period overrides are out of scope for PR-2.
 type runMultiBacktestRequest struct {
-	DataPath          string  `json:"data" binding:"required"`
-	DataHTFPath       string  `json:"dataHtf"`
-	InitialBalance    float64 `json:"initialBalance"`
-	Spread            float64 `json:"spread"`
-	CarryingCost      float64 `json:"carryingCost"`
-	Slippage          float64 `json:"slippage"`
-	TradeAmount       float64 `json:"tradeAmount"`
-	StopLossPercent   float64 `json:"stopLossPercent"`
-	TakeProfitPercent float64 `json:"takeProfitPercent"`
-	MaxPositionAmount float64 `json:"maxPositionAmount"`
-	MaxDailyLoss      float64 `json:"maxDailyLoss"`
+	DataPath              string  `json:"data" binding:"required"`
+	DataHTFPath           string  `json:"dataHtf"`
+	InitialBalance        float64 `json:"initialBalance"`
+	Spread                float64 `json:"spread"`
+	CarryingCost          float64 `json:"carryingCost"`
+	Slippage              float64 `json:"slippage"`
+	TradeAmount           float64 `json:"tradeAmount"`
+	StopLossPercent       float64 `json:"stopLossPercent"`
+	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
+	TrailingATRMultiplier float64 `json:"trailingAtrMultiplier"` // PR-12
+	TakeProfitPercent     float64 `json:"takeProfitPercent"`
+	MaxPositionAmount     float64 `json:"maxPositionAmount"`
+	MaxDailyLoss          float64 `json:"maxDailyLoss"`
 
 	Periods []entity.PeriodSpec `json:"periods" binding:"required"`
 
@@ -76,17 +78,19 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 	// Apply profile defaults onto zero-valued request fields. Re-use the
 	// existing helpers to keep behaviour consistent with POST /backtest/run.
 	shared := runBacktestRequest{
-		DataPath:          req.DataPath,
-		DataHTFPath:       req.DataHTFPath,
-		InitialBalance:    req.InitialBalance,
-		Spread:            req.Spread,
-		CarryingCost:      req.CarryingCost,
-		Slippage:          req.Slippage,
-		TradeAmount:       req.TradeAmount,
-		StopLossPercent:   req.StopLossPercent,
-		TakeProfitPercent: req.TakeProfitPercent,
-		MaxPositionAmount: req.MaxPositionAmount,
-		MaxDailyLoss:      req.MaxDailyLoss,
+		DataPath:              req.DataPath,
+		DataHTFPath:           req.DataHTFPath,
+		InitialBalance:        req.InitialBalance,
+		Spread:                req.Spread,
+		CarryingCost:          req.CarryingCost,
+		Slippage:              req.Slippage,
+		TradeAmount:           req.TradeAmount,
+		StopLossPercent:       req.StopLossPercent,
+		StopLossATRMultiplier: req.StopLossATRMultiplier,
+		TrailingATRMultiplier: req.TrailingATRMultiplier,
+		TakeProfitPercent:     req.TakeProfitPercent,
+		MaxPositionAmount:     req.MaxPositionAmount,
+		MaxDailyLoss:          req.MaxDailyLoss,
 	}
 	applyProfileDefaults(&shared, profile)
 	applyLegacyDefaults(&shared)
@@ -171,11 +175,13 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				PrimaryCandles: primary.Candles,
 				HigherCandles:  higherCandles,
 				RiskConfig: entity.RiskConfig{
-					MaxPositionAmount: shared.MaxPositionAmount,
-					MaxDailyLoss:      shared.MaxDailyLoss,
-					StopLossPercent:   shared.StopLossPercent,
-					TakeProfitPercent: shared.TakeProfitPercent,
-					InitialCapital:    shared.InitialBalance,
+					MaxPositionAmount:     shared.MaxPositionAmount,
+					MaxDailyLoss:          shared.MaxDailyLoss,
+					StopLossPercent:       shared.StopLossPercent,
+					StopLossATRMultiplier: shared.StopLossATRMultiplier,
+					TrailingATRMultiplier: shared.TrailingATRMultiplier,
+					TakeProfitPercent:     shared.TakeProfitPercent,
+					InitialCapital:        shared.InitialBalance,
 				},
 			}
 			return runner, input, nil

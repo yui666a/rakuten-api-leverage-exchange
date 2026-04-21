@@ -89,6 +89,9 @@ type StrategyRiskConfig struct {
 	StopLossPercent       float64 `json:"stop_loss_percent"`
 	TakeProfitPercent     float64 `json:"take_profit_percent"`
 	StopLossATRMultiplier float64 `json:"stop_loss_atr_multiplier"`
+	// TrailingATRMultiplier: >0 ならトレイリングストップを ATR ベースで計算。
+	// 0 なら従来通り StopLossPercent ベース。詳細は entity.RiskConfig のコメント。
+	TrailingATRMultiplier float64 `json:"trailing_atr_multiplier"`
 	MaxPositionAmount     float64 `json:"max_position_amount"`
 	MaxDailyLoss          float64 `json:"max_daily_loss"`
 }

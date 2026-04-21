@@ -116,6 +116,11 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskCfg.StopLossPercent,
 		riskCfg.TakeProfitPercent,
 	)
+	// PR-12: propagate ATR-based SL / trailing multipliers from the run's
+	// RiskConfig so profile-driven ATR settings actually reach the tick
+	// risk loop. Without this, the legacy percent path stays in effect
+	// regardless of what the profile says.
+	tickRiskHandler.SetATRMultipliers(riskCfg.StopLossATRMultiplier, riskCfg.TrailingATRMultiplier)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
 	strategyHandler := NewStrategyHandler(strategy)
 	riskHandler := &RiskHandler{
@@ -130,6 +135,10 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	bus := eventengine.NewEventBus()
 	bus.Register(entity.EventTypeCandle, 5, tickGenerator)
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
+	// Run tickRiskHandler on IndicatorEvent (priority 12, strictly before
+	// the strategy at priority 20) so the new ATR value is already in place
+	// by the time the risk loop sees the next TickEvent.
+	bus.Register(entity.EventTypeIndicator, 12, tickRiskHandler)
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)

@@ -154,13 +154,22 @@ func (rm *RiskManager) UpdateTrailing(posID int64, bar entity.Candle, atr float6
 
 - `TestConfigurableStrategy_EquivalentToDefault` は `trailing_atr_multiplier = 0, stop_loss_atr_multiplier = 0` で走っていれば引き続き通る（デフォルト不変）
 
-## DoD
+## DoD（as-built）
 
-- [ ] Unit 4 本 + 配線確認 2 本 + integration 1 本 = **7 本** passing
-- [ ] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る
-- [ ] `docs/pdca/agent-guide.md` §8 の「バックテスト経路で無効 / 効果限定のフィールド」表から `stop_loss_atr_multiplier` を削除
-- [ ] PR 本文: v3 production (SL=20%) と、SL=5% + trailing=2.0 × ATR の profile で 1yr/2yr/3yr 比較（PR-2 の multi API 使用）
-- [ ] v4 候補 profile（健全化版）を 1 つ作り、PDCA サイクル記録 `docs/pdca/YYYY-MM-DD_cycleNN.md` を追加
+- [x] Unit 7 本 (trailing distance 3 ケース + SL distance 1 + UpdateATR 1 + handler integration 2 = 7) + end-to-end wiring test = **8 本** passing
+- [x] 既存 `TestConfigurableStrategy_EquivalentToDefault` が通る（production.json 不変）
+- [x] `TestBacktestRunner_ATRTrailingChangesResult` を追加し、BacktestRunner 経由で ATR を有効化すると結果が変わることを保証（PR-12 の silent revert 防止）
+- [x] strategy_config_test の JSON round-trip に `trailing_atr_multiplier` を追加
+- [x] docker e2e でオーバーライドが効くことを確認 (trailing=10 で trailing_stop 件数と Return が変化)
+- [ ] `docs/pdca/agent-guide.md` §8 の「バックテスト経路で無効 / 効果限定のフィールド」表更新 — **別 PR で対応**（docs 変更だけなのでコードと分けて管理）
+- [ ] v3 production との multi-period 比較 — **フォローアップ PDCA サイクルで**（PR-12 は基盤だけ提供）
+- [ ] v4 候補 profile の promotion — **フォローアップ PDCA で別途**
+
+### フォローアップ
+
+- Frontend にリスク設定セクションで `stopLossAtrMultiplier` / `trailingAtrMultiplier` を露出
+- agent-guide §8 の未配線表から `stop_loss_atr_multiplier` を削除
+- 新 profile `experiment_2026-04-xx_atr_trail.json` を作って v3 (SL=20%) の健全化リプレース候補を探索
 
 ## v4 promotion （PR-12 マージ後の自然な流れ）
 

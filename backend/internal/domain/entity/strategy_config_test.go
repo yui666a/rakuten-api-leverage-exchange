@@ -251,6 +251,7 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
     "stop_loss_percent": 5,
     "take_profit_percent": 10,
     "stop_loss_atr_multiplier": 0,
+    "trailing_atr_multiplier": 0,
     "max_position_amount": 100000,
     "max_daily_loss": 50000
   },
