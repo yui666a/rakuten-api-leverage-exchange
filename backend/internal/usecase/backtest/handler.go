@@ -584,6 +584,12 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 	result.StochD14_3 = floatToPtr(stochD)
 	result.StochRSI14 = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
 
+	// PR-8: Ichimoku. Mirror the live pipeline; nil when all five lines
+	// are still in warmup.
+	if snap := buildIchimokuSnapshotBT(indicator.Ichimoku(highs, lows, closes, 9, 26, 52)); snap != nil {
+		result.Ichimoku = snap
+	}
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, c := range candles {
@@ -623,6 +629,23 @@ func floatToPtr(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+// buildIchimokuSnapshotBT mirrors usecase.buildIchimokuSnapshot for the
+// backtest path. Kept as a sibling helper (rather than exported) so both
+// calculators evolve independently without cross-package coupling.
+func buildIchimokuSnapshotBT(r indicator.IchimokuResult) *entity.IchimokuSnapshot {
+	snap := &entity.IchimokuSnapshot{
+		Tenkan:  floatToPtr(r.Tenkan),
+		Kijun:   floatToPtr(r.Kijun),
+		SenkouA: floatToPtr(r.SenkouA),
+		SenkouB: floatToPtr(r.SenkouB),
+		Chikou:  floatToPtr(r.Chikou),
+	}
+	if snap.Tenkan == nil && snap.Kijun == nil && snap.SenkouA == nil && snap.SenkouB == nil && snap.Chikou == nil {
+		return nil
+	}
+	return snap
 }
 
 func intervalDurationMillis(interval string) (int64, error) {

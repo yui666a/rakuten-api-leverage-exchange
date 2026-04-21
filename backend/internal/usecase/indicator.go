@@ -83,6 +83,12 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.StochD14_3 = toPtr(stochD)
 	result.StochRSI14 = toPtr(indicator.StochasticRSI(prices, 14, 14))
 
+	// PR-8: Ichimoku. Each of the five lines may be NaN independently during
+	// warmup; buildIchimokuSnapshot returns nil when every line is unknown.
+	if snap := buildIchimokuSnapshot(indicator.Ichimoku(highs, lows, prices, 9, 26, 52)); snap != nil {
+		result.Ichimoku = snap
+	}
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, cd := range candles {
@@ -123,4 +129,21 @@ func toPtr(v float64) *float64 {
 		return nil
 	}
 	return &v
+}
+
+// buildIchimokuSnapshot maps an indicator.IchimokuResult onto the entity
+// pointer snapshot. Returns nil when every line is NaN (pure warmup state)
+// so consumers can cheaply branch on `if snap := ...; snap != nil`.
+func buildIchimokuSnapshot(r indicator.IchimokuResult) *entity.IchimokuSnapshot {
+	snap := &entity.IchimokuSnapshot{
+		Tenkan:  toPtr(r.Tenkan),
+		Kijun:   toPtr(r.Kijun),
+		SenkouA: toPtr(r.SenkouA),
+		SenkouB: toPtr(r.SenkouB),
+		Chikou:  toPtr(r.Chikou),
+	}
+	if snap.Tenkan == nil && snap.Kijun == nil && snap.SenkouA == nil && snap.SenkouB == nil && snap.Chikou == nil {
+		return nil
+	}
+	return snap
 }

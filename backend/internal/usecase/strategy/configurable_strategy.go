@@ -83,6 +83,7 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 		HTFEnabled:           profile.HTFFilter.Enabled,
 		HTFBlockCounterTrend: profile.HTFFilter.BlockCounterTrend,
 		HTFAlignmentBoost:    profile.HTFFilter.AlignmentBoost,
+		HTFMode:              profile.HTFFilter.Mode, // PR-8
 	}
 	engine := usecase.NewStrategyEngineWithOptions(resolver, engineOpts)
 
