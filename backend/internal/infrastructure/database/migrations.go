@@ -229,6 +229,16 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	// PR-1: バックテスト結果の breakdown (exit 理由別 / シグナル別集計) を
+	// 1 本の JSON カラムに格納する。クエリで breakdown の内部構造に対して
+	// 直接フィルタする要件が無く、常に summary と一緒に取る読み取り専用
+	// データなので、正規化テーブルではなく JSON TEXT 1 本で十分。
+	// NULL = レガシー行 (PR-1 マージ前に作成された行)。
+	if err := addColumnIfNotExists(db, "backtest_results", "breakdown_json",
+		"breakdown_json TEXT DEFAULT NULL"); err != nil {
+		return fmt.Errorf("backtest_results alter breakdown_json: %w", err)
+	}
+
 	// PDCA 関連カラムの検索を高速化する部分インデックス。NULL/空文字列を除外して
 	// インデックスサイズを抑える (大半の既存行は空文字列/NULL)。
 	pdcaIndexes := []string{
