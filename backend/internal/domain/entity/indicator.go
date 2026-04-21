@@ -37,5 +37,21 @@ type IndicatorSet struct {
 	StochD14_3 *float64 `json:"stochD14_3"`
 	StochRSI14 *float64 `json:"stochRsi14"`
 
+	// PR-8: Ichimoku cloud snapshot. nil when the warmup is insufficient.
+	// Individual fields inside IchimokuSnapshot are omitted from JSON when
+	// they could not be computed (yields cleaner payloads during warmup).
+	Ichimoku *IchimokuSnapshot `json:"ichimoku,omitempty"`
+
 	Timestamp int64 `json:"timestamp"`
+}
+
+// IchimokuSnapshot is the per-bar Ichimoku Kinkō Hyō reading exposed to the
+// Strategy layer and Frontend. All fields are pointers so the JSON payload
+// distinguishes "not yet defined during warmup" from "zero".
+type IchimokuSnapshot struct {
+	Tenkan  *float64 `json:"tenkan,omitempty"`  // conversion line (9)
+	Kijun   *float64 `json:"kijun,omitempty"`   // base line (26)
+	SenkouA *float64 `json:"senkouA,omitempty"` // leading span A (Tenkan+Kijun)/2, plotted +26
+	SenkouB *float64 `json:"senkouB,omitempty"` // leading span B (high/low mid over 52), plotted +26
+	Chikou  *float64 `json:"chikou,omitempty"`  // lagging span — latest close
 }

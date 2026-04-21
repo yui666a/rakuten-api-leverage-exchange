@@ -94,6 +94,16 @@ type HTFFilterConfig struct {
 	Enabled           bool    `json:"enabled"`
 	BlockCounterTrend bool    `json:"block_counter_trend"`
 	AlignmentBoost    float64 `json:"alignment_boost"`
+	// PR-8: Mode selects the HTF trend-detection method.
+	//   - "" or "ema":      legacy SMA20/SMA50 comparison (default).
+	//   - "ichimoku":       price vs. cloud on the higher timeframe.
+	//                       above-cloud -> uptrend, below-cloud -> downtrend,
+	//                       inside-cloud -> neutral (blocks both directions
+	//                       when block_counter_trend is true).
+	// A missing Ichimoku snapshot falls through to "unknown" and takes no
+	// action (neither blocks nor boosts) so partial warmup never silently
+	// opens up a counter-trend signal.
+	Mode string `json:"mode,omitempty"`
 }
 
 // StrategyRiskConfig configures the per-strategy risk envelope (position

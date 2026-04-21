@@ -54,6 +54,9 @@ type StrategyEngineOptions struct {
 	HTFEnabled           bool    // if false, skip the HTF filter entirely; default true
 	HTFBlockCounterTrend bool    // if true, block signals against higher-TF trend; default true
 	HTFAlignmentBoost    float64 // confidence boost when HTF aligns; default 0.1
+	// PR-8: selects the HTF trend-detection method ("ema" = legacy SMA20/50,
+	// "ichimoku" = price vs. cloud). Empty string defaults to "ema".
+	HTFMode string
 
 	// Stance-level feature toggles
 	EnableTrendFollow bool // if false, TREND_FOLLOW stance yields HOLD; default true
@@ -208,7 +211,7 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 		}
 	}
 
-	if !e.options.HTFEnabled || higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
+	if !e.options.HTFEnabled || higherTF == nil {
 		return signal, nil
 	}
 
@@ -217,22 +220,37 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 		return signal, nil
 	}
 
-	higherUptrend := *higherTF.SMA20 > *higherTF.SMA50
+	// PR-8: trend direction on the higher timeframe. Three-valued so the
+	// ichimoku "inside the cloud" state can block both directions. When
+	// the measurement is unavailable (early warmup), we fall through and
+	// take no action — same as the legacy "missing SMA => skip" path.
+	dir := htfTrendDirection(e.options.HTFMode, higherTF, lastPrice)
+	if dir == htfTrendUnknown {
+		return signal, nil
+	}
 
 	if e.options.HTFBlockCounterTrend {
-		if signal.Action == entity.SignalActionBuy && !higherUptrend {
+		if signal.Action == entity.SignalActionBuy && dir != htfTrendUp {
+			reason := "MTF filter: higher timeframe downtrend blocks buy"
+			if dir == htfTrendNeutral {
+				reason = "MTF filter: higher timeframe inside cloud blocks buy"
+			}
 			return &entity.Signal{
 				SymbolID:  indicators.SymbolID,
 				Action:    entity.SignalActionHold,
-				Reason:    "MTF filter: higher timeframe downtrend blocks buy",
+				Reason:    reason,
 				Timestamp: signal.Timestamp,
 			}, nil
 		}
-		if signal.Action == entity.SignalActionSell && higherUptrend {
+		if signal.Action == entity.SignalActionSell && dir != htfTrendDown {
+			reason := "MTF filter: higher timeframe uptrend blocks sell"
+			if dir == htfTrendNeutral {
+				reason = "MTF filter: higher timeframe inside cloud blocks sell"
+			}
 			return &entity.Signal{
 				SymbolID:  indicators.SymbolID,
 				Action:    entity.SignalActionHold,
-				Reason:    "MTF filter: higher timeframe uptrend blocks sell",
+				Reason:    reason,
 				Timestamp: signal.Timestamp,
 			}, nil
 		}
@@ -240,13 +258,62 @@ func (e *StrategyEngine) EvaluateWithHigherTFAt(
 
 	// Signal aligns with higher TF: boost confidence by HTFAlignmentBoost
 	// (capped at 1.0). Boost only applies when the signal direction matches
-	// the higher-timeframe trend direction.
-	aligned := (signal.Action == entity.SignalActionBuy && higherUptrend) ||
-		(signal.Action == entity.SignalActionSell && !higherUptrend)
+	// the higher-timeframe trend direction. Neutral HTF produces no boost.
+	aligned := (signal.Action == entity.SignalActionBuy && dir == htfTrendUp) ||
+		(signal.Action == entity.SignalActionSell && dir == htfTrendDown)
 	if aligned {
 		signal.Confidence = math.Min(signal.Confidence+e.options.HTFAlignmentBoost, 1.0)
 	}
 	return signal, nil
+}
+
+type htfTrend int
+
+const (
+	htfTrendUnknown htfTrend = iota
+	htfTrendUp
+	htfTrendDown
+	htfTrendNeutral
+)
+
+// htfTrendDirection returns the higher-timeframe trend classification using
+// the configured HTF mode. "ema" (default) mirrors the legacy
+// SMA20>SMA50/SMA20<SMA50 behaviour; "ichimoku" uses the cloud position.
+// htfTrendUnknown is returned when the required inputs are unavailable so
+// the caller can short-circuit without taking action.
+func htfTrendDirection(mode string, higherTF *entity.IndicatorSet, lastPrice float64) htfTrend {
+	switch mode {
+	case "ichimoku":
+		if higherTF == nil || higherTF.Ichimoku == nil {
+			return htfTrendUnknown
+		}
+		ic := higherTF.Ichimoku
+		if ic.SenkouA == nil || ic.SenkouB == nil {
+			return htfTrendUnknown
+		}
+		upper := *ic.SenkouA
+		lower := *ic.SenkouB
+		if lower > upper {
+			upper, lower = lower, upper
+		}
+		switch {
+		case lastPrice > upper:
+			return htfTrendUp
+		case lastPrice < lower:
+			return htfTrendDown
+		default:
+			return htfTrendNeutral
+		}
+	default:
+		// "" and "ema" both use the legacy SMA cross.
+		if higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
+			return htfTrendUnknown
+		}
+		if *higherTF.SMA20 > *higherTF.SMA50 {
+			return htfTrendUp
+		}
+		return htfTrendDown
+	}
 }
 
 // Evaluate はテクニカル指標と現在価格から売買シグナルを生成する。
