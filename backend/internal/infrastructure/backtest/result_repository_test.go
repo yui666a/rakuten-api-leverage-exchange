@@ -242,6 +242,106 @@ func TestResultRepository_PDCAFieldsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestResultRepository_BreakdownRoundTrip confirms that the per-exit-reason
+// and per-signal-source breakdown maps are serialised to breakdown_json on
+// Save and restored on Find/List.
+//
+// This test is the primary guard against cross-wire bugs between
+// SummaryReporter → entity.BacktestSummary → DB column. If the breakdown
+// maps are silently dropped at the persistence boundary, Frontend / API
+// consumers see empty breakdowns regardless of what the reporter produced.
+func TestResultRepository_BreakdownRoundTrip(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	result := entity.BacktestResult{
+		ID:        "bt-breakdown-1",
+		CreatedAt: time.Now().Unix(),
+		Config: entity.BacktestConfig{
+			Symbol:          "LTC_JPY",
+			SymbolID:        10,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   1000,
+			ToTimestamp:     2000,
+		},
+		Summary: entity.BacktestSummary{
+			InitialBalance: 100000,
+			FinalBalance:   105000,
+			TotalTrades:    3,
+			ByExitReason: map[string]entity.SummaryBreakdown{
+				"take_profit": {Trades: 2, WinTrades: 2, WinRate: 100, TotalPnL: 70, AvgPnL: 35, ProfitFactor: 0},
+				"stop_loss":   {Trades: 1, LossTrades: 1, TotalPnL: -20, AvgPnL: -20},
+			},
+			BySignalSource: map[string]entity.SummaryBreakdown{
+				"trend_follow": {Trades: 2, WinTrades: 1, LossTrades: 1, WinRate: 50, TotalPnL: 30, AvgPnL: 15, ProfitFactor: 2.5},
+				"contrarian":   {Trades: 1, WinTrades: 1, WinRate: 100, TotalPnL: 20, AvgPnL: 20},
+			},
+		},
+	}
+	if err := repo.Save(ctx, result); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, result.ID)
+	if err != nil || found == nil {
+		t.Fatalf("find: err=%v found=%v", err, found)
+	}
+	if len(found.Summary.ByExitReason) != 2 {
+		t.Fatalf("ByExitReason len=%d, want 2", len(found.Summary.ByExitReason))
+	}
+	if found.Summary.ByExitReason["take_profit"].Trades != 2 {
+		t.Fatalf("take_profit bucket round-trip failed: %+v", found.Summary.ByExitReason["take_profit"])
+	}
+	if found.Summary.ByExitReason["take_profit"].TotalPnL != 70 {
+		t.Fatalf("take_profit TotalPnL round-trip failed: %v", found.Summary.ByExitReason["take_profit"].TotalPnL)
+	}
+	if len(found.Summary.BySignalSource) != 2 {
+		t.Fatalf("BySignalSource len=%d, want 2", len(found.Summary.BySignalSource))
+	}
+	if found.Summary.BySignalSource["trend_follow"].ProfitFactor != 2.5 {
+		t.Fatalf("trend_follow PF round-trip failed: %v", found.Summary.BySignalSource["trend_follow"].ProfitFactor)
+	}
+}
+
+// TestResultRepository_LegacyRowWithoutBreakdown confirms backward
+// compatibility: rows persisted before PR-1 (breakdown_json = NULL) must
+// still load successfully with empty breakdown maps on the Summary.
+func TestResultRepository_LegacyRowWithoutBreakdown(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	result := entity.BacktestResult{
+		ID:        "bt-legacy-1",
+		CreatedAt: time.Now().Unix(),
+		Config: entity.BacktestConfig{
+			Symbol:          "LTC_JPY",
+			SymbolID:        10,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   1000,
+			ToTimestamp:     2000,
+		},
+		Summary: entity.BacktestSummary{
+			InitialBalance: 100000,
+			FinalBalance:   100000,
+			// No ByExitReason / BySignalSource — simulates a legacy row.
+		},
+	}
+	if err := repo.Save(ctx, result); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, result.ID)
+	if err != nil || found == nil {
+		t.Fatalf("find: err=%v found=%v", err, found)
+	}
+	if len(found.Summary.ByExitReason) != 0 {
+		t.Fatalf("expected empty ByExitReason for legacy row, got %v", found.Summary.ByExitReason)
+	}
+	if len(found.Summary.BySignalSource) != 0 {
+		t.Fatalf("expected empty BySignalSource for legacy row, got %v", found.Summary.BySignalSource)
+	}
+}
+
 // newTestRepo opens a fresh in-memory-backed SQLite DB in a temp directory,
 // runs migrations, and returns a ResultRepository ready for use.
 func newTestRepo(t *testing.T) *ResultRepository {

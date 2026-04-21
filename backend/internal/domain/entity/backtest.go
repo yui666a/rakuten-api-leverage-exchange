@@ -38,6 +38,30 @@ type BacktestSummary struct {
 	// if the coverage ratio (windows with >=3 trades / total windows) is below 50%,
 	// the overall value is reported as 0 to signal low reliability.
 	BiweeklyWinRate float64 `json:"biweeklyWinRate"`
+
+	// ByExitReason buckets trades by their exit reason (e.g. "reverse_signal",
+	// "stop_loss", "take_profit", "end_of_test"). Empty map for legacy rows
+	// persisted before PR-1.
+	ByExitReason map[string]SummaryBreakdown `json:"byExitReason,omitempty"`
+
+	// BySignalSource buckets trades by their originating signal source
+	// ("trend_follow" / "contrarian" / "breakout" / "unknown"). Empty map for
+	// legacy rows persisted before PR-1.
+	BySignalSource map[string]SummaryBreakdown `json:"bySignalSource,omitempty"`
+}
+
+// SummaryBreakdown holds aggregated metrics for a subset of trades grouped by
+// some key (exit reason, signal source, regime, etc.). Values are scoped to
+// the subset only — TotalPnL/AvgPnL/ProfitFactor are computed within the
+// subset, not relative to the overall run.
+type SummaryBreakdown struct {
+	Trades       int     `json:"trades"`
+	WinTrades    int     `json:"winTrades"`
+	LossTrades   int     `json:"lossTrades"`
+	WinRate      float64 `json:"winRate"`      // 0-100 scale, matches BacktestSummary.WinRate
+	TotalPnL     float64 `json:"totalPnL"`     // JPY
+	AvgPnL       float64 `json:"avgPnL"`       // JPY per trade; 0 when Trades == 0
+	ProfitFactor float64 `json:"profitFactor"` // sum(wins) / |sum(losses)|; 0 if no losses
 }
 
 // BacktestTradeRecord is a closed trade record produced by the simulator.

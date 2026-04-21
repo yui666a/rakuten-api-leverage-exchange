@@ -66,6 +66,11 @@ func (r *SummaryReporter) BuildSummary(
 	sharpe := calcSharpe(equityPoints)
 	biweekly := ComputeBiweeklyWinRate(trades, config.FromTimestamp, config.ToTimestamp)
 
+	byExit := BuildBreakdown(trades, func(t entity.BacktestTradeRecord) string { return t.ReasonExit })
+	bySource := BuildBreakdown(trades, func(t entity.BacktestTradeRecord) string {
+		return parseSignalSource(t.ReasonEntry)
+	})
+
 	return entity.BacktestSummary{
 		PeriodFrom:         config.FromTimestamp,
 		PeriodTo:           config.ToTimestamp,
@@ -84,6 +89,8 @@ func (r *SummaryReporter) BuildSummary(
 		TotalCarryingCost:  carryingCost,
 		TotalSpreadCost:    spreadCost,
 		BiweeklyWinRate:    biweekly,
+		ByExitReason:       byExit,
+		BySignalSource:     bySource,
 	}
 }
 

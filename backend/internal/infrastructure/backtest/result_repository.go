@@ -3,6 +3,7 @@ package backtest
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,11 +22,12 @@ const resultColumns = `id, created_at, symbol, symbol_id, primary_interval, high
 	from_ts, to_ts, initial_balance, final_balance, total_return, total_trades,
 	win_trades, loss_trades, win_rate, profit_factor, max_drawdown, max_drawdown_balance,
 	sharpe_ratio, avg_hold_seconds, total_carrying_cost, total_spread_cost,
-	profile_name, pdca_cycle_id, hypothesis, parent_result_id, biweekly_win_rate`
+	profile_name, pdca_cycle_id, hypothesis, parent_result_id, biweekly_win_rate,
+	breakdown_json`
 
-// resultColumnPlaceholders は resultColumns と同じ個数 (27) の INSERT プレースホルダ。
+// resultColumnPlaceholders は resultColumns と同じ個数 (28) の INSERT プレースホルダ。
 // resultColumns のカラム数を変更した場合はここも必ず同期させること。
-const resultColumnPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
+const resultColumnPlaceholders = `?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?`
 
 type ResultRepository struct {
 	db *sql.DB
@@ -63,6 +65,21 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		parentID = sql.NullString{String: *result.ParentResultID, Valid: true}
 	}
 
+	// breakdown_json は両マップが空なら NULL (レガシー行と同形式)。
+	// 片方でも非空ならまとめて 1 本の JSON オブジェクトにシリアライズ。
+	breakdownBlob := sql.NullString{}
+	if len(result.Summary.ByExitReason) > 0 || len(result.Summary.BySignalSource) > 0 {
+		payload := breakdownPayload{
+			ByExitReason:   result.Summary.ByExitReason,
+			BySignalSource: result.Summary.BySignalSource,
+		}
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal breakdown: %w", err)
+		}
+		breakdownBlob = sql.NullString{String: string(b), Valid: true}
+	}
+
 	_, err = tx.ExecContext(ctx, `INSERT INTO backtest_results (`+resultColumns+`) VALUES (`+resultColumnPlaceholders+`)`,
 		result.ID,
 		result.CreatedAt,
@@ -91,6 +108,7 @@ func (r *ResultRepository) Save(ctx context.Context, result entity.BacktestResul
 		result.Hypothesis,
 		parentID,
 		result.Summary.BiweeklyWinRate,
+		breakdownBlob,
 	)
 	if err != nil {
 		return fmt.Errorf("insert backtest result: %w", err)
@@ -279,8 +297,17 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// breakdownPayload は breakdown_json カラムの中身に対応する serialization
+// envelope。将来 regime 別・期間別など新たな breakdown を追加しても、
+// 既存キーを無視して後方互換に読める形にしておく。
+type breakdownPayload struct {
+	ByExitReason   map[string]entity.SummaryBreakdown `json:"byExitReason,omitempty"`
+	BySignalSource map[string]entity.SummaryBreakdown `json:"bySignalSource,omitempty"`
+}
+
 func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 	var parentID sql.NullString
+	var breakdownBlob sql.NullString
 	err := scanner.Scan(
 		&result.ID,
 		&result.CreatedAt,
@@ -309,6 +336,7 @@ func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 		&result.Hypothesis,
 		&parentID,
 		&result.Summary.BiweeklyWinRate,
+		&breakdownBlob,
 	)
 	if err != nil {
 		return err
@@ -318,6 +346,14 @@ func scanResultRow(scanner rowScanner, result *entity.BacktestResult) error {
 		result.ParentResultID = &v
 	} else {
 		result.ParentResultID = nil
+	}
+	if breakdownBlob.Valid && breakdownBlob.String != "" {
+		var payload breakdownPayload
+		// 不正な JSON はレガシー互換のため静かに無視 (breakdown フィールドを空のまま残す)。
+		if err := json.Unmarshal([]byte(breakdownBlob.String), &payload); err == nil {
+			result.Summary.ByExitReason = payload.ByExitReason
+			result.Summary.BySignalSource = payload.BySignalSource
+		}
 	}
 	result.Summary.PeriodFrom = result.Config.FromTimestamp
 	result.Summary.PeriodTo = result.Config.ToTimestamp
