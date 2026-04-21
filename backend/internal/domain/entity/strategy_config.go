@@ -71,6 +71,13 @@ type ContrarianConfig struct {
 	MACDHistogramLimit float64 `json:"macd_histogram_limit"`
 	// PR-6: contrarian fires only when ADX <= ADXMax (0 = gate disabled).
 	ADXMax float64 `json:"adx_max"`
+	// PR-7: contrarian Stochastics gates. 0 = gate disabled.
+	//   - StochEntryMax: contrarian BUY requires %K <= this (oversold).
+	//     Typical value: 20.
+	//   - StochExitMin:  contrarian SELL requires %K >= this (overbought).
+	//     Typical value: 80.
+	StochEntryMax float64 `json:"stoch_entry_max"`
+	StochExitMin  float64 `json:"stoch_exit_min"`
 }
 
 // BreakoutConfig configures the breakout signal generator.

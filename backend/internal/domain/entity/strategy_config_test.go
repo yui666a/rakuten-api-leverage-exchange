@@ -241,7 +241,9 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
       "rsi_entry": 30,
       "rsi_exit": 70,
       "macd_histogram_limit": 10,
-      "adx_max": 0
+      "adx_max": 0,
+      "stoch_entry_max": 0,
+      "stoch_exit_min": 0
     },
     "breakout": {
       "enabled": true,

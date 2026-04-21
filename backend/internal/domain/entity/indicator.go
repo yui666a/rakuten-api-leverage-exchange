@@ -28,5 +28,14 @@ type IndicatorSet struct {
 	PlusDI14  *float64 `json:"plusDi14"`
 	MinusDI14 *float64 `json:"minusDi14"`
 
+	// PR-7: Stochastics family.
+	// StochK14_3 = slow %K (raw stoch over 14 bars, smoothed 3).
+	// StochD14_3 = %D (SMA3 of slow %K).
+	// StochRSI14 = stochastic RSI over a 14-bar RSI window.
+	// nil when insufficient data.
+	StochK14_3 *float64 `json:"stochK14_3"`
+	StochD14_3 *float64 `json:"stochD14_3"`
+	StochRSI14 *float64 `json:"stochRsi14"`
+
 	Timestamp int64 `json:"timestamp"`
 }
