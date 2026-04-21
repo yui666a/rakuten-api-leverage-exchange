@@ -356,13 +356,48 @@ A. 多くは期間不足（< 14 日）か、トレード数不足でカバレッ
 
 ## 8. 次に改善したい箇所（Known TODOs）
 
+### 小さめの UX / 運用改善
+
 - プロファイル名全件 API (`GET /backtest/profiles`) — 現状フロントの絞り込みは現ページ内の distinct のみ
 - `hypothesis` のフロント表示（詳細パネル）
 - 指標の計算期間 (RSI 14 など) をプロファイル駆動にする — 現状はハードコード。`IndicatorCalculator` の拡張が必要
 - CLI の `--pdca-cycle-id` / `--hypothesis` / `--parent-result-id` フラグ — 現状これらは API 経由でしか渡せない
 - 本番昇格オペレーションのフロント UI
 
-これらは設計書 §9 の "今回実装しないもの" または新規課題として残っている。余裕があるサイクルで着手可能。
+### PDCA v2 基盤強化（計画あり、未実装）
+
+2026-04-21 の 20 分 PDCA チャレンジ (`docs/pdca/2026-04-21_promotion_v3.md`) で判明した基盤不足に対する計画を [`docs/design/2026-04-21-pdca-v2-infrastructure-plan.md`](../design/2026-04-21-pdca-v2-infrastructure-plan.md) に記載。全 16 PR のうち Phase B の 6 PR を先行実装予定。
+
+**Phase B（先行実装）**:
+- PR-1: Exit 理由別 / シグナル別サマリ
+- PR-2: 複数期間一括バックテスト API + 頑健性スコア
+- PR-3: Drawdown 詳細 / Time-in-market / Expectancy
+- PR-12: ATR Trailing Stop（未配線の `stop_loss_atr_multiplier` 実装。現 prod の SL=20% 不健全を解消）
+- PR-6: ADX (+DI/-DI) — 2024 年負けの最有力対策
+- PR-13: Walk-forward 最適化 — 過学習の根本対策
+
+**残り 10 PR（Phase B 後に別計画で実装）**:
+- PR-4: Slippage/Spread 敏感度テスト
+- PR-5: Regime 分類（bull-trend/bear-trend/range/volatile）
+- PR-7: Stochastics + Stochastic RSI（FE に描画実装済み、Strategy 未配線）
+- PR-8: Ichimoku（FE に描画実装済み、Strategy 未配線）
+- PR-9: OBV / CMF
+- PR-10: VWAP / Anchored VWAP
+- PR-11: Donchian Channel
+- PR-14: Regime-conditional プロファイル（PR-5 の上）
+- PR-15: 部分約定 / 分割利確 (partial TP)
+- PR-16: 動的ポジションサイジング（ATR risk / fractional Kelly）
+
+### 未配線フィールド（Phase B で解消）
+
+以下は profile 上に存在するが `StrategyEngine` に届いていない。いじっても結果が baseline と完全一致する。
+
+| フィールド | 現状 | 解消予定 |
+|---|---|---|
+| `strategy_risk.stop_loss_atr_multiplier` | 未配線 | PR-12 (ATR Trailing Stop) |
+| `htf_filter.alignment_boost` | 影響が極小か未配線か不明 | PR-6 以降で再調査 |
+
+いずれも cycle08/09 のように「変えても baseline と同じ」という罠になるので、新指標を追加する PR では必ず **配線確認テスト**（値を変えたらバックテスト結果も変わる assertion）を DoD に含めること。
 
 ---
 
