@@ -361,6 +361,11 @@ func TestResultRepository_DrawdownDetailRoundTrip(t *testing.T) {
 		found.Summary.DrawdownPeriods[0].DurationBars != 5 {
 		t.Fatalf("DrawdownPeriods[0] round-trip failed: %+v", found.Summary.DrawdownPeriods[0])
 	}
+	if found.Summary.DrawdownPeriods[1].Depth != 0.03 ||
+		found.Summary.DrawdownPeriods[1].RecoveryBars != 7 ||
+		found.Summary.DrawdownPeriods[1].DurationBars != 3 {
+		t.Fatalf("DrawdownPeriods[1] round-trip failed: %+v", found.Summary.DrawdownPeriods[1])
+	}
 	if found.Summary.UnrecoveredDrawdown == nil {
 		t.Fatalf("UnrecoveredDrawdown missing")
 	}
@@ -399,8 +404,25 @@ func TestResultRepository_DrawdownDetailRoundTrip(t *testing.T) {
 	if listed == nil {
 		t.Fatalf("result not returned by List")
 	}
+	// List must hit the same scan path as FindByID, so every PR-3 field we
+	// care about round-tripping must come through it too.
 	if listed.Summary.ExpectancyPerTrade != 25.5 {
 		t.Fatalf("List failed to populate ExpectancyPerTrade: %v", listed.Summary.ExpectancyPerTrade)
+	}
+	if listed.Summary.DrawdownThreshold != 0.02 {
+		t.Fatalf("List DrawdownThreshold = %v, want 0.02", listed.Summary.DrawdownThreshold)
+	}
+	if listed.Summary.TimeInMarketRatio != 0.72 {
+		t.Fatalf("List TimeInMarketRatio = %v, want 0.72", listed.Summary.TimeInMarketRatio)
+	}
+	if listed.Summary.LongestFlatStreakBars != 15 {
+		t.Fatalf("List LongestFlatStreakBars = %d, want 15", listed.Summary.LongestFlatStreakBars)
+	}
+	if listed.Summary.UnrecoveredDrawdown == nil {
+		t.Fatalf("List dropped UnrecoveredDrawdown")
+	}
+	if listed.Summary.UnrecoveredDrawdown.RecoveryBars != -1 {
+		t.Fatalf("List UnrecoveredDrawdown.RecoveryBars = %d, want -1", listed.Summary.UnrecoveredDrawdown.RecoveryBars)
 	}
 }
 
