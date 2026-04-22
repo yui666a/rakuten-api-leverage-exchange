@@ -17,12 +17,16 @@ import (
 // loading. The callback receives the resolved (profile, is/oos timestamps)
 // and returns a ready-to-run backtest pair.
 type WalkForwardInput struct {
-	BaseProfile    entity.StrategyProfile
-	Windows        []WalkForwardWindow
-	Grid           []map[string]float64 // pre-expanded combinations
-	Objective      string               // "return" | "sharpe" | "profit_factor"
-	PDCACycleID    string
-	Hypothesis     string
+	BaseProfile entity.StrategyProfile
+	Windows     []WalkForwardWindow
+	// Grid is the legacy numeric-only pre-expanded grid. New callers that
+	// also use string axes (e.g. htf_filter.mode) should populate
+	// Combinations instead. When both are set, Combinations wins.
+	Grid         []map[string]float64
+	Combinations []GridCombination
+	Objective    string // "return" | "sharpe" | "profit_factor"
+	PDCACycleID  string
+	Hypothesis   string
 	ParentResultID *string
 
 	// RunWindow is called per (window, param-combination) for the IS phase
@@ -44,22 +48,24 @@ const (
 // WalkForwardWindowResult is the per-window output: the best grid combo
 // chosen on IS, every grid combo's IS summary, and the unbiased OOS result.
 type WalkForwardWindowResult struct {
-	Index          int                   `json:"index"`
-	InSampleFrom   int64                 `json:"inSampleFrom"`
-	InSampleTo     int64                 `json:"inSampleTo"`
-	OOSFrom        int64                 `json:"oosFrom"`
-	OOSTo          int64                 `json:"oosTo"`
-	BestParameters map[string]float64    `json:"bestParameters"`
-	ISResults      []WalkForwardISResult `json:"isResults"`
-	OOSResult      entity.BacktestResult `json:"oosResult"`
+	Index                int                   `json:"index"`
+	InSampleFrom         int64                 `json:"inSampleFrom"`
+	InSampleTo           int64                 `json:"inSampleTo"`
+	OOSFrom              int64                 `json:"oosFrom"`
+	OOSTo                int64                 `json:"oosTo"`
+	BestParameters       map[string]float64    `json:"bestParameters"`
+	BestStringParameters map[string]string     `json:"bestStringParameters,omitempty"`
+	ISResults            []WalkForwardISResult `json:"isResults"`
+	OOSResult            entity.BacktestResult `json:"oosResult"`
 }
 
 // WalkForwardISResult records a single IS run per grid combination.
 type WalkForwardISResult struct {
-	Parameters map[string]float64     `json:"parameters"`
-	Summary    entity.BacktestSummary `json:"summary"`
-	Score      float64                `json:"score"`
-	ResultID   string                 `json:"resultId,omitempty"`
+	Parameters       map[string]float64     `json:"parameters"`
+	StringParameters map[string]string      `json:"stringParameters,omitempty"`
+	Summary          entity.BacktestSummary `json:"summary"`
+	Score            float64                `json:"score"`
+	ResultID         string                 `json:"resultId,omitempty"`
 }
 
 // WalkForwardResult is the envelope returned by Run. Individual per-window
@@ -105,8 +111,17 @@ func (r *WalkForwardRunner) Run(ctx context.Context, in WalkForwardInput) (*Walk
 	if len(in.Windows) == 0 {
 		return nil, fmt.Errorf("walk-forward: at least one window is required")
 	}
-	if len(in.Grid) == 0 {
-		return nil, fmt.Errorf("walk-forward: grid must contain at least one combination (use [{}] for baseline-only)")
+	// Prefer Combinations (supports mixed numeric+string axes) and fall
+	// back to Grid for existing callers. Both empty = invalid.
+	combos := in.Combinations
+	if len(combos) == 0 {
+		if len(in.Grid) == 0 {
+			return nil, fmt.Errorf("walk-forward: grid must contain at least one combination (use [{}] for baseline-only)")
+		}
+		combos = make([]GridCombination, 0, len(in.Grid))
+		for _, g := range in.Grid {
+			combos = append(combos, GridCombination{Numeric: g, String: map[string]string{}})
+		}
 	}
 	if in.RunWindow == nil {
 		return nil, fmt.Errorf("walk-forward: RunWindow callback is required")
@@ -119,16 +134,16 @@ func (r *WalkForwardRunner) Run(ctx context.Context, in WalkForwardInput) (*Walk
 	windowResults := make([]WalkForwardWindowResult, len(in.Windows))
 
 	for wi, w := range in.Windows {
-		isResults := make([]WalkForwardISResult, len(in.Grid))
+		isResults := make([]WalkForwardISResult, len(combos))
 		var mu sync.Mutex
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(maxP)
-		for gi, combo := range in.Grid {
+		for gi, combo := range combos {
 			gi := gi
 			combo := combo
 			g.Go(func() error {
-				profile, err := ApplyOverrides(in.BaseProfile, combo)
+				profile, err := ApplyCombination(in.BaseProfile, combo)
 				if err != nil {
 					return fmt.Errorf("window %d combo %d: %w", wi, gi, err)
 				}
@@ -142,10 +157,11 @@ func (r *WalkForwardRunner) Run(ctx context.Context, in WalkForwardInput) (*Walk
 				score := SelectByObjective(res.Summary, in.Objective)
 				mu.Lock()
 				isResults[gi] = WalkForwardISResult{
-					Parameters: combo,
-					Summary:    res.Summary,
-					Score:      score,
-					ResultID:   res.ID,
+					Parameters:       combo.Numeric,
+					StringParameters: combo.String,
+					Summary:          res.Summary,
+					Score:            score,
+					ResultID:         res.ID,
 				}
 				mu.Unlock()
 				return nil
@@ -162,10 +178,10 @@ func (r *WalkForwardRunner) Run(ctx context.Context, in WalkForwardInput) (*Walk
 				bestIdx = i
 			}
 		}
-		bestCombo := isResults[bestIdx].Parameters
+		bestCombo := combos[bestIdx]
 
 		// OOS run with the winning combo.
-		bestProfile, err := ApplyOverrides(in.BaseProfile, bestCombo)
+		bestProfile, err := ApplyCombination(in.BaseProfile, bestCombo)
 		if err != nil {
 			return nil, fmt.Errorf("window %d apply best combo: %w", wi, err)
 		}
@@ -178,14 +194,15 @@ func (r *WalkForwardRunner) Run(ctx context.Context, in WalkForwardInput) (*Walk
 		}
 
 		windowResults[wi] = WalkForwardWindowResult{
-			Index:          w.Index,
-			InSampleFrom:   w.InSampleFrom.UnixMilli(),
-			InSampleTo:     w.InSampleTo.UnixMilli(),
-			OOSFrom:        w.OOSFrom.UnixMilli(),
-			OOSTo:          w.OOSTo.UnixMilli(),
-			BestParameters: bestCombo,
-			ISResults:      isResults,
-			OOSResult:      *oosResult,
+			Index:                w.Index,
+			InSampleFrom:         w.InSampleFrom.UnixMilli(),
+			InSampleTo:           w.InSampleTo.UnixMilli(),
+			OOSFrom:              w.OOSFrom.UnixMilli(),
+			OOSTo:                w.OOSTo.UnixMilli(),
+			BestParameters:       bestCombo.Numeric,
+			BestStringParameters: bestCombo.String,
+			ISResults:            isResults,
+			OOSResult:            *oosResult,
 		}
 	}
 

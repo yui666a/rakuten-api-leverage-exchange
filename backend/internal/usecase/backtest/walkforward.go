@@ -16,6 +16,25 @@ type ParameterOverride struct {
 	Values []float64 `json:"values"`
 }
 
+// ParameterStringOverride declares one string-valued parameter axis.
+// String axes run alongside ParameterOverride in the combined grid but
+// route to ApplyStringOverrides at combo-apply time. Kept as a separate
+// shape so the numeric API contract (including the bestParameters /
+// parameters fields persisted in the WFO envelope and rendered by the
+// frontend) stays as map[string]float64 for every existing caller.
+type ParameterStringOverride struct {
+	Path   string   `json:"path"`
+	Values []string `json:"values"`
+}
+
+// GridCombination is one expanded grid cell. Numeric and String are
+// applied in sequence (ApplyOverrides → ApplyStringOverrides) so either
+// axis can participate in the same grid.
+type GridCombination struct {
+	Numeric map[string]float64
+	String  map[string]string
+}
+
 // WalkForwardWindow is one (in-sample, out-of-sample) slice of the walk-
 // forward schedule. The in-sample window is used to select best grid
 // parameters; the out-of-sample window is used to score them.
@@ -122,21 +141,45 @@ func addMonthsClamped(t time.Time, months int) time.Time {
 		t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), t.Location())
 }
 
-// ExpandGrid computes the full cartesian product of the supplied
-// parameter axes. An empty slice returns exactly one empty combination
-// so callers can always iterate it (baseline-only sweeps just work).
+// ExpandGrid computes the full cartesian product of the supplied numeric
+// parameter axes. An empty slice returns exactly one empty combination so
+// callers can always iterate it (baseline-only sweeps just work).
+//
+// Kept for backwards compatibility with callers that only use numeric
+// axes. For mixed numeric+string grids, use ExpandCombinedGrid.
 func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
-	if len(overrides) == 0 {
-		return []map[string]float64{{}}, nil
+	combos, err := ExpandCombinedGrid(overrides, nil)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]float64, 0, len(combos))
+	for _, c := range combos {
+		out = append(out, c.Numeric)
+	}
+	return out, nil
+}
+
+// ExpandCombinedGrid computes the cartesian product of numeric and
+// string parameter axes. Combinations are produced in a deterministic
+// order (numeric axes before string axes, right-most index varying
+// fastest) so grid-rank comparisons between runs stay stable.
+//
+// Duplicate paths — whether within numeric, within string, or across
+// the two — are rejected: a later axis would silently overwrite an
+// earlier one when applied to the profile, producing a visible combo
+// count greater than distinct combos and a scoring signal that is not
+// what the caller asked for.
+func ExpandCombinedGrid(numeric []ParameterOverride, strs []ParameterStringOverride) ([]GridCombination, error) {
+	if len(numeric) == 0 && len(strs) == 0 {
+		return []GridCombination{{
+			Numeric: map[string]float64{},
+			String:  map[string]string{},
+		}}, nil
 	}
 
-	// Reject duplicate paths up-front: a later axis would silently overwrite
-	// the earlier one in the combo map, producing visible combo count >
-	// distinct combos and a scoring signal that is not what the caller
-	// asked for.
-	seenPaths := make(map[string]struct{}, len(overrides))
+	seenPaths := make(map[string]struct{}, len(numeric)+len(strs))
 	total := 1
-	for _, o := range overrides {
+	for _, o := range numeric {
 		if o.Path == "" {
 			return nil, fmt.Errorf("walk-forward: override path must not be empty")
 		}
@@ -149,30 +192,68 @@ func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
 		}
 		total *= len(o.Values)
 	}
+	for _, o := range strs {
+		if o.Path == "" {
+			return nil, fmt.Errorf("walk-forward: override path must not be empty")
+		}
+		if _, dup := seenPaths[o.Path]; dup {
+			return nil, fmt.Errorf("walk-forward: duplicate override path %q", o.Path)
+		}
+		seenPaths[o.Path] = struct{}{}
+		if len(o.Values) == 0 {
+			return nil, fmt.Errorf("walk-forward: override %q has no values", o.Path)
+		}
+		for _, v := range o.Values {
+			if v == "" {
+				return nil, fmt.Errorf("walk-forward: override %q has empty string value", o.Path)
+			}
+		}
+		total *= len(o.Values)
+	}
 	if total > MaxWalkForwardGridSize {
 		return nil, fmt.Errorf("walk-forward: grid size %d exceeds MAX_GRID_SIZE=%d",
 			total, MaxWalkForwardGridSize)
 	}
 
-	out := make([]map[string]float64, 0, total)
-	indices := make([]int, len(overrides))
+	out := make([]GridCombination, 0, total)
+	nIdx := make([]int, len(numeric))
+	sIdx := make([]int, len(strs))
 	for {
-		combo := make(map[string]float64, len(overrides))
-		for i, o := range overrides {
-			combo[o.Path] = o.Values[indices[i]]
+		combo := GridCombination{
+			Numeric: make(map[string]float64, len(numeric)),
+			String:  make(map[string]string, len(strs)),
+		}
+		for i, o := range numeric {
+			combo.Numeric[o.Path] = o.Values[nIdx[i]]
+		}
+		for i, o := range strs {
+			combo.String[o.Path] = o.Values[sIdx[i]]
 		}
 		out = append(out, combo)
 
-		j := len(overrides) - 1
-		for j >= 0 {
-			indices[j]++
-			if indices[j] < len(overrides[j].Values) {
+		// Advance the combined index (string axes first from the right,
+		// then numeric axes) so string mode swaps hold the numeric cell
+		// steady for one full string pass before stepping numeric.
+		advanced := false
+		for j := len(strs) - 1; j >= 0; j-- {
+			sIdx[j]++
+			if sIdx[j] < len(strs[j].Values) {
+				advanced = true
 				break
 			}
-			indices[j] = 0
-			j--
+			sIdx[j] = 0
 		}
-		if j < 0 {
+		if !advanced {
+			for j := len(numeric) - 1; j >= 0; j-- {
+				nIdx[j]++
+				if nIdx[j] < len(numeric[j].Values) {
+					advanced = true
+					break
+				}
+				nIdx[j] = 0
+			}
+		}
+		if !advanced {
 			break
 		}
 	}
@@ -195,6 +276,9 @@ func ExpandGrid(overrides []ParameterOverride) ([]map[string]float64, error) {
 //   signal_rules.breakout.{volume_ratio_min,adx_min}
 //   stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
 //   htf_filter.alignment_boost
+//
+// String-valued axes (e.g. htf_filter.mode) live on a separate path via
+// ApplyStringOverrides so the numeric API contract stays purely float64.
 func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (entity.StrategyProfile, error) {
 	out := base
 	for path, value := range overrides {
@@ -246,6 +330,52 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 		default:
 			return entity.StrategyProfile{}, fmt.Errorf("walk-forward: unsupported override path %q", path)
 		}
+	}
+	return out, nil
+}
+
+// ApplyStringOverrides returns a deep copy of base with the requested
+// dot-separated string-valued fields set to their override values.
+//
+// Supported override paths (keep this comment in lockstep with the switch
+// below — unknown paths error out, so the switch is the authoritative list):
+//   htf_filter.mode   values: "" | "ema" | "ichimoku"
+//
+// The allowed values for each path are enforced here at the override
+// boundary rather than in StrategyProfile.Validate() so pre-existing
+// profiles that stored a blank or legacy string keep loading, but a WFO
+// grid with a typo fails fast instead of silently running "ema".
+func ApplyStringOverrides(base entity.StrategyProfile, overrides map[string]string) (entity.StrategyProfile, error) {
+	out := base
+	for path, value := range overrides {
+		switch path {
+		case "htf_filter.mode":
+			switch value {
+			case "", "ema", "ichimoku":
+				out.HTFFilter.Mode = value
+			default:
+				return entity.StrategyProfile{}, fmt.Errorf(
+					"walk-forward: unsupported value %q for %q (want \"\", \"ema\", or \"ichimoku\")",
+					value, path)
+			}
+		default:
+			return entity.StrategyProfile{}, fmt.Errorf("walk-forward: unsupported string override path %q", path)
+		}
+	}
+	return out, nil
+}
+
+// ApplyCombination applies both numeric and string overrides from one
+// expanded grid cell. Convenience wrapper used by WalkForwardRunner so
+// the runner doesn't have to thread two maps through every call site.
+func ApplyCombination(base entity.StrategyProfile, combo GridCombination) (entity.StrategyProfile, error) {
+	out, err := ApplyOverrides(base, combo.Numeric)
+	if err != nil {
+		return entity.StrategyProfile{}, err
+	}
+	out, err = ApplyStringOverrides(out, combo.String)
+	if err != nil {
+		return entity.StrategyProfile{}, err
 	}
 	return out, nil
 }

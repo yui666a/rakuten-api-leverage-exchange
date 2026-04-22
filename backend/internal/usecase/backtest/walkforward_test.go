@@ -296,6 +296,175 @@ func TestApplyOverrides_UnknownPathReturnsError(t *testing.T) {
 	}
 }
 
+// -------------- string overrides / combined grid --------------
+
+func TestApplyStringOverrides_HTFMode(t *testing.T) {
+	base := entity.StrategyProfile{HTFFilter: entity.HTFFilterConfig{Mode: "ema"}}
+	got, err := ApplyStringOverrides(base, map[string]string{"htf_filter.mode": "ichimoku"})
+	if err != nil {
+		t.Fatalf("ApplyStringOverrides: %v", err)
+	}
+	if got.HTFFilter.Mode != "ichimoku" {
+		t.Fatalf("Mode = %q, want ichimoku", got.HTFFilter.Mode)
+	}
+	if base.HTFFilter.Mode != "ema" {
+		t.Fatalf("base mutated: %q", base.HTFFilter.Mode)
+	}
+}
+
+func TestApplyStringOverrides_AllowedValues(t *testing.T) {
+	base := entity.StrategyProfile{}
+	for _, v := range []string{"", "ema", "ichimoku"} {
+		if _, err := ApplyStringOverrides(base, map[string]string{"htf_filter.mode": v}); err != nil {
+			t.Fatalf("value %q unexpectedly rejected: %v", v, err)
+		}
+	}
+}
+
+func TestApplyStringOverrides_RejectsBadValue(t *testing.T) {
+	base := entity.StrategyProfile{}
+	_, err := ApplyStringOverrides(base, map[string]string{"htf_filter.mode": "bollinger"})
+	if err == nil {
+		t.Fatal("expected error on unknown mode value")
+	}
+}
+
+func TestApplyStringOverrides_RejectsUnknownPath(t *testing.T) {
+	base := entity.StrategyProfile{}
+	_, err := ApplyStringOverrides(base, map[string]string{"strategy_risk.label": "foo"})
+	if err == nil {
+		t.Fatal("expected error on unknown string override path")
+	}
+}
+
+func TestApplyCombination_NumericAndString(t *testing.T) {
+	base := entity.StrategyProfile{
+		Risk:      entity.StrategyRiskConfig{StopLossPercent: 5},
+		HTFFilter: entity.HTFFilterConfig{Mode: "ema"},
+	}
+	got, err := ApplyCombination(base, GridCombination{
+		Numeric: map[string]float64{"strategy_risk.stop_loss_percent": 14},
+		String:  map[string]string{"htf_filter.mode": "ichimoku"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyCombination: %v", err)
+	}
+	if got.Risk.StopLossPercent != 14 {
+		t.Fatalf("StopLossPercent = %v", got.Risk.StopLossPercent)
+	}
+	if got.HTFFilter.Mode != "ichimoku" {
+		t.Fatalf("Mode = %q", got.HTFFilter.Mode)
+	}
+}
+
+func TestExpandCombinedGrid_NumericOnly(t *testing.T) {
+	got, err := ExpandCombinedGrid([]ParameterOverride{
+		{Path: "strategy_risk.stop_loss_percent", Values: []float64{3, 5}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 combos, got %d", len(got))
+	}
+	for _, c := range got {
+		if len(c.String) != 0 {
+			t.Fatalf("numeric-only grid produced string entries: %+v", c.String)
+		}
+	}
+}
+
+func TestExpandCombinedGrid_StringOnly(t *testing.T) {
+	got, err := ExpandCombinedGrid(nil, []ParameterStringOverride{
+		{Path: "htf_filter.mode", Values: []string{"ema", "ichimoku"}},
+	})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 combos, got %d", len(got))
+	}
+	seen := map[string]bool{}
+	for _, c := range got {
+		seen[c.String["htf_filter.mode"]] = true
+	}
+	if !seen["ema"] || !seen["ichimoku"] {
+		t.Fatalf("missing string values: %+v", seen)
+	}
+}
+
+func TestExpandCombinedGrid_MixedCartesianProduct(t *testing.T) {
+	got, err := ExpandCombinedGrid(
+		[]ParameterOverride{
+			{Path: "strategy_risk.stop_loss_percent", Values: []float64{4, 14}},
+		},
+		[]ParameterStringOverride{
+			{Path: "htf_filter.mode", Values: []string{"ema", "ichimoku"}},
+		},
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("want 4 combos (2x2), got %d", len(got))
+	}
+	type key struct {
+		sl   float64
+		mode string
+	}
+	seen := map[key]bool{}
+	for _, c := range got {
+		k := key{c.Numeric["strategy_risk.stop_loss_percent"], c.String["htf_filter.mode"]}
+		if seen[k] {
+			t.Fatalf("duplicate combo: %+v", k)
+		}
+		seen[k] = true
+	}
+	for _, sl := range []float64{4, 14} {
+		for _, m := range []string{"ema", "ichimoku"} {
+			if !seen[key{sl, m}] {
+				t.Fatalf("missing combo sl=%v mode=%s", sl, m)
+			}
+		}
+	}
+}
+
+func TestExpandCombinedGrid_EmptyBothIsBaseline(t *testing.T) {
+	got, err := ExpandCombinedGrid(nil, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("want 1 baseline combo, got %d", len(got))
+	}
+	if len(got[0].Numeric) != 0 || len(got[0].String) != 0 {
+		t.Fatalf("baseline combo should be empty: %+v", got[0])
+	}
+}
+
+// TestExpandCombinedGrid_RejectsDuplicateAcrossTypes locks in the same
+// contract ExpandGrid enforces for duplicate paths: even if one axis is
+// numeric and the other is string, sharing a Path would silently let
+// ApplyStringOverrides overwrite ApplyOverrides for that field.
+func TestExpandCombinedGrid_RejectsDuplicateAcrossTypes(t *testing.T) {
+	_, err := ExpandCombinedGrid(
+		[]ParameterOverride{{Path: "htf_filter.mode", Values: []float64{0, 1}}},
+		[]ParameterStringOverride{{Path: "htf_filter.mode", Values: []string{"ema", "ichimoku"}}},
+	)
+	if err == nil {
+		t.Fatal("expected error on duplicate path across numeric + string axes")
+	}
+}
+
+func TestExpandCombinedGrid_RejectsEmptyStringValue(t *testing.T) {
+	_, err := ExpandCombinedGrid(nil, []ParameterStringOverride{
+		{Path: "htf_filter.mode", Values: []string{"ema", ""}},
+	})
+	if err == nil {
+		t.Fatal("expected error on empty string value")
+	}
+}
+
 // -------------- objective --------------
 
 func TestSelectByObjective(t *testing.T) {
