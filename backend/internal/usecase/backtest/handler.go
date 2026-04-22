@@ -590,6 +590,13 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 		result.Ichimoku = snap
 	}
 
+	// PR-11: Donchian Channel (20-bar default). Mirror the live pipeline;
+	// nil until 20 bars of history are available.
+	donU, donL, donM := indicator.Donchian(highs, lows, 20)
+	result.Donchian20Upper = floatToPtr(donU)
+	result.Donchian20Lower = floatToPtr(donL)
+	result.Donchian20Middle = floatToPtr(donM)
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, c := range candles {

@@ -78,6 +78,7 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 		BreakoutVolumeRatio:        profile.SignalRules.Breakout.VolumeRatioMin,
 		BreakoutRequireMACDConfirm: profile.SignalRules.Breakout.RequireMACDConfirm,
 		BreakoutADXMin:             profile.SignalRules.Breakout.ADXMin, // PR-6
+		BreakoutDonchianPeriod:     profile.SignalRules.Breakout.DonchianPeriod, // PR-11
 
 		// HTF filter
 		HTFEnabled:           profile.HTFFilter.Enabled,

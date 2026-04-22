@@ -89,6 +89,14 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 		result.Ichimoku = snap
 	}
 
+	// PR-11: Donchian Channel (20-bar default). Mirror the other range-of-N
+	// indicators — NaN until 20 bars of history are available; toPtr
+	// collapses that into nil pointers for downstream gates.
+	donU, donL, donM := indicator.Donchian(highs, lows, 20)
+	result.Donchian20Upper = toPtr(donU)
+	result.Donchian20Lower = toPtr(donL)
+	result.Donchian20Middle = toPtr(donM)
+
 	// Volume indicators
 	volumes := make([]float64, n)
 	for i, cd := range candles {

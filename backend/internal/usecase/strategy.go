@@ -84,6 +84,20 @@ type StrategyEngineOptions struct {
 	ContrarianStochEntryMax float64
 	ContrarianStochExitMin  float64
 
+	// PR-11: Donchian confirmation on breakout signals. When
+	// BreakoutDonchianPeriod > 0, the breakout stance additionally requires
+	// lastPrice > Donchian20Upper (BUY) or lastPrice < Donchian20Lower
+	// (SELL). Typical value: 20 (matches the IndicatorSet's default
+	// Donchian20 fields). 0 keeps the legacy BB-only breakout.
+	//
+	// Note: the live pipeline currently computes Donchian with period=20
+	// only; setting BreakoutDonchianPeriod to any other positive value
+	// still activates the gate but will compare against the same
+	// Donchian20Upper/Lower pair. Exposing per-bar arbitrary periods is
+	// out of scope for PR-11 — the gate is the cheap win; period tuning
+	// can be a follow-up once WFO tells us Donchian20 helps at all.
+	BreakoutDonchianPeriod int
+
 	// defaulted tracks whether applyDefaults has already been called so we
 	// don't flip booleans to true twice (e.g. on a caller that explicitly
 	// wants them false).
@@ -419,7 +433,25 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				return adxBlock("breakout: ADX below threshold"), nil
 			}
 		}
-		return e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix), nil
+		sig := e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix)
+		// PR-11: Donchian confirmation. Applies only when a direction was
+		// actually emitted — HOLD passes through unchanged. BUY requires
+		// lastPrice > Donchian20Upper; SELL requires lastPrice <
+		// Donchian20Lower. Missing Donchian (warmup) fails the gate,
+		// matching the ADX / Stochastics convention.
+		if e.options.BreakoutDonchianPeriod > 0 && sig != nil {
+			switch sig.Action {
+			case entity.SignalActionBuy:
+				if indicators.Donchian20Upper == nil || lastPrice <= *indicators.Donchian20Upper {
+					return adxBlock("breakout: price below Donchian upper"), nil
+				}
+			case entity.SignalActionSell:
+				if indicators.Donchian20Lower == nil || lastPrice >= *indicators.Donchian20Lower {
+					return adxBlock("breakout: price above Donchian lower"), nil
+				}
+			}
+		}
+		return sig, nil
 	default:
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,

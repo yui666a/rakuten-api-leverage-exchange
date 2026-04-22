@@ -372,6 +372,62 @@ func TestApplyOverrides_RegimeDetectorConfig(t *testing.T) {
 	})
 }
 
+// TestApplyOverrides_BreakoutDonchianPeriod is the PR-11 wiring guard:
+// grid axes sweeping Donchian lookback (20 / 40 / 60 etc.) must land on
+// SignalRules.Breakout.DonchianPeriod as an int, and fractional values
+// must be rejected so an off-by-0.5 in a grid spec fails loudly.
+func TestApplyOverrides_BreakoutDonchianPeriod(t *testing.T) {
+	t.Run("integer value sets the field", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.donchian_period": 20,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.SignalRules.Breakout.DonchianPeriod != 20 {
+			t.Errorf("DonchianPeriod = %d, want 20", got.SignalRules.Breakout.DonchianPeriod)
+		}
+	})
+
+	t.Run("zero disables the gate", func(t *testing.T) {
+		base := entity.StrategyProfile{
+			SignalRules: entity.SignalRulesConfig{
+				Breakout: entity.BreakoutConfig{DonchianPeriod: 20},
+			},
+		}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.donchian_period": 0,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.SignalRules.Breakout.DonchianPeriod != 0 {
+			t.Errorf("DonchianPeriod = %d, want 0 (gate disabled)", got.SignalRules.Breakout.DonchianPeriod)
+		}
+	})
+
+	t.Run("fractional value is rejected", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		_, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.donchian_period": 20.5,
+		})
+		if err == nil {
+			t.Fatal("expected error on fractional donchian_period (silent truncation would corrupt the grid signal)")
+		}
+	})
+
+	t.Run("negative value is rejected", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		_, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.donchian_period": -1,
+		})
+		if err == nil {
+			t.Fatal("expected error on negative donchian_period")
+		}
+	})
+}
+
 // -------------- string overrides / combined grid --------------
 
 func TestApplyStringOverrides_HTFMode(t *testing.T) {
