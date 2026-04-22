@@ -428,6 +428,65 @@ func TestApplyOverrides_BreakoutDonchianPeriod(t *testing.T) {
 	})
 }
 
+// TestApplyOverrides_BBSqueezeLookback is the cycle43 wiring guard. The
+// lookback is an int and must reject fractional values + non-positive
+// lookbacks to keep the grid signal honest.
+func TestApplyOverrides_BBSqueezeLookback(t *testing.T) {
+	t.Run("integer value sets the field", func(t *testing.T) {
+		base := entity.StrategyProfile{
+			StanceRules: entity.StanceRulesConfig{BBSqueezeLookback: 5},
+		}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"stance_rules.bb_squeeze_lookback": 7,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.StanceRules.BBSqueezeLookback != 7 {
+			t.Errorf("BBSqueezeLookback = %d, want 7", got.StanceRules.BBSqueezeLookback)
+		}
+	})
+
+	t.Run("fractional value is rejected", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		_, err := ApplyOverrides(base, map[string]float64{
+			"stance_rules.bb_squeeze_lookback": 5.5,
+		})
+		if err == nil {
+			t.Fatal("expected error on fractional bb_squeeze_lookback")
+		}
+	})
+
+	t.Run("zero is accepted (disables squeeze lookback)", func(t *testing.T) {
+		// 0 matches the donchian_period / hysteresis_bars convention so
+		// the handler's "pre-probe path with value=0" path validation
+		// still works; downstream the stance resolver treats 0 as "no
+		// squeeze window" which yields HOLD, not a crash.
+		base := entity.StrategyProfile{
+			StanceRules: entity.StanceRulesConfig{BBSqueezeLookback: 5},
+		}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"stance_rules.bb_squeeze_lookback": 0,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides should accept 0, got error: %v", err)
+		}
+		if got.StanceRules.BBSqueezeLookback != 0 {
+			t.Errorf("BBSqueezeLookback = %d, want 0", got.StanceRules.BBSqueezeLookback)
+		}
+	})
+
+	t.Run("negative value is rejected", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		_, err := ApplyOverrides(base, map[string]float64{
+			"stance_rules.bb_squeeze_lookback": -1,
+		})
+		if err == nil {
+			t.Fatal("negative value should be rejected")
+		}
+	})
+}
+
 // TestApplyOverrides_BreakoutCMF is the PR-9 wiring guard for CMF gates.
 // CMF is bounded in [-1, 1]; the BUY gate must stay in [0, 1] and the
 // SELL gate must stay in [-1, 0], otherwise a grid axis could silently
