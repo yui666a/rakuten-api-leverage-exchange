@@ -277,7 +277,7 @@ func ExpandCombinedGrid(numeric []ParameterOverride, strs []ParameterStringOverr
 //	signal_rules.breakout.{volume_ratio_min,adx_min,donchian_period,cmf_buy_min,cmf_sell_max}
 //	// signal_rules.trend_follow.require_obv_alignment is a bool and is set
 //	// directly on the profile; it is not an ApplyOverrides axis.
-//	stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
+//	stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio,bb_squeeze_lookback}
 //	htf_filter.alignment_boost
 //	regime_routing.detector_config.trend_adx_min
 //	regime_routing.detector_config.volatile_atr_percent_min
@@ -355,6 +355,20 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 			out.StanceRules.SMAConvergenceThreshold = value
 		case "stance_rules.breakout_volume_ratio":
 			out.StanceRules.BreakoutVolumeRatio = value
+		case "stance_rules.bb_squeeze_lookback":
+			// BBSqueezeLookback is an int; reject fractional grid values
+			// so a typo surfaces at the WFO boundary rather than silently
+			// truncating into a different lookback. 0 disables the
+			// squeeze-release breakout stance entirely — matching the
+			// ">= 0 accepted" convention used by the other int axes so
+			// the handler's 0-value path probe still succeeds.
+			if value != float64(int(value)) {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: stance_rules.bb_squeeze_lookback must be an integer (got %v)", value)
+			}
+			if value < 0 {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: stance_rules.bb_squeeze_lookback must be >= 0 (got %v)", value)
+			}
+			out.StanceRules.BBSqueezeLookback = int(value)
 		case "htf_filter.alignment_boost":
 			out.HTFFilter.AlignmentBoost = value
 		case "regime_routing.detector_config.trend_adx_min",
