@@ -2,6 +2,25 @@
 
 2026-04-21 の PDCA 20 分チャレンジ（`docs/pdca/2026-04-21_promotion_v3.md`）で得た知見から、戦略最適化基盤を次のレベルに引き上げるための全 16 PR を洗い出し、そのうちコスパ最大の 6 PR を「Phase B」として先行実装する。
 
+## 進捗スナップショット（2026-04-22 時点）
+
+| PR | 状況 | マージ PR |
+|---|---|---|
+| PR-1 / PR-2 / PR-3 | ✅ merged | #108 / #111 / #112 |
+| PR-12 ATR Trailing | ✅ merged | #113 |
+| PR-6 ADX | ✅ merged | #114 |
+| PR-13 WFO compute-only | ✅ merged | #115 (+#116 TP-wiring fix) |
+| v4 → v4b promotion | ✅ merged | #117 |
+| PR-7 Stochastics | ✅ merged | #122 |
+| PR-8 Ichimoku + HTF mode | ✅ merged | #123 |
+| PR-13 follow-up: WFO DB / GET / CLI | ✅ merged | #124 |
+| Frontend 露出 (FE-A〜E) | ✅ merged | #125 / #126 / #127 / #128 / #129 |
+| WFO override path fix (Stoch 対応) | ✅ merged | #130 |
+| PR-4 / PR-5 / PR-9 / PR-10 / PR-11 / PR-14 / PR-15 / PR-16 | ⬜ 未着手 | — |
+| `htf_filter.mode` WFO override | ⬜ 未着手（現 `ApplyOverrides` は float64 限定） | — |
+
+現行 production は v4b（2026-04-21、3yr +9.56% / geomMean +1.15%）。v5 promotion（#118）は PR-7 Stoch gate では達成できず（`docs/pdca/2026-04-22_cycle22-23.md`）、次は PR-8 Ichimoku mode / stop_loss_percent grid を試す予定。
+
 ## 背景
 
 v3 昇格時点の状況:

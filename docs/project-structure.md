@@ -8,106 +8,128 @@
 │   │   ├── pipeline.go                  #   TradingPipeline（自動売買ループ）
 │   │   ├── retry.go                     #   リトライユーティリティ
 │   │   ├── sync_state_test.go           #   状態同期テスト
+│   │   ├── backtest/main.go             #   バックテスト CLI (run/optimize/refine/download/walk-forward)
+│   │   ├── backtest/walkforward.go      #   walk-forward サブコマンド (PR-13 follow-up / #120)
 │   │   ├── check/main.go               #   ヘルスチェック CLI
 │   │   └── mcp/main.go                 #   MCP サーバーエントリ
 │   ├── config/config.go                 #   環境変数 → Config 構造体
+│   ├── profiles/                        #   Strategy プロファイル (JSON)
+│   │   ├── production.json              #     現行本番戦略
+│   │   ├── baseline.json                #     デフォルトロジックの literal 再現
+│   │   └── experiment_*.json            #     PDCA 実験プロファイル
 │   ├── internal/
 │   │   ├── domain/
-│   │   │   ├── entity/                  #     エンティティ
-│   │   │   │   ├── ticker.go            #       Ticker (現在価格)
-│   │   │   │   ├── candle.go            #       ローソク足
-│   │   │   │   ├── order.go             #       注文
-│   │   │   │   ├── client_order.go      #       クライアント注文 (冪等性キー)
-│   │   │   │   ├── position.go          #       ポジション
-│   │   │   │   ├── signal.go            #       売買シグナル
-│   │   │   │   ├── indicator.go         #       テクニカル指標
-│   │   │   │   ├── risk.go              #       リスク設定
-│   │   │   │   ├── strategy.go          #       戦略 (Stance)
-│   │   │   │   ├── orderbook.go         #       板情報
-│   │   │   │   ├── asset.go             #       資産
-│   │   │   │   ├── symbol.go            #       シンボル
-│   │   │   │   ├── trade.go             #       約定
-│   │   │   │   └── stringfloat.go       #       JSON 文字列 → float64 変換
-│   │   │   └── repository/             #     リポジトリインターフェース
-│   │   │       ├── order.go             #       注文 + API クライアント IF
-│   │   │       ├── market_data.go       #       市場データ IF
-│   │   │       ├── client_order.go      #       クライアント注文 IF
-│   │   │       ├── risk_state.go        #       リスク状態 IF
-│   │   │       ├── trade_history.go     #       取引履歴 IF
-│   │   │       └── stance_override.go   #       Stance オーバーライド IF
+│   │   │   ├── entity/
+│   │   │   │   ├── ticker.go / candle.go / order.go / client_order.go
+│   │   │   │   ├── position.go / signal.go / orderbook.go / asset.go
+│   │   │   │   ├── symbol.go / trade.go / stringfloat.go
+│   │   │   │   ├── indicator.go         #     IndicatorSet + IchimokuSnapshot (SMA/EMA/RSI/MACD/BB/ATR/Volume/ADX/Stoch/Ichimoku)
+│   │   │   │   ├── risk.go              #     リスク設定
+│   │   │   │   ├── strategy.go          #     Stance (TREND_FOLLOW/CONTRARIAN/BREAKOUT/HOLD)
+│   │   │   │   ├── strategy_config.go   #     StrategyProfile + ネスト設定（PR-6 ADX / PR-7 Stoch / PR-8 Ichimoku mode 対応）
+│   │   │   │   ├── backtest.go          #     BacktestResult / Summary / DrawdownPeriod / MultiPeriodAggregate 等
+│   │   │   │   ├── aggregate_json.go    #     NaN/±Inf → JSON null round-trip
+│   │   │   │   ├── walk_forward.go      #     WalkForwardPersisted（DB envelope 型）
+│   │   │   │   └── backtest_event.go    #     バックテスト用イベント定義
+│   │   │   ├── port/strategy.go         #     Strategy インターフェース
+│   │   │   └── repository/              #     リポジトリインターフェース
+│   │   │       ├── order.go / market_data.go / client_order.go
+│   │   │       ├── risk_state.go / trade_history.go / stance_override.go
+│   │   │       ├── backtest_result.go   #       PR-2 PDCA フィルタ対応
+│   │   │       ├── multi_period_result.go #     PR-2 複数期間 envelope
+│   │   │       ├── walk_forward_result.go #     PR-13 follow-up WFO envelope
+│   │   │       └── errors.go            #       ErrParentResultNotFound / SelfReference
 │   │   ├── usecase/                     #     ビジネスロジック
-│   │   │   ├── strategy.go             #       戦略エンジン (Stance → Signal)
-│   │   │   ├── risk.go                 #       リスクマネージャー
-│   │   │   ├── order.go                #       注文実行 (リスクチェック付き)
-│   │   │   ├── indicator.go            #       テクニカル指標計算の統合
-│   │   │   ├── market_data.go          #       市場データ管理 (Ticker/Candle 保存)
-│   │   │   ├── stance.go               #       Stance 解決 (ルールベース + オーバーライド)
-│   │   │   ├── daily_pnl.go            #       日次損益計算
-│   │   │   └── realtime.go             #       WebSocket Hub (SSE/WS ブロードキャスト)
+│   │   │   ├── strategy.go              #       StrategyEngine + Options (ADX/Stoch gates / HTF mode)
+│   │   │   ├── stance.go                #       RuleBasedStanceResolver
+│   │   │   ├── risk.go                  #       RiskManager (ATR stop / trailing)
+│   │   │   ├── order.go                 #       OrderExecutor
+│   │   │   ├── indicator.go             #       IndicatorCalculator（live）
+│   │   │   ├── market_data.go           #       Ticker/Candle 管理
+│   │   │   ├── daily_pnl.go             #       日次損益計算
+│   │   │   ├── realtime.go              #       WS Hub
+│   │   │   ├── strategy/                #       Strategy 実装
+│   │   │   │   ├── default_strategy.go  #         DefaultStrategy（legacy ラッパ）
+│   │   │   │   ├── configurable_strategy.go #     ConfigurableStrategy（profile 駆動）
+│   │   │   │   ├── registry.go          #         StrategyRegistry
+│   │   │   │   ├── adx_gate_test.go     #         PR-6 配線確認
+│   │   │   │   ├── stoch_gate_test.go   #         PR-7 配線確認
+│   │   │   │   └── htf_ichimoku_test.go #         PR-8 配線確認
+│   │   │   ├── backtest/                #       バックテストエンジン
+│   │   │   │   ├── runner.go            #         BacktestRunner
+│   │   │   │   ├── handler.go           #         イベントハンドラチェーン (Tick/Indicator/Strategy/Risk)
+│   │   │   │   ├── simulator.go 相当は infrastructure/backtest/ 側
+│   │   │   │   ├── biweekly.go          #         BiweeklyWinRate
+│   │   │   │   ├── breakdown.go         #         PR-1 Exit 理由別 / シグナル別サマリ
+│   │   │   │   ├── drawdown_detail.go   #         PR-3 DD 履歴 / TiM / Expectancy
+│   │   │   │   ├── aggregate.go         #         PR-2 MultiPeriodAggregate 計算
+│   │   │   │   ├── multi_period_runner.go #       PR-2 複数期間並列実行
+│   │   │   │   ├── walkforward.go       #         PR-13 ComputeWindows / ExpandGrid / ApplyOverrides
+│   │   │   │   ├── walkforward_runner.go #        PR-13 WFO runner (IS/OOS)
+│   │   │   │   ├── reporter.go          #         結果整形
+│   │   │   │   ├── optimizer.go         #         Phase 2a/2b パラメータ探索
+│   │   │   │   └── ulid.go              #         result ID 生成
+│   │   │   └── eventengine/             #       イベント駆動 pipeline (手動売買と共有)
 │   │   ├── infrastructure/
-│   │   │   ├── database/               #       SQLite リポジトリ実装 + マイグレーション
-│   │   │   │   ├── sqlite.go            #         DB 接続
-│   │   │   │   ├── migrations.go        #         スキーママイグレーション
-│   │   │   │   ├── market_data_repo.go  #         市場データリポジトリ
-│   │   │   │   ├── client_order_repo.go #         クライアント注文リポジトリ
-│   │   │   │   ├── trade_history_repo.go#         取引履歴リポジトリ
-│   │   │   │   ├── risk_state_repo.go   #         リスク状態リポジトリ
-│   │   │   │   └── stance_override_repo.go #      Stance オーバーライドリポジトリ
-│   │   │   ├── indicator/              #       テクニカル指標の個別計算
-│   │   │   │   ├── sma.go / ema.go      #         移動平均
-│   │   │   │   ├── rsi.go              #         RSI
-│   │   │   │   ├── macd.go             #         MACD
-│   │   │   │   ├── atr.go              #         ATR
-│   │   │   │   └── bollinger.go        #         ボリンジャーバンド
-│   │   │   └── rakuten/                #       楽天ウォレット API クライアント
-│   │   │       ├── rest_client.go       #         REST (Public + Private)
-│   │   │       ├── auth.go             #         HMAC 署名・認証
-│   │   │       ├── public_api.go       #         Public API (Ticker, Candle 等)
-│   │   │       ├── private_api.go      #         Private API (Order, Position 等)
-│   │   │       └── ws_client.go        #         WebSocket クライアント
+│   │   │   ├── database/                #       SQLite 実装 + マイグレーション
+│   │   │   │   ├── sqlite.go / migrations.go
+│   │   │   │   └── 各種 _repo.go（market_data / client_order / trade_history / risk_state / stance_override）
+│   │   │   ├── indicator/               #       指標計算ロジック
+│   │   │   │   ├── sma.go / ema.go / rsi.go / macd.go / atr.go / bollinger.go / volume.go
+│   │   │   │   ├── adx.go               #         PR-6 ADX + DI
+│   │   │   │   ├── stochastics.go       #         PR-7 %K/%D + StochRSI
+│   │   │   │   └── ichimoku.go          #         PR-8 Tenkan/Kijun/SenkouA-B/Chikou + CloudPosition
+│   │   │   ├── backtest/                #       SQLite 永続化
+│   │   │   │   ├── result_repository.go #         BacktestResult (PDCA フィルタ + PR-1/3 JSON カラム)
+│   │   │   │   ├── multi_period_repository.go #   PR-2 envelope
+│   │   │   │   ├── walk_forward_repository.go #   PR-13 follow-up envelope (result_json 全体保存)
+│   │   │   │   └── simulator.go         #         注文約定シミュレータ
+│   │   │   ├── strategyprofile/         #       Profile loader + パス検証
+│   │   │   ├── csv/                     #       CSV ローダ（バックテストデータ）
+│   │   │   ├── live/                    #       Live pipeline helper
+│   │   │   └── rakuten/                 #       楽天ウォレット API クライアント
+│   │   │       ├── rest_client.go / auth.go / public_api.go / private_api.go / ws_client.go
 │   │   └── interfaces/
 │   │       ├── api/                     #       Gin HTTP ハンドラー + ルーター
-│   │       │   ├── router.go            #         ルーティング定義
-│   │       │   └── handler/             #         各エンドポイントのハンドラー
+│   │       │   ├── router.go            #         /api/v1/* ルーティング
+│   │       │   └── handler/
+│   │       │       ├── backtest.go              # /backtest/run & /backtest/results (PDCA)
+│   │       │       ├── backtest_multi.go        # /backtest/run-multi & /backtest/multi-results (PR-2)
+│   │       │       ├── backtest_walkforward.go  # /backtest/walk-forward (GET/POST/list) (PR-13 + #120)
+│   │       │       └── 各種 *_test.go
 │   │       └── mcp/                     #       MCP サーバー実装
-│   │           └── server.go
 │   ├── Dockerfile
-│   └── .env.example                     #   環境変数テンプレート
+│   └── .env.example
 │
 ├── frontend/                             # React + TanStack フロントエンド
 │   ├── src/
 │   │   ├── components/                  #   UI コンポーネント
-│   │   │   ├── AppFrame.tsx             #     レイアウト枠
-│   │   │   ├── CandlestickChart.tsx     #     ローソク足チャート
-│   │   │   ├── LiveTickerCard.tsx       #     リアルタイム価格カード
-│   │   │   ├── BotControlCard.tsx       #     Bot 起動/停止カード
-│   │   │   ├── IndicatorPanel.tsx       #     テクニカル指標パネル
-│   │   │   ├── PositionPanel.tsx        #     ポジションパネル
-│   │   │   ├── TradeHistoryTable.tsx    #     取引履歴テーブル
-│   │   │   ├── KpiCard.tsx              #     KPI カード
-│   │   │   └── SymbolSelector.tsx       #     シンボル選択
+│   │   │   ├── AppFrame.tsx             #     レイアウト枠 + グローバルナビ (dashboard/settings/history/backtest/multi/WFO)
+│   │   │   ├── CandlestickChart.tsx     #     ローソク足チャート（指標スタック: MACD→RSI→Stoch→ADX）
+│   │   │   ├── MACDChart.tsx / RSIChart.tsx / StochasticsChart.tsx / ADXChart.tsx #  指標パネル群
+│   │   │   ├── EquityCurveChart.tsx     #     バックテスト資産推移
+│   │   │   ├── IndicatorPanel.tsx / LiveTickerCard.tsx / BotControlCard.tsx / PositionPanel.tsx
+│   │   │   ├── TradeHistoryTable.tsx / KpiCard.tsx / SymbolSelector.tsx
 │   │   ├── hooks/                       #   カスタムフック
-│   │   │   ├── useBotControl.ts         #     Bot 制御
-│   │   │   ├── useMarketTickerStream.ts #     WebSocket Ticker
-│   │   │   ├── usePositions.ts          #     ポジション取得
-│   │   │   ├── useCandles.ts            #     ローソク足取得
-│   │   │   ├── useIndicators.ts         #     指標取得
-│   │   │   ├── useTradeHistory.ts       #     取引履歴
-│   │   │   ├── usePnl.ts               #     損益
-│   │   │   ├── useStrategy.ts           #     戦略
-│   │   │   ├── useConfig.ts             #     設定
-│   │   │   ├── useTradingConfig.ts      #     取引設定
-│   │   │   ├── useSymbols.ts            #     シンボル一覧
-│   │   │   ├── useStatus.ts             #     ステータス
-│   │   │   ├── useAllTickers.ts         #     全ティッカー
-│   │   │   └── useAllTrades.ts          #     全約定
-│   │   ├── contexts/SymbolContext.tsx    #   シンボル選択 Context
-│   │   ├── lib/api.ts                   #   API クライアント (fetch ラッパー)
+│   │   │   ├── useBotControl.ts / useStatus.ts / usePnl.ts / useConfig.ts
+│   │   │   ├── useMarketTickerStream.ts / useAllTickers.ts
+│   │   │   ├── useCandles.ts / useIndicators.ts
+│   │   │   ├── usePositions.ts / useTradeHistory.ts / useAllTrades.ts / useSymbols.ts / useTradingConfig.ts / useStrategy.ts
+│   │   │   ├── useBacktest.ts           #     単発バックテスト + フィルタ付き結果一覧
+│   │   │   ├── useMultiPeriod.ts        #     PR-2 複数期間 list / detail
+│   │   │   └── useWalkForward.ts        #     PR-13 follow-up list / detail
+│   │   ├── contexts/SymbolContext.tsx
+│   │   ├── lib/api.ts                   #   API クライアント + 型定義（BacktestSummary / MultiPeriodAggregate / WalkForwardResult 等）
 │   │   ├── routes/                      #   ページ
-│   │   │   ├── index.tsx                #     ダッシュボード (メイン画面)
-│   │   │   ├── history.tsx              #     取引履歴ページ
-│   │   │   └── settings.tsx             #     設定ページ
+│   │   │   ├── __root.tsx
+│   │   │   ├── index.tsx                #     ダッシュボード
+│   │   │   ├── history.tsx              #     取引履歴
+│   │   │   ├── settings.tsx             #     設定
+│   │   │   ├── backtest.tsx             #     バックテスト実行 + 詳細（PR-1 breakdown / PR-3 DD 表示対応）
+│   │   │   ├── backtest-multi.tsx       #     PR-2 複数期間ランキング + 詳細
+│   │   │   └── walk-forward.tsx         #     PR-13 follow-up ランキング + 窓別 OOS + Best パラメータ頻度
 │   │   ├── router.tsx                   #   TanStack Router 設定
+│   │   ├── routeTree.gen.ts             #   自動生成ルートツリー
 │   │   └── styles.css                   #   Tailwind エントリ
 │   ├── Dockerfile
 │   └── package.json
@@ -115,14 +137,25 @@
 ├── docs/                                 # ドキュメント
 │   ├── project-structure.md             #   本ファイル
 │   ├── api-reference.md                 #   API エンドポイント仕様
-│   ├── agent-operation-guide.md         #   エージェント運用手順書
+│   ├── agent-operation-guide.md         #   エージェント運用手順
 │   ├── clean-architecture.md            #   アーキテクチャ設計
+│   ├── backtest-csv-data-guide.md       #   バックテスト CSV 取得・運用手順
 │   ├── rakuten-api/error-codes.md       #   楽天 API エラーコード
-│   └── design/                          #   設計書 + 実装計画
+│   ├── design/                          #   設計書 + 実装計画
+│   │   ├── 2026-04-21-pdca-v2-infrastructure-plan.md  # Phase A/B/C 計画
+│   │   └── plans/                       #   PR 毎の設計ドキュメント（PR-1〜PR-13 等）
+│   ├── pdca/                            #   PDCA 運用ガイド + サイクル記録
+│   │   ├── README.md / agent-guide.md / _template.md
+│   │   ├── 2026-04-21_cycle*.md         #     既存サイクル記録
+│   │   ├── 2026-04-21_promotion_v*.md   #     昇格記録（v1〜v4b）
+│   │   └── 2026-04-22_cycle22-23.md     #     PR-7 Stoch gate WFO 負結果記録
+│   └── superpowers/specs/               #   システム仕様書
 │
 ├── .agent/mcp.json                       # MCP サーバー設定
 ├── compose.yaml                          # Docker Compose 定義
 ├── Makefile                              # make up/down/logs/restart
 ├── AGENTS.md                             # エージェント共通ルール (エントリポイント)
-└── CLAUDE.md                             # Claude Code 用 (AGENTS.md を参照)
+├── CLAUDE.md                             # Claude Code 用 (AGENTS.md を参照)
+├── README.md                             # プロジェクト概要
+└── ONBOARDING.md                         # 新規参加者向け手順
 ```

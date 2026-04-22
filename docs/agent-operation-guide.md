@@ -116,29 +116,45 @@ curl -s -X PUT 'localhost:38080/api/v1/config' \
 
 ### ルールベース自動判定（Backend）
 
-エージェントがオーバーライドしない場合、Backend が以下のルールで自動判定する:
+エージェントがオーバーライドしない場合、Backend が `StanceRulesConfig` の閾値（`stance_rules.*`）で自動判定する。現行 production のおおまかな優先順位:
 
 | 優先度 | 条件 | Stance |
 |-------|------|--------|
-| 1 | RSI14 < 25 または RSI14 > 75 | CONTRARIAN |
-| 2 | SMA20 と SMA50 の乖離率 < 0.1% | HOLD |
-| 3 | SMA20 > SMA50 または SMA20 < SMA50 | TREND_FOLLOW |
-| 4 | それ以外 | HOLD |
+| 1 | 直近 BBBandwidth squeeze 解消 + VolumeRatio ≥ `breakout_volume_ratio` | BREAKOUT |
+| 2 | RSI14 < `rsi_oversold` または RSI14 > `rsi_overbought` | CONTRARIAN |
+| 3 | SMA20 と SMA50 の乖離率 < `sma_convergence_threshold` | HOLD |
+| 4 | SMA20 > SMA50 または SMA20 < SMA50 | TREND_FOLLOW |
+| 5 | それ以外 | HOLD |
+
+閾値は profile で変更可能。詳細は `backend/internal/usecase/stance.go`。
 
 ### 各 Stance での売買ロジック
 
+各 stance は `SignalRulesConfig` の gate を通過したときのみ BUY/SELL を emit する。
+
 **TREND_FOLLOW:**
-- SMA20 > SMA50 かつ RSI < 70 → BUY
-- SMA20 < SMA50 かつ RSI > 30 → SELL
-- それ以外 → HOLD
+- EMA12/26 クロス（`require_ema_cross=true` 時）+ SMA alignment + RSI in [sell_min, buy_max]
+- `require_macd_confirm=true` なら Histogram 符号も一致要
+- `adx_min > 0` なら ADX が閾値未満で HOLD（PR-6）
 
 **CONTRARIAN:**
-- RSI < 30 → BUY（売られすぎ → 反発期待）
-- RSI > 70 → SELL（買われすぎ → 下落期待）
-- RSI 30〜70 → HOLD
+- RSI < `rsi_entry` で BUY（オーバーセルド反発）
+- RSI > `rsi_exit` で SELL（オーバーバウト反落）
+- `macd_histogram_limit` を超える逆行モメンタムで抑制
+- `adx_max > 0` なら ADX が閾値超過で HOLD（PR-6）
+- `stoch_entry_max` / `stoch_exit_min > 0` なら Stochastics %K も同方向確認を要求（PR-7）
+
+**BREAKOUT:**
+- 価格が BB Upper/Lower 上抜け/下抜け + VolumeRatio ≥ `volume_ratio_min`
+- `adx_min > 0` なら ADX 閾値以上を要求（PR-6）
 
 **HOLD:**
 - 何もしない
+
+**HTF フィルタ** (`htf_filter`):
+- `mode="ema"`（既定）: 上位足 SMA20/50 で trend 方向を判定
+- `mode="ichimoku"`（PR-8）: 上位足 Ichimoku 雲位置で判定（雲上=up / 雲下=down / 雲内=neutral）
+- `block_counter_trend=true` で逆張りシグナルをブロック、`alignment_boost` で一致時のみ confidence を加算
 
 ### エージェントのオーバーライド
 
@@ -163,20 +179,7 @@ curl -s -X PUT 'localhost:38080/api/v1/config' \
 
 ### GET /api/v1/indicators/7
 
-```json
-{
-  "symbolId": 7,
-  "sma20": 11459941.1,
-  "sma50": 11461099.9,
-  "ema12": 11482453.58,
-  "ema26": 11468867.49,
-  "rsi14": 62.90,
-  "macdLine": 13586.08,
-  "signalLine": 7534.66,
-  "histogram": 6051.42,
-  "timestamp": 1775825100000
-}
-```
+SMA/EMA/RSI/MACD/BB/ATR/Volume/ADX/Stoch/Ichimoku を一括取得。詳細は `docs/api-reference.md` 参照。
 
 ### GET /api/v1/strategy
 
