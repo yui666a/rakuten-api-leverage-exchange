@@ -218,3 +218,58 @@ func TestParseProfile_UnknownField(t *testing.T) {
 		t.Fatal("expected error for unknown field, got nil")
 	}
 }
+
+// TestLoader_List returns the metadata summary for every *.json file in
+// the base directory, sorted by name, and skips non-JSON files + sub-
+// directories. Invalid profiles are still included (with an error
+// description) so the FE picker can surface the problem instead of
+// silently dropping the row.
+func TestLoader_List(t *testing.T) {
+	tmp := t.TempDir()
+	// Two valid profiles + one bad (validation fails) + one non-JSON file
+	// that must be ignored.
+	writeProfile(t, tmp, "alpha", strings.Replace(validProfileJSON, `"ltc_aggressive_v3"`, `"alpha"`, 1))
+	writeProfile(t, tmp, "beta", strings.Replace(validProfileJSON, `"ltc_aggressive_v3"`, `"beta"`, 1))
+	badJSON := strings.Replace(validProfileJSON, `"atr_period": 14`, `"atr_period": -1`, 1)
+	writeProfile(t, tmp, "gamma_broken", badJSON)
+	// Non-JSON should be ignored.
+	if err := os.WriteFile(filepath.Join(tmp, "notes.txt"), []byte("ignore me"), 0o644); err != nil {
+		t.Fatalf("write txt: %v", err)
+	}
+
+	loader := NewLoader(tmp)
+	summaries, err := loader.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(summaries) != 3 {
+		t.Fatalf("expected 3 summaries (alpha, beta, gamma_broken), got %d: %+v", len(summaries), summaries)
+	}
+	// Sorted by name.
+	if summaries[0].Name != "alpha" || summaries[1].Name != "beta" {
+		t.Errorf("unexpected ordering: %+v", summaries)
+	}
+	if summaries[2].Name != "gamma_broken" {
+		t.Errorf("broken profile should still appear with filename as Name, got %q", summaries[2].Name)
+	}
+	if !strings.Contains(summaries[2].Description, "load error") {
+		t.Errorf("broken profile description should flag load error, got %q", summaries[2].Description)
+	}
+}
+
+// TestLoader_List_EmptyDir returns an empty slice (not nil) so the FE
+// does not crash on a fresh install with no profiles yet.
+func TestLoader_List_EmptyDir(t *testing.T) {
+	tmp := t.TempDir()
+	loader := NewLoader(tmp)
+	summaries, err := loader.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if summaries == nil {
+		t.Error("expected empty slice, got nil")
+	}
+	if len(summaries) != 0 {
+		t.Errorf("expected 0 summaries, got %d", len(summaries))
+	}
+}
