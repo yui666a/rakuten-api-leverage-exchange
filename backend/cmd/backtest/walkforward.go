@@ -70,7 +70,7 @@ func walkForwardCommand(args []string) error {
 		return fmt.Errorf("profile %q not found", *baseProfile)
 	}
 
-	overrides, err := resolveWalkForwardGrid(gridInline, *gridFile)
+	overrides, stringOverrides, err := resolveWalkForwardGrid(gridInline, *gridFile)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,12 @@ func walkForwardCommand(args []string) error {
 			return fmt.Errorf("invalid --grid path %q: %w", ov.Path, err)
 		}
 	}
-	grid, err := bt.ExpandGrid(overrides)
+	for _, ov := range stringOverrides {
+		if _, err := bt.ApplyStringOverrides(entity.StrategyProfile{}, map[string]string{ov.Path: ""}); err != nil {
+			return fmt.Errorf("invalid --grid path %q: %w", ov.Path, err)
+		}
+	}
+	combos, err := bt.ExpandCombinedGrid(overrides, stringOverrides)
 	if err != nil {
 		return fmt.Errorf("expand grid: %w", err)
 	}
@@ -113,10 +118,10 @@ func walkForwardCommand(args []string) error {
 
 	runner := bt.NewWalkForwardRunner()
 	in := bt.WalkForwardInput{
-		BaseProfile: *profile,
-		Windows:     windows,
-		Grid:        grid,
-		Objective:   *objective,
+		BaseProfile:  *profile,
+		Windows:      windows,
+		Combinations: combos,
+		Objective:    *objective,
 		RunWindow: func(ctx context.Context, phase bt.WalkForwardPhase, pf entity.StrategyProfile, wFrom, wTo time.Time) (*entity.BacktestResult, error) {
 			strat, err := strategyuc.NewConfigurableStrategy(&pf)
 			if err != nil {
@@ -177,65 +182,149 @@ func walkForwardCommand(args []string) error {
 	return nil
 }
 
-// resolveWalkForwardGrid builds the []ParameterOverride from either a JSON
-// file (preferred when many axes) or the repeated --grid "path=v1,v2,v3"
-// inline flag. Both sources cannot be mixed — specifying both is a caller
-// error because the priority would be ambiguous.
-func resolveWalkForwardGrid(inline paramFlags, file string) ([]bt.ParameterOverride, error) {
+// resolveWalkForwardGrid builds the numeric and string override slices
+// from either a JSON file (preferred when many axes) or the repeated
+// --grid "path=v1,v2,v3" inline flag. Both sources cannot be mixed —
+// specifying both is a caller error because the priority would be
+// ambiguous.
+//
+// The inline flag auto-detects numeric vs. string axes: if every value
+// parses as float64 the axis is numeric; otherwise every value is
+// treated as a string (no mixed-type axes). This matches the file
+// format, which uses the shape {path, values} and infers type from
+// whether values are JSON numbers or JSON strings.
+func resolveWalkForwardGrid(inline paramFlags, file string) ([]bt.ParameterOverride, []bt.ParameterStringOverride, error) {
 	switch {
 	case file != "" && len(inline) > 0:
-		return nil, fmt.Errorf("use --grid OR --grid-file, not both")
+		return nil, nil, fmt.Errorf("use --grid OR --grid-file, not both")
 	case file != "":
 		return readGridFile(file)
 	case len(inline) > 0:
 		return parseGridInline(inline)
 	default:
-		// Empty grid → single baseline-only combo. ExpandGrid understands
-		// this case, so return nil to surface exactly that behaviour.
-		return nil, nil
+		// Empty grid → single baseline-only combo. ExpandCombinedGrid
+		// understands this case, so return nil to surface that behaviour.
+		return nil, nil, nil
 	}
 }
 
-func readGridFile(path string) ([]bt.ParameterOverride, error) {
+// rawGridAxis is the file format each entry can take. Values may be
+// either JSON numbers (populating Values) or JSON strings (populating
+// StringValues); a mix within one axis is rejected at unmarshal time.
+type rawGridAxis struct {
+	Path   string            `json:"path"`
+	Values []json.RawMessage `json:"values"`
+}
+
+func readGridFile(path string) ([]bt.ParameterOverride, []bt.ParameterStringOverride, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read grid file: %w", err)
+		return nil, nil, fmt.Errorf("read grid file: %w", err)
 	}
-	var out []bt.ParameterOverride
-	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, fmt.Errorf("parse grid file: %w", err)
+	var raw []rawGridAxis
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, nil, fmt.Errorf("parse grid file: %w", err)
 	}
-	return out, nil
+	var numeric []bt.ParameterOverride
+	var strings []bt.ParameterStringOverride
+	for _, axis := range raw {
+		num, str, err := classifyAxisValues(axis.Path, axis.Values)
+		if err != nil {
+			return nil, nil, err
+		}
+		if num != nil {
+			numeric = append(numeric, bt.ParameterOverride{Path: axis.Path, Values: num})
+			continue
+		}
+		strings = append(strings, bt.ParameterStringOverride{Path: axis.Path, Values: str})
+	}
+	return numeric, strings, nil
 }
 
-func parseGridInline(inline paramFlags) ([]bt.ParameterOverride, error) {
-	out := make([]bt.ParameterOverride, 0, len(inline))
+// classifyAxisValues inspects the JSON-raw values of one axis. An axis
+// is numeric when every value is a JSON number, string when every value
+// is a JSON string; anything else (bool, object, mixed) is a caller
+// error.
+func classifyAxisValues(path string, values []json.RawMessage) ([]float64, []string, error) {
+	if len(values) == 0 {
+		return nil, nil, fmt.Errorf("grid axis %q has no values", path)
+	}
+	allNumeric := true
+	allString := true
+	for _, v := range values {
+		trimmed := strings.TrimSpace(string(v))
+		if trimmed == "" {
+			return nil, nil, fmt.Errorf("grid axis %q has empty value", path)
+		}
+		if trimmed[0] != '"' {
+			allString = false
+		}
+		var probe float64
+		if err := json.Unmarshal(v, &probe); err != nil {
+			allNumeric = false
+		}
+	}
+	if allNumeric {
+		nums := make([]float64, 0, len(values))
+		for _, v := range values {
+			var n float64
+			if err := json.Unmarshal(v, &n); err != nil {
+				return nil, nil, fmt.Errorf("grid axis %q: parse number: %w", path, err)
+			}
+			nums = append(nums, n)
+		}
+		return nums, nil, nil
+	}
+	if allString {
+		strs := make([]string, 0, len(values))
+		for _, v := range values {
+			var s string
+			if err := json.Unmarshal(v, &s); err != nil {
+				return nil, nil, fmt.Errorf("grid axis %q: parse string: %w", path, err)
+			}
+			strs = append(strs, s)
+		}
+		return nil, strs, nil
+	}
+	return nil, nil, fmt.Errorf("grid axis %q mixes numeric and string values (pick one)", path)
+}
+
+func parseGridInline(inline paramFlags) ([]bt.ParameterOverride, []bt.ParameterStringOverride, error) {
+	var numeric []bt.ParameterOverride
+	var strs []bt.ParameterStringOverride
 	for _, spec := range inline {
 		eq := strings.IndexByte(spec, '=')
 		if eq <= 0 {
-			return nil, fmt.Errorf("invalid --grid %q: want path=v1,v2,v3", spec)
+			return nil, nil, fmt.Errorf("invalid --grid %q: want path=v1,v2,v3", spec)
 		}
 		path := strings.TrimSpace(spec[:eq])
 		raw := strings.TrimSpace(spec[eq+1:])
 		if path == "" || raw == "" {
-			return nil, fmt.Errorf("invalid --grid %q: empty path or values", spec)
+			return nil, nil, fmt.Errorf("invalid --grid %q: empty path or values", spec)
 		}
 		pieces := strings.Split(raw, ",")
 		values := make([]float64, 0, len(pieces))
+		stringValues := make([]string, 0, len(pieces))
+		allNumeric := true
 		for _, p := range pieces {
 			p = strings.TrimSpace(p)
 			if p == "" {
-				return nil, fmt.Errorf("invalid --grid %q: empty value", spec)
+				return nil, nil, fmt.Errorf("invalid --grid %q: empty value", spec)
 			}
-			v, err := strconv.ParseFloat(p, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid --grid value %q: %w", p, err)
+			if v, err := strconv.ParseFloat(p, 64); err == nil {
+				values = append(values, v)
+			} else {
+				allNumeric = false
 			}
-			values = append(values, v)
+			stringValues = append(stringValues, p)
 		}
-		out = append(out, bt.ParameterOverride{Path: path, Values: values})
+		if allNumeric {
+			numeric = append(numeric, bt.ParameterOverride{Path: path, Values: values})
+		} else {
+			strs = append(strs, bt.ParameterStringOverride{Path: path, Values: stringValues})
+		}
 	}
-	return out, nil
+	return numeric, strs, nil
 }
 
 // parseWFDate parses YYYY-MM-DD into a UTC time. The walk-forward CLI runs

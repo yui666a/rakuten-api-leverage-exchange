@@ -405,7 +405,10 @@ A. 多くは期間不足（< 14 日）か、トレード数不足でカバレッ
 
 - 2026-04-21 v4b で **3yr +9.56% / aggregate geomMean +1.15%** に到達。1yr/2yr はまだマイナス。
 - 2026-04-22 cycle22-23（`docs/pdca/2026-04-22_cycle22-23.md`）で PR-7 Stoch gate を 3yr LTC 12/6/6 WFO で評価 → **gate=0 (無効) が 4/4 窓で勝者**、robustness は baseline を下回る。**PR-7 単体では v5 promotion 候補にならない**。
-- 次候補: PR-8 Ichimoku HTF mode（`htf_filter.mode=ichimoku`） / `strategy_risk.stop_loss_percent` grid on 3yr。
+- 2026-04-22 cycle24-27（`docs/pdca/2026-04-22_cycle24-27.md`）で `strategy_risk.stop_loss_percent` grid [3..8] を 3yr LTC 12/6/6 で評価 → **SL=4 が IS 3/4 窓で勝者**（v4b default の SL=5 は 0/4）。TP grid [2..6] は TP=5 が IS 2/4 窓で勝者だが最新窓は v4b の TP=4。実験 profile `experiment_2026-04-22_sl4_only.json` / `..._sl4_tp5.json` を commit 済み。multi-period 比較は **3yr DD が 21.21% → 15〜16% に改善**し初めて 20% 制約を満たすが、**1yr 2024 regime は依然マイナス**で v5 promotion 候補は未成立。
+- 2026-04-22 cycle28-37（`docs/pdca/2026-04-22_cycle28-37.md`、**15 分連続スプリント**）で `healthy_v3` 系譜を徹底探索。発見: (1) **healthy_v3 は 2023-04〜2026-03 の単一 regime に curve-fit**（2022 熊相場では −58% 破綻）。(2) `trailing_atr_multiplier` は `TP=4` の healthy_v3 では dead code（TP 先打ち）。(3) `rsi_buy_max=60` が trend_follow IS 3/3 窓勝者（healthy_v3 default 62 より頑健）。(4) `block_counter_trend=false` と `require_macd_confirm=false` は load-bearing — 両方 healthy_v3 の勝因。最終候補 2 本: **攻撃型 `experiment_2026-04-22_sl14_tf60_35`** (gM +16.22%, healthy_v3 超え, SL=14 健全化)、**防御型 `experiment_2026-04-22_sl6_tr30_tp6_tf60_35`** (2022/2023-26 両 regime 生存、SL=6 健全、trailing 発火)。どちらも単独 promotion せず、regime 判定（PR-5）or Ichimoku HTF（PR-8 string override）が次の真の解。
+- 次候補: `htf_filter.mode=ichimoku` WFO string override 対応、regime classifier で攻撃/防御 profile 切替。
+- 2026-04-22 cycle38（`docs/pdca/2026-04-22_cycle38.md`、**PR feat/wfo-string-override**）で WFO string override を実装済 (`parameterStringGrid` / `ApplyStringOverrides` / `ExpandCombinedGrid`) + Ichimoku HTF mode を cycle28-37 の `sl14_tf60_35` base で検証 → **Ichimoku は 2022 regime を救わない**。 `block_counter_trend=true` にしないと mode が sil-no-op、true にすると全 regime で壊滅。healthy_v3 家系は block=false 依存で HTF filter では 2022 問題に届かない。**Choice A (Ichimoku WFO) は reject、Choice B (Regime classifier) に進む** のが次の自然な一歩。
 
 ### 配線確認テストの継続
 

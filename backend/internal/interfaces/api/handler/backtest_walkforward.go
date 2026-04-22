@@ -35,9 +35,10 @@ type runWalkForwardRequest struct {
 	OutOfSampleMonths int    `json:"outOfSampleMonths"` // default 3
 	StepMonths        int    `json:"stepMonths"`        // default 3
 
-	BaseProfile   string                  `json:"baseProfile" binding:"required"`
-	ParameterGrid []bt.ParameterOverride  `json:"parameterGrid"`
-	Objective     string                  `json:"objective"` // "return" | "sharpe" | "profit_factor"
+	BaseProfile         string                         `json:"baseProfile" binding:"required"`
+	ParameterGrid       []bt.ParameterOverride         `json:"parameterGrid"`
+	ParameterStringGrid []bt.ParameterStringOverride   `json:"parameterStringGrid"`
+	Objective           string                         `json:"objective"` // "return" | "sharpe" | "profit_factor"
 
 	PDCACycleID    string  `json:"pdcaCycleId,omitempty"`
 	Hypothesis     string  `json:"hypothesis,omitempty"`
@@ -99,7 +100,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		return
 	}
 
-	grid, err := bt.ExpandGrid(req.ParameterGrid)
+	combinations, err := bt.ExpandCombinedGrid(req.ParameterGrid, req.ParameterStringGrid)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -125,6 +126,15 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 	// out as HTTP 500.
 	for _, ov := range req.ParameterGrid {
 		if _, err := bt.ApplyOverrides(entity.StrategyProfile{}, map[string]float64{ov.Path: 0}); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	// Same pre-validation for string-valued paths. Probe with a known-good
+	// value ("" is accepted by every supported path) to isolate path
+	// errors from value errors.
+	for _, ov := range req.ParameterStringGrid {
+		if _, err := bt.ApplyStringOverrides(entity.StrategyProfile{}, map[string]string{ov.Path: ""}); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -173,7 +183,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 	input := bt.WalkForwardInput{
 		BaseProfile:    *baseProfile,
 		Windows:        windows,
-		Grid:           grid,
+		Combinations:   combinations,
 		Objective:      req.Objective,
 		PDCACycleID:    req.PDCACycleID,
 		Hypothesis:     req.Hypothesis,
