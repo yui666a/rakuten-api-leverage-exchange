@@ -235,12 +235,16 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				InitialCapital:        shared.InitialBalance,
 			}
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
+			// cycle44: plumb the per-combination profile's bb_squeeze_lookback
+			// through RunInput so WFO grids that sweep this axis actually
+			// affect RecentSqueeze. Zero keeps the legacy default of 5.
 			result, err := windowRunner.Run(ctx, bt.RunInput{
-				Config:         cfg,
-				TradeAmount:    shared.TradeAmount,
-				PrimaryCandles: primary.Candles,
-				HigherCandles:  higherCandles,
-				RiskConfig:     risk,
+				Config:            cfg,
+				TradeAmount:       shared.TradeAmount,
+				PrimaryCandles:    primary.Candles,
+				HigherCandles:     higherCandles,
+				BBSqueezeLookback: profile.StanceRules.BBSqueezeLookback,
+				RiskConfig:        risk,
 			})
 			if err != nil {
 				return nil, err

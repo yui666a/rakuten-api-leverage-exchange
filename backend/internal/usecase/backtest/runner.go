@@ -21,6 +21,13 @@ type RunInput struct {
 	TradeAmount    float64
 	PrimaryCandles []entity.Candle
 	HigherCandles  []entity.Candle
+
+	// BBSqueezeLookback is the window (bars) the IndicatorHandler uses to
+	// detect a recent BB squeeze. cycle44: plumbed through from the
+	// profile's stance_rules.bb_squeeze_lookback so the legacy hardcoded
+	// 5 no longer dominates. Zero means "use the legacy default of 5" for
+	// callers that don't set a profile (baseline DefaultStrategy runs).
+	BBSqueezeLookback int
 }
 
 // RunnerOption tunes optional aspects of a BacktestRunner at construction.
@@ -122,6 +129,12 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	// regardless of what the profile says.
 	tickRiskHandler.SetATRMultipliers(riskCfg.StopLossATRMultiplier, riskCfg.TrailingATRMultiplier)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
+	// cycle44: honour the profile's bb_squeeze_lookback by overriding the
+	// legacy default. Zero keeps the legacy 5 so DefaultStrategy runs (no
+	// profile in scope) see the same RecentSqueeze behaviour as pre-cycle44.
+	if input.BBSqueezeLookback > 0 {
+		indicatorHandler.SetBBSqueezeLookback(input.BBSqueezeLookback)
+	}
 	strategyHandler := NewStrategyHandler(strategy)
 	riskHandler := &RiskHandler{
 		RiskManager: riskMgr,

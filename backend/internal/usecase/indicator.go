@@ -12,10 +12,25 @@ import (
 // IndicatorCalculator computes technical indicators from candlestick data.
 type IndicatorCalculator struct {
 	repo repository.MarketDataRepository
+
+	// bbSqueezeLookback: cycle44. Legacy default is 5; callers that load
+	// a profile should call SetBBSqueezeLookback so stance_rules.
+	// bb_squeeze_lookback takes effect. 0 disables RecentSqueeze entirely.
+	bbSqueezeLookback int
 }
 
 func NewIndicatorCalculator(repo repository.MarketDataRepository) *IndicatorCalculator {
-	return &IndicatorCalculator{repo: repo}
+	return &IndicatorCalculator{repo: repo, bbSqueezeLookback: 5}
+}
+
+// SetBBSqueezeLookback lets the composition root override the window
+// used for RecentSqueeze. Mirrors IndicatorHandler.SetBBSqueezeLookback
+// so the live and backtest pipelines honour the same profile knob.
+func (c *IndicatorCalculator) SetBBSqueezeLookback(n int) {
+	if n < 0 {
+		n = 0
+	}
+	c.bbSqueezeLookback = n
 }
 
 // Calculate computes all technical indicators for the given symbol and interval.
@@ -116,10 +131,13 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.OBVSlope20 = toPtr(indicator.OBVSlope(prices, volumes, 20))
 	result.CMF20 = toPtr(indicator.CMF(highs, lows, prices, volumes, 20))
 
-	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
-	if n >= 20 {
+	// RecentSqueeze: check if any of the last `c.bbSqueezeLookback`
+	// candles had BBBandwidth < 0.02. cycle44: profile's stance_rules
+	// now drives this via SetBBSqueezeLookback; 0 disables the gate
+	// (RecentSqueeze stays nil).
+	if n >= 20 && c.bbSqueezeLookback > 0 {
 		recentSqueeze := false
-		lookback := 5
+		lookback := c.bbSqueezeLookback
 		if lookback > n-19 {
 			lookback = n - 19
 		}
