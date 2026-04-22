@@ -1,0 +1,56 @@
+{
+  "name": "experiment_2026-04-23_sl14_bblk3_cmf010_block_ct",
+  "description": "cycle54 Level 2: combined (cycle45) base with htf_filter.block_counter_trend=true. Tests whether flipping the HTF counter-trend block changes 4-period returns. cycle28-37 Lesson 4 is invalidated so re-examination is warranted.",
+  "indicators": {
+    "sma_short": 20,
+    "sma_long": 50,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_multiplier": 2.0,
+    "atr_period": 14
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 3,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": true,
+    "alignment_boost": 0.1
+  }
+}
