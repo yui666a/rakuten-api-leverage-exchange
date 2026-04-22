@@ -296,6 +296,82 @@ func TestApplyOverrides_UnknownPathReturnsError(t *testing.T) {
 	}
 }
 
+// TestApplyOverrides_RegimeDetectorConfig is the PR-5 part F wiring
+// guard: a router profile's detector_config must be reachable from a
+// WFO grid so cycle40+ can sweep TrendADXMin / VolatileATRPercentMin /
+// HysteresisBars across real candle data. Without this path, cycle39's
+// "detector never emits anything but bull-trend on LTC 15m" would
+// stay permanently blocked on a hand-edited profile loop.
+func TestApplyOverrides_RegimeDetectorConfig(t *testing.T) {
+	t.Run("creates nested config on a flat profile", func(t *testing.T) {
+		base := entity.StrategyProfile{Name: "flat"}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"regime_routing.detector_config.trend_adx_min":            25,
+			"regime_routing.detector_config.volatile_atr_percent_min": 3.5,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.RegimeRouting == nil || got.RegimeRouting.DetectorConfig == nil {
+			t.Fatalf("nested config not allocated: %+v", got.RegimeRouting)
+		}
+		if got.RegimeRouting.DetectorConfig.TrendADXMin != 25 {
+			t.Errorf("TrendADXMin = %v, want 25", got.RegimeRouting.DetectorConfig.TrendADXMin)
+		}
+		if got.RegimeRouting.DetectorConfig.VolatileATRPercentMin != 3.5 {
+			t.Errorf("VolatileATRPercentMin = %v, want 3.5", got.RegimeRouting.DetectorConfig.VolatileATRPercentMin)
+		}
+	})
+
+	t.Run("preserves existing default + overrides on a router base", func(t *testing.T) {
+		base := entity.StrategyProfile{
+			Name: "router",
+			RegimeRouting: &entity.RegimeRoutingConfig{
+				Default:   "child_default",
+				Overrides: map[string]string{"bear-trend": "child_bear"},
+			},
+		}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"regime_routing.detector_config.trend_adx_min": 15,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.RegimeRouting.Default != "child_default" {
+			t.Errorf("default lost: %q", got.RegimeRouting.Default)
+		}
+		if got.RegimeRouting.Overrides["bear-trend"] != "child_bear" {
+			t.Errorf("overrides lost: %+v", got.RegimeRouting.Overrides)
+		}
+		if got.RegimeRouting.DetectorConfig.TrendADXMin != 15 {
+			t.Errorf("TrendADXMin override lost: %v", got.RegimeRouting.DetectorConfig.TrendADXMin)
+		}
+	})
+
+	t.Run("hysteresis_bars accepts integer-valued floats", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"regime_routing.detector_config.hysteresis_bars": 5,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.RegimeRouting.DetectorConfig.HysteresisBars != 5 {
+			t.Errorf("HysteresisBars = %d, want 5", got.RegimeRouting.DetectorConfig.HysteresisBars)
+		}
+	})
+
+	t.Run("hysteresis_bars rejects fractional grid values", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		_, err := ApplyOverrides(base, map[string]float64{
+			"regime_routing.detector_config.hysteresis_bars": 2.5,
+		})
+		if err == nil {
+			t.Fatal("expected error on fractional hysteresis_bars (silent truncation would corrupt the grid signal)")
+		}
+	})
+}
+
 // -------------- string overrides / combined grid --------------
 
 func TestApplyStringOverrides_HTFMode(t *testing.T) {

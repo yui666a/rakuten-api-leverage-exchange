@@ -298,3 +298,64 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
 		t.Fatalf("JSON round-trip differs.\n got: %v\nwant: %v", gotMap, wantMap)
 	}
 }
+
+// TestStrategyProfile_Validate_RegimeDetectorConfig is the PR-5 part F
+// schema guard. detector_config is optional inside regime_routing;
+// when present, every field must be >= 0 (zero is "use default" per
+// regime.NewDetector). Negative values are silently coerced by the
+// detector to defaults today, which would mask grid typos — Validate
+// catches them at the loader boundary instead.
+func TestStrategyProfile_Validate_RegimeDetectorConfig(t *testing.T) {
+	routerWith := func(dc *RegimeDetectorConfig) StrategyProfile {
+		return StrategyProfile{
+			Name: "router",
+			RegimeRouting: &RegimeRoutingConfig{
+				Default:        "child",
+				DetectorConfig: dc,
+			},
+		}
+	}
+
+	t.Run("nil detector_config is allowed", func(t *testing.T) {
+		if err := routerWith(nil).Validate(); err != nil {
+			t.Fatalf("nil detector_config rejected: %v", err)
+		}
+	})
+
+	t.Run("zero values are allowed (= use defaults)", func(t *testing.T) {
+		p := routerWith(&RegimeDetectorConfig{})
+		if err := p.Validate(); err != nil {
+			t.Fatalf("zero detector_config rejected: %v", err)
+		}
+	})
+
+	t.Run("positive values are allowed", func(t *testing.T) {
+		p := routerWith(&RegimeDetectorConfig{
+			TrendADXMin: 25, VolatileATRPercentMin: 3.5, HysteresisBars: 5,
+		})
+		if err := p.Validate(); err != nil {
+			t.Fatalf("positive detector_config rejected: %v", err)
+		}
+	})
+
+	t.Run("negative TrendADXMin rejected", func(t *testing.T) {
+		p := routerWith(&RegimeDetectorConfig{TrendADXMin: -1})
+		if err := p.Validate(); err == nil {
+			t.Fatal("negative TrendADXMin must be rejected")
+		}
+	})
+
+	t.Run("negative VolatileATRPercentMin rejected", func(t *testing.T) {
+		p := routerWith(&RegimeDetectorConfig{VolatileATRPercentMin: -0.5})
+		if err := p.Validate(); err == nil {
+			t.Fatal("negative VolatileATRPercentMin must be rejected")
+		}
+	})
+
+	t.Run("negative HysteresisBars rejected", func(t *testing.T) {
+		p := routerWith(&RegimeDetectorConfig{HysteresisBars: -1})
+		if err := p.Validate(); err == nil {
+			t.Fatal("negative HysteresisBars must be rejected")
+		}
+	})
+}
