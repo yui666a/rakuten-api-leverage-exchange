@@ -274,7 +274,9 @@ func ExpandCombinedGrid(numeric []ParameterOverride, strs []ParameterStringOverr
 //	strategy_risk.max_daily_loss
 //	signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
 //	signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max,stoch_entry_max,stoch_exit_min}
-//	signal_rules.breakout.{volume_ratio_min,adx_min,donchian_period}
+//	signal_rules.breakout.{volume_ratio_min,adx_min,donchian_period,cmf_buy_min,cmf_sell_max}
+//	// signal_rules.trend_follow.require_obv_alignment is a bool and is set
+//	// directly on the profile; it is not an ApplyOverrides axis.
 //	stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
 //	htf_filter.alignment_boost
 //	regime_routing.detector_config.trend_adx_min
@@ -332,6 +334,19 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: signal_rules.breakout.donchian_period must be >= 0 (got %v)", value)
 			}
 			out.SignalRules.Breakout.DonchianPeriod = int(value)
+		case "signal_rules.breakout.cmf_buy_min":
+			// CMF is bounded in [-1, 1]; BUY gate must stay in [0, 1] so
+			// the grid cannot set an always-on / always-off silent
+			// no-op by going outside the valid CMF range.
+			if value < 0 || value > 1 {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: signal_rules.breakout.cmf_buy_min must be in [0, 1] (got %v)", value)
+			}
+			out.SignalRules.Breakout.CMFBuyMin = value
+		case "signal_rules.breakout.cmf_sell_max":
+			if value < -1 || value > 0 {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: signal_rules.breakout.cmf_sell_max must be in [-1, 0] (got %v)", value)
+			}
+			out.SignalRules.Breakout.CMFSellMax = value
 		case "stance_rules.rsi_oversold":
 			out.StanceRules.RSIOversold = value
 		case "stance_rules.rsi_overbought":

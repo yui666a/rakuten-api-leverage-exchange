@@ -51,6 +51,14 @@ type IndicatorSet struct {
 	Donchian20Lower  *float64 `json:"donchian20Lower"`
 	Donchian20Middle *float64 `json:"donchian20Middle"`
 
+	// PR-9: Volume-based oscillators. OBV is a cumulative scalar whose
+	// absolute value is meaningless; OBVSlope20 is (OBV_now − OBV_{−20})
+	// and carries the gate signal (positive = net buying volume over the
+	// last 20 bars). CMF20 is bounded in [-1, 1]. Both nil during warmup.
+	OBV        *float64 `json:"obv"`
+	OBVSlope20 *float64 `json:"obvSlope20"`
+	CMF20      *float64 `json:"cmf20"`
+
 	Timestamp int64 `json:"timestamp"`
 }
 

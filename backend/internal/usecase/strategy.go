@@ -98,6 +98,21 @@ type StrategyEngineOptions struct {
 	// can be a follow-up once WFO tells us Donchian20 helps at all.
 	BreakoutDonchianPeriod int
 
+	// PR-9: volume-based gates.
+	//
+	//   TrendFollowRequireOBVAlignment: when true, trend-follow BUY
+	//     requires OBVSlope20 > 0 and SELL requires OBVSlope20 < 0.
+	//     Missing OBVSlope20 fails the gate, matching the
+	//     ADX/Stoch/Donchian convention. Default false = disabled.
+	//
+	//   BreakoutCMFBuyMin / BreakoutCMFSellMax: CMF20 thresholds that
+	//     gate breakout BUY / SELL signals respectively. CMF is bounded
+	//     in [-1, 1]; a typical active pair is (0.1, -0.1). Both default
+	//     to 0 which disables each direction's gate independently.
+	TrendFollowRequireOBVAlignment bool
+	BreakoutCMFBuyMin              float64
+	BreakoutCMFSellMax             float64
+
 	// defaulted tracks whether applyDefaults has already been called so we
 	// don't flip booleans to true twice (e.g. on a caller that explicitly
 	// wants them false).
@@ -387,7 +402,24 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 				return adxBlock("trend follow: ADX below threshold"), nil
 			}
 		}
-		return e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix), nil
+		tfSig := e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix)
+		// PR-9: OBV slope alignment. Applies only when a direction was
+		// actually emitted — HOLD passes through unchanged. BUY requires
+		// OBVSlope20 > 0 (net buying volume); SELL requires OBVSlope20
+		// < 0. Missing OBVSlope20 fails the gate.
+		if e.options.TrendFollowRequireOBVAlignment && tfSig != nil {
+			switch tfSig.Action {
+			case entity.SignalActionBuy:
+				if indicators.OBVSlope20 == nil || *indicators.OBVSlope20 <= 0 {
+					return adxBlock("trend follow: OBV slope not positive"), nil
+				}
+			case entity.SignalActionSell:
+				if indicators.OBVSlope20 == nil || *indicators.OBVSlope20 >= 0 {
+					return adxBlock("trend follow: OBV slope not negative"), nil
+				}
+			}
+		}
+		return tfSig, nil
 	case entity.MarketStanceContrarian:
 		if !e.options.EnableContrarian {
 			return &entity.Signal{
@@ -448,6 +480,22 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 			case entity.SignalActionSell:
 				if indicators.Donchian20Lower == nil || lastPrice >= *indicators.Donchian20Lower {
 					return adxBlock("breakout: price above Donchian lower"), nil
+				}
+			}
+		}
+		// PR-9: CMF confirmation. BUY requires CMF20 >= BreakoutCMFBuyMin
+		// (net buying pressure); SELL requires CMF20 <= BreakoutCMFSellMax
+		// (net selling pressure). Each direction is independent: a
+		// profile may set only one side. Missing CMF20 fails the gate.
+		if sig != nil {
+			if sig.Action == entity.SignalActionBuy && e.options.BreakoutCMFBuyMin > 0 {
+				if indicators.CMF20 == nil || *indicators.CMF20 < e.options.BreakoutCMFBuyMin {
+					return adxBlock("breakout: CMF below buy threshold"), nil
+				}
+			}
+			if sig.Action == entity.SignalActionSell && e.options.BreakoutCMFSellMax < 0 {
+				if indicators.CMF20 == nil || *indicators.CMF20 > e.options.BreakoutCMFSellMax {
+					return adxBlock("breakout: CMF above sell threshold"), nil
 				}
 			}
 		}

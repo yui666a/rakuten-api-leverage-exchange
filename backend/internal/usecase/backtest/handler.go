@@ -609,6 +609,11 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 		result.VolumeRatio = floatToPtr(vr)
 	}
 
+	// PR-9: OBV + CMF (volume-based). Mirror the live-pipeline calculator.
+	result.OBV = floatToPtr(indicator.OBV(closes, volumes))
+	result.OBVSlope20 = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
+	result.CMF20 = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
+
 	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
 	if n >= 20 {
 		recentSqueeze := false
