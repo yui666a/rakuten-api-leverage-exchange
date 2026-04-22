@@ -1,0 +1,55 @@
+{
+  "name": "experiment_2026-04-22_healthy_sl5_tr20",
+  "description": "healthy_v3 with SL=5% + trailing_atr_multiplier=2.0. Healthy SL replacement for v5 promotion candidacy.",
+  "indicators": {
+    "sma_short": 20,
+    "sma_long": 50,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_multiplier": 2.0,
+    "atr_period": 14
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 5,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 62,
+      "rsi_sell_min": 38
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 5,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.0
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
