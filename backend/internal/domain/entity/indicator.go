@@ -42,6 +42,15 @@ type IndicatorSet struct {
 	// they could not be computed (yields cleaner payloads during warmup).
 	Ichimoku *IchimokuSnapshot `json:"ichimoku,omitempty"`
 
+	// PR-11: Donchian Channel (N-bar high/low). nil when insufficient
+	// history is available (need at least N bars for the 20-bar default).
+	// Donchian20Upper/Lower bound the most recent 20 bars inclusive of the
+	// current bar so `lastPrice > Donchian20Upper` is a direct upside
+	// breakout probe for the configurable strategy's breakout stance.
+	Donchian20Upper  *float64 `json:"donchian20Upper"`
+	Donchian20Lower  *float64 `json:"donchian20Lower"`
+	Donchian20Middle *float64 `json:"donchian20Middle"`
+
 	Timestamp int64 `json:"timestamp"`
 }
 

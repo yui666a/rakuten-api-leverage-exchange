@@ -274,7 +274,7 @@ func ExpandCombinedGrid(numeric []ParameterOverride, strs []ParameterStringOverr
 //	strategy_risk.max_daily_loss
 //	signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
 //	signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max,stoch_entry_max,stoch_exit_min}
-//	signal_rules.breakout.{volume_ratio_min,adx_min}
+//	signal_rules.breakout.{volume_ratio_min,adx_min,donchian_period}
 //	stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
 //	htf_filter.alignment_boost
 //	regime_routing.detector_config.trend_adx_min
@@ -321,6 +321,17 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 			out.SignalRules.Breakout.VolumeRatioMin = value
 		case "signal_rules.breakout.adx_min":
 			out.SignalRules.Breakout.ADXMin = value
+		case "signal_rules.breakout.donchian_period":
+			// Period is an int; a fractional grid value would silently
+			// truncate, mirroring the existing "no silent rounding"
+			// contract used for regime_routing.detector_config.hysteresis_bars.
+			if value != float64(int(value)) {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: signal_rules.breakout.donchian_period must be an integer (got %v)", value)
+			}
+			if value < 0 {
+				return entity.StrategyProfile{}, fmt.Errorf("walk-forward: signal_rules.breakout.donchian_period must be >= 0 (got %v)", value)
+			}
+			out.SignalRules.Breakout.DonchianPeriod = int(value)
 		case "stance_rules.rsi_oversold":
 			out.StanceRules.RSIOversold = value
 		case "stance_rules.rsi_overbought":

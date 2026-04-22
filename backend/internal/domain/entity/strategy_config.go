@@ -96,6 +96,15 @@ type BreakoutConfig struct {
 	RequireMACDConfirm bool    `json:"require_macd_confirm"`
 	// PR-6: breakout fires only when ADX >= ADXMin (0 = gate disabled).
 	ADXMin float64 `json:"adx_min"`
+	// PR-11: Donchian Channel confirmation. DonchianPeriod > 0 activates
+	// the gate; a typical value is 20 (~5 hours on 15m bars). When active:
+	//   - BUY  requires lastPrice > Donchian(period).Upper
+	//   - SELL requires lastPrice < Donchian(period).Lower
+	// The gate is orthogonal to the existing BB-width/volume gates — BB
+	// detects mean-reversion squeeze-and-release while Donchian detects
+	// range-of-N breakout; both must agree before a signal fires. Missing
+	// Donchian (warmup) treats the gate as a fail, matching ADX/Stoch.
+	DonchianPeriod int `json:"donchian_period,omitempty"`
 }
 
 // HTFFilterConfig configures the higher-timeframe trend filter.
@@ -306,6 +315,12 @@ func (p StrategyProfile) Validate() error {
 	}
 	if p.Risk.TakeProfitPercent < 0 {
 		errs = append(errs, fmt.Errorf("strategy_risk.take_profit_percent must be >= 0 (got %v)", p.Risk.TakeProfitPercent))
+	}
+
+	// PR-11: negative Donchian period would compute NaN indefinitely; 0
+	// disables the gate and is the safe default.
+	if p.SignalRules.Breakout.DonchianPeriod < 0 {
+		errs = append(errs, fmt.Errorf("signal_rules.breakout.donchian_period must be >= 0 (got %d)", p.SignalRules.Breakout.DonchianPeriod))
 	}
 
 	// regime_routing.overrides without a default is also flagged — a
