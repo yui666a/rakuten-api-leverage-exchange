@@ -412,6 +412,123 @@ export type BacktestRunRequest = {
   maxDailyLoss?: number
   maxConsecutiveLosses?: number
   cooldownMinutes?: number
+  // PR-12 (profile UI): when set, the preset name picked in the UI. The
+  // server uses this purely as the audit label on the resulting row.
+  profileName?: string
+  // PR-12 (profile UI): when set, supersedes profileName for strategy
+  // construction — the FE picker loads a preset, the user edits the
+  // fields inline, and the edited StrategyProfile ships here. Router
+  // profiles (those with regime_routing) are rejected server-side.
+  profileOverride?: StrategyProfile
+  // PR-12: PDCA continuation label (optional).
+  pdcaCycleId?: string
+  hypothesis?: string
+  parentResultId?: string | null
+}
+
+/* ------------------------------------------------------------------ */
+/* PR-12 profile picker types                                         */
+/* ------------------------------------------------------------------ */
+
+// ProfileSummary mirrors strategyprofile.ProfileSummary on the BE side.
+// Used for GET /api/v1/profiles; the picker renders these in a dropdown.
+export type ProfileSummary = {
+  name: string
+  description: string
+  isRouter: boolean
+}
+
+export type ProfileListResponse = {
+  profiles: ProfileSummary[]
+}
+
+// StrategyProfile mirrors entity.StrategyProfile. Only the fields the FE
+// edit-and-run form reads or writes are listed; other fields are passed
+// through untouched via the catch-all `regime_routing?: unknown`.
+export type StrategyProfile = {
+  name: string
+  description: string
+  indicators: IndicatorConfig
+  stance_rules: StanceRulesConfig
+  signal_rules: SignalRulesConfig
+  strategy_risk: StrategyRiskConfig
+  htf_filter: HTFFilterConfig
+  // regime_routing is out of scope for the edit-and-run UI. Preserved
+  // as-is on round-trip so a profile that happens to carry a router
+  // block is not silently mutated.
+  regime_routing?: unknown
+}
+
+export type IndicatorConfig = {
+  sma_short: number
+  sma_long: number
+  rsi_period: number
+  macd_fast: number
+  macd_slow: number
+  macd_signal: number
+  bb_period: number
+  bb_multiplier: number
+  atr_period: number
+}
+
+export type StanceRulesConfig = {
+  rsi_oversold: number
+  rsi_overbought: number
+  sma_convergence_threshold: number
+  bb_squeeze_lookback: number
+  breakout_volume_ratio: number
+}
+
+export type SignalRulesConfig = {
+  trend_follow: TrendFollowConfig
+  contrarian: ContrarianConfig
+  breakout: BreakoutConfig
+}
+
+export type TrendFollowConfig = {
+  enabled: boolean
+  require_macd_confirm: boolean
+  require_ema_cross: boolean
+  rsi_buy_max: number
+  rsi_sell_min: number
+  adx_min?: number
+  require_obv_alignment?: boolean
+}
+
+export type ContrarianConfig = {
+  enabled: boolean
+  rsi_entry: number
+  rsi_exit: number
+  macd_histogram_limit: number
+  adx_max?: number
+  stoch_entry_max?: number
+  stoch_exit_min?: number
+}
+
+export type BreakoutConfig = {
+  enabled: boolean
+  volume_ratio_min: number
+  require_macd_confirm: boolean
+  adx_min?: number
+  donchian_period?: number
+  cmf_buy_min?: number
+  cmf_sell_max?: number
+}
+
+export type StrategyRiskConfig = {
+  stop_loss_percent: number
+  take_profit_percent: number
+  stop_loss_atr_multiplier: number
+  trailing_atr_multiplier?: number
+  max_position_amount: number
+  max_daily_loss: number
+}
+
+export type HTFFilterConfig = {
+  enabled: boolean
+  block_counter_trend: boolean
+  alignment_boost: number
+  mode?: string
 }
 
 export async function fetchApi<T>(path: string): Promise<T> {

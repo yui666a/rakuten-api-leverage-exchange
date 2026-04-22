@@ -6,6 +6,8 @@ import {
   type BacktestResult,
   type BacktestResultListResponse,
   type BacktestRunRequest,
+  type ProfileListResponse,
+  type StrategyProfile,
 } from '../lib/api'
 
 // BacktestResultsFilter mirrors the query-parameter plumbing added to
@@ -82,5 +84,34 @@ export function useRunBacktest() {
       void queryClient.invalidateQueries({ queryKey: ['backtest', 'results'] })
       queryClient.setQueryData(['backtest', 'result', result.id], result)
     },
+  })
+}
+
+/* ------------------------------------------------------------------ */
+/* PR-12 profile picker hooks                                          */
+/* ------------------------------------------------------------------ */
+
+// useProfiles fetches the summary list used by the backtest picker.
+// Stale-for-a-while because /profiles is a small disk scan — re-fetching
+// on every screen mount would be noise; 60 s matches the CSV-meta cache.
+export function useProfiles() {
+  return useQuery({
+    queryKey: ['profiles', 'list'] as const,
+    queryFn: () => fetchApi<ProfileListResponse>('/profiles'),
+    staleTime: 60_000,
+  })
+}
+
+// useProfile fetches the full StrategyProfile for the given name. The
+// picker triggers this only after the user selects a preset (enabled
+// gate on the name); caching per-name keeps the edit form snappy when
+// users flip between presets.
+export function useProfile(name: string) {
+  const trimmed = name.trim()
+  return useQuery({
+    queryKey: ['profiles', 'detail', trimmed] as const,
+    queryFn: () => fetchApi<StrategyProfile>(`/profiles/${encodeURIComponent(trimmed)}`),
+    enabled: trimmed !== '',
+    staleTime: 60_000,
   })
 }
