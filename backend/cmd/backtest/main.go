@@ -147,7 +147,7 @@ func runCommand(args []string) error {
 
 	var runnerOpts []bt.RunnerOption
 	if profile != nil {
-		strat, err := strategyuc.NewConfigurableStrategy(profile)
+		strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(profilesBaseDir), profile)
 		if err != nil {
 			return fmt.Errorf("construct strategy from profile %q: %w", f.Profile, err)
 		}
@@ -269,9 +269,22 @@ func optimizeCommand(args []string) error {
 	// drives every evaluated parameter combination so the optimizer
 	// explores the space around the profile rather than the default
 	// strategy.
+	//
+	// `optimize` searches RiskConfig parameter ranges with one shared
+	// Strategy across every evaluation. ConfigurableStrategy is
+	// stateless so reuse is safe; ProfileRouter, however, owns
+	// detector hysteresis state that would accumulate across N
+	// evaluations and corrupt results — and `optimize` does not vary
+	// regime_routing fields anyway. Reject router profiles up front
+	// here so failures are visible at request time, not as silent
+	// numbers. PR D can lift this once the optimizer learns to build
+	// per-evaluation strategies.
 	var runnerOpts []bt.RunnerOption
 	if profile != nil {
-		strat, err := strategyuc.NewConfigurableStrategy(profile)
+		if profile.HasRouting() {
+			return fmt.Errorf("optimize: profile %q is a regime-routing profile; use `run` or `walk-forward` instead", f.Profile)
+		}
+		strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(profilesBaseDir), profile)
 		if err != nil {
 			return fmt.Errorf("construct strategy from profile %q: %w", f.Profile, err)
 		}
@@ -347,9 +360,15 @@ func refineCommand(args []string) error {
 		ranges = append(ranges, r)
 	}
 
+	// Same router-incompatibility rule as `optimize` above —
+	// `refine` runs the optimizer twice (coarse + fine), so a router
+	// profile would compound the hysteresis-leak problem.
 	var runnerOpts []bt.RunnerOption
 	if profile != nil {
-		strat, err := strategyuc.NewConfigurableStrategy(profile)
+		if profile.HasRouting() {
+			return fmt.Errorf("refine: profile %q is a regime-routing profile; use `run` or `walk-forward` instead", f.Profile)
+		}
+		strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(profilesBaseDir), profile)
 		if err != nil {
 			return fmt.Errorf("construct strategy from profile %q: %w", f.Profile, err)
 		}
@@ -607,8 +626,8 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 	// Base values come from the flags (which already carry the Go defaults).
 	stopLoss := f.StopLoss
 	takeProfit := f.TakeProfit
-	stopLossATR := f.StopLossATR   // PR-12
-	trailingATR := f.TrailingATR   // PR-12
+	stopLossATR := f.StopLossATR // PR-12
+	trailingATR := f.TrailingATR // PR-12
 	maxPositionAmount := 1_000_000_000.0
 	maxDailyLoss := 1_000_000_000.0
 

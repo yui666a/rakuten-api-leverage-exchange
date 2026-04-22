@@ -12,6 +12,7 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
@@ -123,7 +124,11 @@ func walkForwardCommand(args []string) error {
 		Combinations: combos,
 		Objective:    *objective,
 		RunWindow: func(ctx context.Context, phase bt.WalkForwardPhase, pf entity.StrategyProfile, wFrom, wTo time.Time) (*entity.BacktestResult, error) {
-			strat, err := strategyuc.NewConfigurableStrategy(&pf)
+			// Build a fresh Strategy per (window, combo) so a
+			// regime-aware ProfileRouter starts each WFO window with
+			// a clean detector hysteresis state — see the matching
+			// comment in the HTTP handler for rationale.
+			strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(profilesBaseDir), &pf)
 			if err != nil {
 				return nil, err
 			}
