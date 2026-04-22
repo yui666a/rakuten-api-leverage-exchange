@@ -109,6 +109,13 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 		result.VolumeRatio = toPtr(vr)
 	}
 
+	// PR-9: OBV + CMF (volume-based). OBVSlope20 carries the gate signal
+	// (cumulative buying volume over 20 bars); raw OBV is exposed for
+	// diagnostics / frontend charting. CMF20 is bounded in [-1, 1].
+	result.OBV = toPtr(indicator.OBV(prices, volumes))
+	result.OBVSlope20 = toPtr(indicator.OBVSlope(prices, volumes, 20))
+	result.CMF20 = toPtr(indicator.CMF(highs, lows, prices, volumes, 20))
+
 	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
 	if n >= 20 {
 		recentSqueeze := false

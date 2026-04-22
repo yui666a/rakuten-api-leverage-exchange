@@ -70,6 +70,12 @@ type TrendFollowConfig struct {
 	RSISellMin         float64 `json:"rsi_sell_min"`
 	// PR-6: trend_follow fires only when ADX >= ADXMin (0 = gate disabled).
 	ADXMin float64 `json:"adx_min"`
+	// PR-9: OBV slope confirmation. When RequireOBVAlignment is true, a
+	// trend-follow BUY requires OBVSlope20 > 0 (net buying volume over the
+	// last 20 bars) and SELL requires OBVSlope20 < 0. Missing OBVSlope20
+	// fails the gate, matching the ADX/Stoch convention. Defaults to false
+	// so existing profiles are bit-identical.
+	RequireOBVAlignment bool `json:"require_obv_alignment,omitempty"`
 }
 
 // ContrarianConfig configures the contrarian signal generator.
@@ -105,6 +111,13 @@ type BreakoutConfig struct {
 	// range-of-N breakout; both must agree before a signal fires. Missing
 	// Donchian (warmup) treats the gate as a fail, matching ADX/Stoch.
 	DonchianPeriod int `json:"donchian_period,omitempty"`
+	// PR-9: CMF confirmation. CMFBuyMin > 0 activates the BUY gate
+	// (breakout BUY requires CMF20 >= CMFBuyMin); CMFSellMax < 0
+	// activates the SELL gate (SELL requires CMF20 <= CMFSellMax). Both
+	// default to 0 so existing profiles are bit-identical. CMF is
+	// bounded in [-1, 1]; typical active values ~ ±0.1.
+	CMFBuyMin  float64 `json:"cmf_buy_min,omitempty"`
+	CMFSellMax float64 `json:"cmf_sell_max,omitempty"`
 }
 
 // HTFFilterConfig configures the higher-timeframe trend filter.
@@ -321,6 +334,16 @@ func (p StrategyProfile) Validate() error {
 	// disables the gate and is the safe default.
 	if p.SignalRules.Breakout.DonchianPeriod < 0 {
 		errs = append(errs, fmt.Errorf("signal_rules.breakout.donchian_period must be >= 0 (got %d)", p.SignalRules.Breakout.DonchianPeriod))
+	}
+
+	// PR-9: CMF gate bounds. CMF is in [-1, 1], so any value outside that
+	// range either never fires (CMFBuyMin > 1) or always fires (CMFBuyMin
+	// < -1), both silent no-ops. Reject to fail loudly.
+	if p.SignalRules.Breakout.CMFBuyMin < 0 || p.SignalRules.Breakout.CMFBuyMin > 1 {
+		errs = append(errs, fmt.Errorf("signal_rules.breakout.cmf_buy_min must be in [0, 1] (got %v)", p.SignalRules.Breakout.CMFBuyMin))
+	}
+	if p.SignalRules.Breakout.CMFSellMax < -1 || p.SignalRules.Breakout.CMFSellMax > 0 {
+		errs = append(errs, fmt.Errorf("signal_rules.breakout.cmf_sell_max must be in [-1, 0] (got %v)", p.SignalRules.Breakout.CMFSellMax))
 	}
 
 	// regime_routing.overrides without a default is also flagged — a

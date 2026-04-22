@@ -428,6 +428,62 @@ func TestApplyOverrides_BreakoutDonchianPeriod(t *testing.T) {
 	})
 }
 
+// TestApplyOverrides_BreakoutCMF is the PR-9 wiring guard for CMF gates.
+// CMF is bounded in [-1, 1]; the BUY gate must stay in [0, 1] and the
+// SELL gate must stay in [-1, 0], otherwise a grid axis could silently
+// disable itself by landing outside the CMF range.
+func TestApplyOverrides_BreakoutCMF(t *testing.T) {
+	t.Run("buy min sets the field within bounds", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.cmf_buy_min": 0.15,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.SignalRules.Breakout.CMFBuyMin != 0.15 {
+			t.Errorf("CMFBuyMin = %v, want 0.15", got.SignalRules.Breakout.CMFBuyMin)
+		}
+	})
+
+	t.Run("sell max sets the field within bounds", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		got, err := ApplyOverrides(base, map[string]float64{
+			"signal_rules.breakout.cmf_sell_max": -0.15,
+		})
+		if err != nil {
+			t.Fatalf("ApplyOverrides: %v", err)
+		}
+		if got.SignalRules.Breakout.CMFSellMax != -0.15 {
+			t.Errorf("CMFSellMax = %v, want -0.15", got.SignalRules.Breakout.CMFSellMax)
+		}
+	})
+
+	t.Run("buy min rejects out-of-range values", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		for _, v := range []float64{-0.1, 1.1} {
+			_, err := ApplyOverrides(base, map[string]float64{
+				"signal_rules.breakout.cmf_buy_min": v,
+			})
+			if err == nil {
+				t.Errorf("value %v should be rejected", v)
+			}
+		}
+	})
+
+	t.Run("sell max rejects out-of-range values", func(t *testing.T) {
+		base := entity.StrategyProfile{}
+		for _, v := range []float64{-1.1, 0.1} {
+			_, err := ApplyOverrides(base, map[string]float64{
+				"signal_rules.breakout.cmf_sell_max": v,
+			})
+			if err == nil {
+				t.Errorf("value %v should be rejected", v)
+			}
+		}
+	})
+}
+
 // -------------- string overrides / combined grid --------------
 
 func TestApplyStringOverrides_HTFMode(t *testing.T) {

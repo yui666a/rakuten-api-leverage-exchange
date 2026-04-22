@@ -57,12 +57,13 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 
 	engineOpts := usecase.StrategyEngineOptions{
 		// Trend-follow
-		EnableTrendFollow:  profile.SignalRules.TrendFollow.Enabled,
-		RSIBuyMax:          profile.SignalRules.TrendFollow.RSIBuyMax,
-		RSISellMin:         profile.SignalRules.TrendFollow.RSISellMin,
-		RequireMACDConfirm: profile.SignalRules.TrendFollow.RequireMACDConfirm,
-		RequireEMACross:    profile.SignalRules.TrendFollow.RequireEMACross,
-		TrendFollowADXMin:  profile.SignalRules.TrendFollow.ADXMin, // PR-6
+		EnableTrendFollow:              profile.SignalRules.TrendFollow.Enabled,
+		RSIBuyMax:                      profile.SignalRules.TrendFollow.RSIBuyMax,
+		RSISellMin:                     profile.SignalRules.TrendFollow.RSISellMin,
+		RequireMACDConfirm:             profile.SignalRules.TrendFollow.RequireMACDConfirm,
+		RequireEMACross:                profile.SignalRules.TrendFollow.RequireEMACross,
+		TrendFollowADXMin:              profile.SignalRules.TrendFollow.ADXMin, // PR-6
+		TrendFollowRequireOBVAlignment: profile.SignalRules.TrendFollow.RequireOBVAlignment, // PR-9
 
 		// Contrarian
 		EnableContrarian:        profile.SignalRules.Contrarian.Enabled,
@@ -77,8 +78,10 @@ func NewConfigurableStrategy(profile *entity.StrategyProfile) (*ConfigurableStra
 		EnableBreakout:             profile.SignalRules.Breakout.Enabled,
 		BreakoutVolumeRatio:        profile.SignalRules.Breakout.VolumeRatioMin,
 		BreakoutRequireMACDConfirm: profile.SignalRules.Breakout.RequireMACDConfirm,
-		BreakoutADXMin:             profile.SignalRules.Breakout.ADXMin, // PR-6
+		BreakoutADXMin:             profile.SignalRules.Breakout.ADXMin,         // PR-6
 		BreakoutDonchianPeriod:     profile.SignalRules.Breakout.DonchianPeriod, // PR-11
+		BreakoutCMFBuyMin:          profile.SignalRules.Breakout.CMFBuyMin,      // PR-9
+		BreakoutCMFSellMax:         profile.SignalRules.Breakout.CMFSellMax,     // PR-9
 
 		// HTF filter
 		HTFEnabled:           profile.HTFFilter.Enabled,
