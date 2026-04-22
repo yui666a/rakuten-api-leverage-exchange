@@ -12,6 +12,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
@@ -35,10 +36,10 @@ type runWalkForwardRequest struct {
 	OutOfSampleMonths int    `json:"outOfSampleMonths"` // default 3
 	StepMonths        int    `json:"stepMonths"`        // default 3
 
-	BaseProfile         string                         `json:"baseProfile" binding:"required"`
-	ParameterGrid       []bt.ParameterOverride         `json:"parameterGrid"`
-	ParameterStringGrid []bt.ParameterStringOverride   `json:"parameterStringGrid"`
-	Objective           string                         `json:"objective"` // "return" | "sharpe" | "profit_factor"
+	BaseProfile         string                       `json:"baseProfile" binding:"required"`
+	ParameterGrid       []bt.ParameterOverride       `json:"parameterGrid"`
+	ParameterStringGrid []bt.ParameterStringOverride `json:"parameterStringGrid"`
+	Objective           string                       `json:"objective"` // "return" | "sharpe" | "profit_factor"
 
 	PDCACycleID    string  `json:"pdcaCycleId,omitempty"`
 	Hypothesis     string  `json:"hypothesis,omitempty"`
@@ -189,7 +190,12 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		Hypothesis:     req.Hypothesis,
 		ParentResultID: req.ParentResultID,
 		RunWindow: func(ctx context.Context, phase bt.WalkForwardPhase, profile entity.StrategyProfile, wFrom, wTo time.Time) (*entity.BacktestResult, error) {
-			strat, err := strategyuc.NewConfigurableStrategy(&profile)
+			// Build a fresh Strategy per (window, combo) so a
+			// regime-aware ProfileRouter starts each WFO window with a
+			// clean detector hysteresis state — otherwise window N's
+			// committed regime would carry into window N+1 and
+			// confound the IS/OOS comparison.
+			strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(baseDir), &profile)
 			if err != nil {
 				return nil, fmt.Errorf("strategy: %w", err)
 			}

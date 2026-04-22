@@ -200,11 +200,13 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	}
 
 	// When a profile is specified, build a one-shot runner wired with a
-	// ConfigurableStrategy. We do NOT mutate h.runner (it is shared across
-	// requests) so profile selection is per-request.
+	// ConfigurableStrategy or a regime-aware ProfileRouter, depending on
+	// whether the profile carries a regime_routing block. We do NOT
+	// mutate h.runner (it is shared across requests) so profile
+	// selection is per-request.
 	runner := h.runner
 	if profile != nil {
-		strat, err := strategyuc.NewConfigurableStrategy(profile)
+		strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(baseDir), profile)
 		if err != nil {
 			// A profile that loaded but fails strategy construction is still
 			// caller-driven (the profile JSON is on disk because the caller

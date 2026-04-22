@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
+	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
 func TestMergeCandleEvents_PrefersHigherOnSameTimestamp(t *testing.T) {
@@ -98,6 +100,144 @@ func TestBacktestRunner_Run(t *testing.T) {
 	}
 	if len(result.ID) != 26 {
 		t.Fatalf("expected ULID length 26, got %d id=%s", len(result.ID), result.ID)
+	}
+}
+
+// TestBacktestRunner_RouterStrategyChangesResult is the PR-5 part C
+// runner-level wiring confirmation. It mirrors the ATR trailing test
+// below: same synthetic candle stream, two strategies — a flat
+// ConfigurableStrategy on a child profile vs. a regime-routing
+// ProfileRouter that pairs two distinct child profiles — and asserts
+// the resulting trade counts differ.
+//
+// Without this guard, a future change that silently bypassed the
+// router (e.g. always returning the default child from the runner)
+// would not be caught by any unit test.
+//
+// The two child profiles use deliberately different RSI thresholds
+// so they emit different signal patterns; the regime detector must
+// actually swap delegation to make the trade counts diverge from the
+// flat baseline.
+func TestBacktestRunner_RouterStrategyChangesResult(t *testing.T) {
+	primary := make([]entity.Candle, 0, 200)
+	higher := make([]entity.Candle, 0, 50)
+	baseTime := int64(1_770_000_000_000)
+	price := 100.0
+	for i := 0; i < 200; i++ {
+		// Sine-with-drift: enough swings + ATR motion for the regime
+		// detector to commit different regimes across the run.
+		price += math.Sin(float64(i)/5.0) * 1.5
+		ts := baseTime + int64(i)*15*60*1000
+		primary = append(primary, entity.Candle{
+			Open: price - 0.5, High: price + 1.2, Low: price - 1.2, Close: price, Time: ts,
+		})
+	}
+	for i := 0; i < 50; i++ {
+		idx := i * 4
+		p := primary[idx].Close
+		higher = append(higher, entity.Candle{
+			Open: p - 0.6, High: p + 1.3, Low: p - 1.3, Close: p, Time: primary[idx].Time,
+		})
+	}
+	cfg := entity.BacktestConfig{
+		Symbol: "BTC_JPY", SymbolID: 7,
+		PrimaryInterval: "PT15M", HigherTFInterval: "PT1H",
+		FromTimestamp:  primary[0].Time,
+		ToTimestamp:    primary[len(primary)-1].Time,
+		InitialBalance: 100000, SpreadPercent: 0.1, DailyCarryCost: 0.04,
+	}
+	risk := entity.RiskConfig{
+		MaxPositionAmount: 1_000_000_000, MaxDailyLoss: 1_000_000_000,
+		StopLossPercent: 5, TakeProfitPercent: 10, InitialCapital: 100000,
+	}
+	run := func(strat port.Strategy) *entity.BacktestResult {
+		t.Helper()
+		runner := NewBacktestRunner(WithStrategy(strat))
+		res, err := runner.Run(context.Background(), RunInput{
+			Config: cfg, RiskConfig: risk, TradeAmount: 0.01,
+			PrimaryCandles: primary, HigherCandles: higher,
+		})
+		if err != nil {
+			t.Fatalf("runner error: %v", err)
+		}
+		return res
+	}
+
+	// Two child profiles with deliberately different RSI thresholds
+	// so they pick different entry/exit moments on the same candle
+	// stream. Built via NewConfigurableStrategy so they go through
+	// exactly the production path.
+	bullProfile := newRouterChildProfile("bull_child", 60, 40, 25, 75)
+	bearProfile := newRouterChildProfile("bear_child", 50, 50, 35, 65)
+
+	bullStrat, err := strategyuc.NewConfigurableStrategy(bullProfile)
+	if err != nil {
+		t.Fatalf("bull strat: %v", err)
+	}
+	bearStrat, err := strategyuc.NewConfigurableStrategy(bearProfile)
+	if err != nil {
+		t.Fatalf("bear strat: %v", err)
+	}
+
+	// Baseline: flat profile (bull-only).
+	baseline := run(bullStrat)
+
+	// Router: bull as default + bear-trend override. The candle stream
+	// trips the bear regime mid-run (ATR rises, SMA crosses), so the
+	// router must delegate to bear at least once and produce a
+	// different trade pattern than the bull-only baseline.
+	router, err := strategyuc.NewProfileRouter(strategyuc.ProfileRouterInput{
+		Name:            "router_runner_test",
+		DefaultStrategy: bullStrat,
+		Overrides: map[entity.Regime]port.Strategy{
+			entity.RegimeBearTrend: bearStrat,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewProfileRouter: %v", err)
+	}
+	routerRun := run(router)
+
+	if baseline.Summary.TotalTrades == routerRun.Summary.TotalTrades &&
+		baseline.Summary.TotalReturn == routerRun.Summary.TotalReturn {
+		t.Fatalf("router strategy had no effect on backtest output (trades=%d, return=%v) — wiring regression: ProfileRouter never delegated to a non-default child",
+			baseline.Summary.TotalTrades, baseline.Summary.TotalReturn)
+	}
+}
+
+// newRouterChildProfile builds a minimal valid StrategyProfile for
+// the wiring-confirmation test above. Returning a fully-populated
+// (non-router) profile so NewConfigurableStrategy(p) accepts it
+// without weakening the existing strict Validate.
+func newRouterChildProfile(name string, rsiBuyMax, rsiSellMin, rsiOversold, rsiOverbought float64) *entity.StrategyProfile {
+	return &entity.StrategyProfile{
+		Name: name,
+		Indicators: entity.IndicatorConfig{
+			SMAShort: 20, SMALong: 50, RSIPeriod: 14,
+			MACDFast: 12, MACDSlow: 26, MACDSignal: 9,
+			BBPeriod: 20, BBMultiplier: 2.0, ATRPeriod: 14,
+		},
+		StanceRules: entity.StanceRulesConfig{
+			RSIOversold:   rsiOversold,
+			RSIOverbought: rsiOverbought,
+		},
+		SignalRules: entity.SignalRulesConfig{
+			TrendFollow: entity.TrendFollowConfig{
+				Enabled:    true,
+				RSIBuyMax:  rsiBuyMax,
+				RSISellMin: rsiSellMin,
+			},
+			Contrarian: entity.ContrarianConfig{
+				Enabled:  true,
+				RSIEntry: rsiOversold,
+				RSIExit:  rsiOverbought,
+			},
+			Breakout: entity.BreakoutConfig{
+				Enabled:        true,
+				VolumeRatioMin: 1.5,
+			},
+		},
+		Risk: entity.StrategyRiskConfig{StopLossPercent: 5, TakeProfitPercent: 10},
 	}
 }
 

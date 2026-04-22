@@ -2,13 +2,16 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
@@ -112,13 +115,24 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 		higherCandles = htf.Candles
 	}
 
-	// Build a one-shot ConfigurableStrategy when a profile is specified. All
-	// period runs share the same strategy value because ConfigurableStrategy
-	// is stateless (per docs/superpowers/specs PDCA §8).
-	var strat *strategyuc.ConfigurableStrategy
+	// When a profile is specified, build a fresh Strategy per period.
+	// ConfigurableStrategy is stateless and could be shared, but a
+	// ProfileRouter (regime_routing profile) carries detector
+	// hysteresis state across bars — sharing one router across N
+	// periods would let one period's regime memory bleed into the
+	// next one. Build per period to avoid that.
+	loader := strategyprofile.NewLoader(baseDir)
+	buildStrategy := func() (port.Strategy, error) {
+		if profile == nil {
+			return nil, nil
+		}
+		return strategyuc.BuildStrategyFromProfile(loader, profile)
+	}
 	if profile != nil {
-		strat, err = strategyuc.NewConfigurableStrategy(profile)
-		if err != nil {
+		// Smoke-test the build once up front so a bad profile fails
+		// the whole request with HTTP 400 rather than producing N-1
+		// successful periods + 1 failure.
+		if _, err := buildStrategy(); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile: " + err.Error()})
 			return
 		}
@@ -164,7 +178,11 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			}
 
 			var runner *bt.BacktestRunner
-			if strat != nil {
+			if profile != nil {
+				strat, err := buildStrategy()
+				if err != nil {
+					return nil, bt.RunInput{}, fmt.Errorf("build strategy: %w", err)
+				}
 				runner = bt.NewBacktestRunner(bt.WithStrategy(strat))
 			} else {
 				runner = h.runner
