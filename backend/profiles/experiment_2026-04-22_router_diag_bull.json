@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_diag_bull",
+  "description": "Diagnostic router for cycle40 detector emission analysis. default = sl6 (so 'unknown / fall-through' lands on sl6). bull-trend override = sl14. If the detector commits bull-trend on the run, results match sl14 flat. If it commits Unknown, results match sl6 flat. Anything else = some regime in between.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+    "overrides": {
+      "bull-trend": "experiment_2026-04-22_sl14_tf60_35"
+    }
+  }
+}
