@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_v5b",
+  "description": "PR-5 cycle39 v5 candidate B: more conservative routing — only bear-trend uses defensive child, volatile keeps aggressive. Tests whether the volatile override in v5a was over-aggressive (cuts profitable swing-trade volume on 2023-26).",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl14_tf60_35",
+    "overrides": {
+      "bear-trend": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35"
+    }
+  }
+}

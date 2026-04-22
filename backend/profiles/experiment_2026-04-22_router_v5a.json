@@ -1,0 +1,11 @@
+{
+  "name": "experiment_2026-04-22_router_v5a",
+  "description": "PR-5 cycle39 v5 candidate A: pair cycle28-37 finalists. Default = sl14_tf60_35 (aggressive, +28% on 2023-26). bear-trend + volatile -> sl6_tr30_tp6_tf60_35 (defensive, the only lineage positive on 2022). Goal: regime-routed strategy that survives 2022 bear without giving back the 2023-26 returns.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl14_tf60_35",
+    "overrides": {
+      "bear-trend": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+      "volatile":   "experiment_2026-04-22_sl6_tr30_tp6_tf60_35"
+    }
+  }
+}

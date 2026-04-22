@@ -1,0 +1,7 @@
+{
+  "name": "experiment_2026-04-22_router_smoke_bad",
+  "description": "Smoke test: missing child profile. Expect 400 with 'load child' error if router builder is wired.",
+  "regime_routing": {
+    "default": "this_profile_does_not_exist"
+  }
+}

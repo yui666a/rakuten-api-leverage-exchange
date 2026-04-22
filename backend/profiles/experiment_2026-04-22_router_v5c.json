@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_v5c",
+  "description": "PR-5 cycle39 v5 candidate C: aggressive everywhere except range. Range was the cycle28-37 baseline weakness — sl14 over-trades chop. Push range to defensive, keep bear-trend + volatile on aggressive to test the opposite hypothesis from v5a.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl14_tf60_35",
+    "overrides": {
+      "range": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35"
+    }
+  }
+}

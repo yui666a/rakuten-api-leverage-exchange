@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_v5d",
+  "description": "PR-5 cycle39 v5 candidate D: full defensive coverage on every non-bull regime. Tests the most-conservative router config — only bull-trend gets the aggressive sl14 lineage.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+    "overrides": {
+      "bull-trend": "experiment_2026-04-22_sl14_tf60_35"
+    }
+  }
+}
