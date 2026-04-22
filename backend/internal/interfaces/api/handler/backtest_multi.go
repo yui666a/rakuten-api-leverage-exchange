@@ -191,11 +191,19 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			} else {
 				runner = h.runner
 			}
+			// cycle44: plumb profile.StanceRules.BBSqueezeLookback so
+			// the IndicatorHandler's RecentSqueeze actually respects
+			// the profile. Zero falls back to the legacy default of 5.
+			var bbLookback int
+			if profile != nil {
+				bbLookback = resolveRiskProfile(baseDir, profile).StanceRules.BBSqueezeLookback
+			}
 			input := bt.RunInput{
-				Config:         cfg,
-				TradeAmount:    shared.TradeAmount,
-				PrimaryCandles: primary.Candles,
-				HigherCandles:  higherCandles,
+				Config:            cfg,
+				TradeAmount:       shared.TradeAmount,
+				PrimaryCandles:    primary.Candles,
+				HigherCandles:     higherCandles,
+				BBSqueezeLookback: bbLookback,
 				RiskConfig: entity.RiskConfig{
 					MaxPositionAmount:     shared.MaxPositionAmount,
 					MaxDailyLoss:          shared.MaxDailyLoss,

@@ -220,11 +220,21 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		runner = bt.NewBacktestRunner(bt.WithStrategy(strat))
 	}
 
+	// cycle44: plumb the profile's bb_squeeze_lookback into the run so
+	// the IndicatorHandler picks it up (legacy code hardcoded 5). Zero
+	// value on the profile keeps the legacy default via the runner's
+	// "only override if > 0" guard.
+	var bbLookback int
+	if profile != nil {
+		bbLookback = resolveRiskProfile(baseDir, profile).StanceRules.BBSqueezeLookback
+	}
+
 	result, err := runner.Run(context.Background(), bt.RunInput{
-		Config:         cfg,
-		TradeAmount:    req.TradeAmount,
-		PrimaryCandles: primary.Candles,
-		HigherCandles:  higherCandles,
+		Config:            cfg,
+		TradeAmount:       req.TradeAmount,
+		PrimaryCandles:    primary.Candles,
+		HigherCandles:     higherCandles,
+		BBSqueezeLookback: bbLookback,
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:     req.MaxPositionAmount,
 			MaxDailyLoss:          req.MaxDailyLoss,

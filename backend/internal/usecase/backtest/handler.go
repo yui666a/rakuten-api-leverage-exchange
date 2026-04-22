@@ -116,6 +116,13 @@ type IndicatorHandler struct {
 	HigherTFInterval string
 	BufferSize       int
 
+	// bbSqueezeLookback is the window used to detect a recent BB squeeze.
+	// cycle44: defaults to 5 in NewIndicatorHandler to match legacy
+	// behaviour; callers that load a profile should override via
+	// SetBBSqueezeLookback so the profile's stance rule actually takes
+	// effect (cycle43 discovered this field was a silent no-op).
+	bbSqueezeLookback int
+
 	primaryCandles map[int64][]entity.Candle
 	higherCandles  map[int64][]entity.Candle
 }
@@ -125,12 +132,26 @@ func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize in
 		bufferSize = 500
 	}
 	return &IndicatorHandler{
-		PrimaryInterval:  primaryInterval,
-		HigherTFInterval: higherTFInterval,
-		BufferSize:       bufferSize,
-		primaryCandles:   make(map[int64][]entity.Candle),
-		higherCandles:    make(map[int64][]entity.Candle),
+		PrimaryInterval:   primaryInterval,
+		HigherTFInterval:  higherTFInterval,
+		BufferSize:        bufferSize,
+		bbSqueezeLookback: 5, // cycle44: legacy default, overridable via SetBBSqueezeLookback
+		primaryCandles:    make(map[int64][]entity.Candle),
+		higherCandles:     make(map[int64][]entity.Candle),
 	}
+}
+
+// SetBBSqueezeLookback overrides the window used to detect a recent BB
+// squeeze. cycle44: the legacy code hardcoded 5; routers / backtest runners
+// now pass `profile.StanceRules.BBSqueezeLookback` here so the profile's
+// stance-rule actually takes effect. Zero means "no squeeze window" which
+// yields RecentSqueeze=false permanently (matches the "disable the gate"
+// convention from the other cycle43-era int axes).
+func (h *IndicatorHandler) SetBBSqueezeLookback(n int) {
+	if n < 0 {
+		n = 0
+	}
+	h.bbSqueezeLookback = n
 }
 
 func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
@@ -142,12 +163,12 @@ func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	switch candleEvent.Interval {
 	case h.PrimaryInterval:
 		h.primaryCandles[candleEvent.SymbolID] = appendCapped(h.primaryCandles[candleEvent.SymbolID], candleEvent.Candle, h.BufferSize)
-		primary := calculateIndicatorSet(candleEvent.SymbolID, h.primaryCandles[candleEvent.SymbolID])
+		primary := calculateIndicatorSet(candleEvent.SymbolID, h.primaryCandles[candleEvent.SymbolID], h.bbSqueezeLookback)
 
 		var higherTF *entity.IndicatorSet
 		if h.HigherTFInterval != "" {
 			if selected := selectCandlesAtOrBefore(h.higherCandles[candleEvent.SymbolID], candleEvent.Timestamp); len(selected) > 0 {
-				set := calculateIndicatorSet(candleEvent.SymbolID, selected)
+				set := calculateIndicatorSet(candleEvent.SymbolID, selected, h.bbSqueezeLookback)
 				higherTF = &set
 			}
 		}
@@ -533,7 +554,12 @@ func selectCandlesAtOrBefore(candles []entity.Candle, timestamp int64) []entity.
 	return candles[:idx+1]
 }
 
-func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.IndicatorSet {
+// calculateIndicatorSet builds an IndicatorSet from oldest-first candles.
+// bbSqueezeLookback is the window (in bars) used to detect a recent BB
+// squeeze; 0 disables the detection (RecentSqueeze stays false), matching
+// the cycle43 "0 = disabled" convention for the other integer stance
+// parameters. Legacy callers can pass 5 to preserve pre-cycle44 behaviour.
+func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLookback int) entity.IndicatorSet {
 	n := len(candles)
 	if n == 0 {
 		return entity.IndicatorSet{SymbolID: symbolID}
@@ -614,10 +640,14 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle) entity.Indic
 	result.OBVSlope20 = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
 	result.CMF20 = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
 
-	// RecentSqueeze: check if any of the last 5 candles had BBBandwidth < 0.02
-	if n >= 20 {
+	// RecentSqueeze: check if any of the last `bbSqueezeLookback` candles
+	// had BBBandwidth < 0.02. cycle44: now honours the profile field via
+	// the handler's bbSqueezeLookback. 0 keeps RecentSqueeze false (gate
+	// disabled). Capped by n-19 so small warmup windows do not read past
+	// the start of BB computation.
+	if n >= 20 && bbSqueezeLookback > 0 {
 		recentSqueeze := false
-		lookback := 5
+		lookback := bbSqueezeLookback
 		if lookback > n-19 {
 			lookback = n - 19
 		}
