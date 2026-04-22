@@ -54,7 +54,9 @@
 
 - Clean Architecture: domain → usecase → infrastructure → interfaces の依存方向を厳守。
 - Trading Pipeline: 60秒間隔で指標計算 → Stance 判定 → シグナル → リスクチェック → 注文。
-- Stance: `TREND_FOLLOW` / `CONTRARIAN` / `HOLD`。ルールベース自動判定 or オーバーライド。
+- Stance: `TREND_FOLLOW` / `CONTRARIAN` / `BREAKOUT` / `HOLD`。ルールベース自動判定 or オーバーライド（オーバーライド可能なのは `TREND_FOLLOW` / `CONTRARIAN` / `HOLD` の3種）。
+- Indicators: SMA / EMA / RSI / MACD / Bollinger / ATR / Volume / ADX(+DI/-DI) / Stochastics (%K/%D/StochRSI) / Ichimoku (Tenkan/Kijun/SenkouA-B/Chikou)。
+- PDCA/Backtest: 単発 (`/backtest/run`) / 複数期間 (`/backtest/run-multi`) / Walk-Forward (`/backtest/walk-forward`) を API + CLI で提供、結果は SQLite に永続化。
 
 ## Docs (必要な時に読むこと)
 

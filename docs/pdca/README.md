@@ -74,9 +74,13 @@ backend/profiles/
 
 ## バックテスト結果の確認
 
-- 一覧 API: `GET /api/v1/backtest/results?profileName=experiment_...&pdcaCycleId=YYYY-MM-DD_cycleNN`
-- フロント: バックテストページの「バックテスト一覧」でプロファイル名・PDCA Cycle 列 + フィルタドロップダウンから辿れる。
-- 親 ID クリックで同系譜（`parentResultId` 一致）の結果のみに絞り込み可能。
+- **単発 一覧 API**: `GET /api/v1/backtest/results?profileName=experiment_...&pdcaCycleId=YYYY-MM-DD_cycleNN`
+- **複数期間 一覧 API**（PR-2）: `GET /api/v1/backtest/multi-results?profileName=...&pdcaCycleId=...` ― 1 ラン ＝ N 期間の envelope。`RobustnessScore` で頑健性を一発比較。
+- **Walk-Forward 一覧 API**（PR-13 + #120）: `GET /api/v1/backtest/walk-forward?baseProfile=...&pdcaCycleId=...` ― IS 窓で grid 探索 → OOS で検証した envelope。
+- **フロント**:
+  - `/backtest` ― 単発結果一覧 + PR-1 breakdown / PR-3 drawdown・time-in-market・expectancy を含む詳細パネル。
+  - `/backtest-multi` ― 複数期間ランキング（RobustnessScore 降順）＋ 期間別サマリ詳細。
+  - `/walk-forward` ― WFO ランキング + 窓別 OOS Return チャート + **Best Parameter 頻度表**（≥60% の窓で選ばれたパラメータは robust 判定）。
 
 ## 段階的エスカレーション
 
@@ -84,9 +88,39 @@ backend/profiles/
 |---|---|---|---|
 | 1〜3 | Level 1: パラメータ | 数値の調整 | RSI閾値、SMA期間、SL/TP% |
 | 4〜6 | Level 2: 条件組替 | ロジック構造の変更 | MACD確認を外す、BB Squeeze厳格化 |
-| 7〜 | Level 3: 新指標 | Go コード追加 | ADX、Stochastics、Ichimoku 等 |
+| 7〜 | Level 3: 新指標 | Go コード追加 | ADX(PR-6)、Stochastics(PR-7)、Ichimoku(PR-8) 等（既に実装済） |
 
 頭打ちになったら次のレベルに上がる。
+
+## Walk-Forward で過学習を排除する
+
+単発サイクルの IS 結果だけで promotion するのは過学習リスクが高い。v4 以降は **WFO を必須の gate にする**。
+
+```bash
+# CLI（推奨）
+cd backend
+go run ./cmd/backtest walk-forward \
+  --profile production \
+  --data data/candles_LTC_JPY_PT15M.csv \
+  --from 2022-01-01 --to 2025-01-01 --in 12 --oos 6 --step 6 \
+  --grid "signal_rules.contrarian.stoch_entry_max=0,15,25" \
+  --output docs/pdca/wfo-YYYY-MM-DD.json
+
+# API
+curl -X POST http://localhost:38080/api/v1/backtest/walk-forward -H 'Content-Type: application/json' -d @- <<'JSON'
+{ "data": "...", "from": "2022-01-01", "to": "2025-01-01",
+  "inSampleMonths": 12, "outOfSampleMonths": 6, "stepMonths": 6,
+  "baseProfile": "production", "objective": "return",
+  "parameterGrid": [ { "path": "signal_rules.contrarian.stoch_entry_max", "values": [0, 15, 25] } ],
+  "pdcaCycleId": "YYYY-MM-DD_cycleNN" }
+JSON
+```
+
+判定ルール:
+
+- **IS best 頻度 ≥ 6/10 窓**（または 3/4 窓）で robust と見なす。
+- 全窓の OOS Return が負でないこと（一つでも深い負なら reject）。
+- `aggregateOOS.robustnessScore` が baseline より高いこと。
 
 ## 本番昇格
 
