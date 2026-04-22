@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AppFrame } from '../components/AppFrame'
@@ -6,11 +6,20 @@ import {
   useBacktestCSVMeta,
   useBacktestResults,
   useBacktestResult,
+  useProfile,
+  useProfiles,
   useRunBacktest,
 } from '../hooks/useBacktest'
 import { useSymbols } from '../hooks/useSymbols'
 import { EquityCurveChart } from '../components/EquityCurveChart'
-import type { BacktestResult, BacktestRunRequest, BacktestTrade, DrawdownPeriod, SummaryBreakdown } from '../lib/api'
+import type {
+  BacktestResult,
+  BacktestRunRequest,
+  BacktestTrade,
+  DrawdownPeriod,
+  StrategyProfile,
+  SummaryBreakdown,
+} from '../lib/api'
 
 export const Route = createFileRoute('/backtest')({ component: BacktestPage })
 
@@ -176,6 +185,16 @@ function BacktestPage() {
   const [runForm, setRunForm] = useState<BacktestRunForm>(defaultRunForm)
   const [runValidationError, setRunValidationError] = useState('')
   const runBacktest = useRunBacktest()
+
+  // PR-12 profile picker state. `''` means "Manual" mode (no preset) — in
+  // that case the run form's inline risk fields are the only source of
+  // truth. When a preset is selected, we fetch its full StrategyProfile
+  // and mirror it into `profileDraft`; every subsequent edit lives there
+  // and is submitted as `profileOverride` at run time.
+  const [selectedProfileName, setSelectedProfileName] = useState('')
+  const [profileDraft, setProfileDraft] = useState<StrategyProfile | null>(null)
+  const { data: profilesList } = useProfiles()
+  const { data: loadedProfile, isLoading: profileLoading } = useProfile(selectedProfileName)
   // List filter state. `profileFilter === ''` means "すべて" (no filter).
   // `hasParentFilter === 'only'` means only PDCA-continuation rows (親あり);
   // `'root'` means only root runs (親なし); `'all'` applies neither.
@@ -253,6 +272,22 @@ function BacktestPage() {
     }))
   }, [csvMeta])
 
+  // PR-12: mirror the loaded preset into the editable draft. The
+  // `loadedProfile` cache is the single source of truth when the picker
+  // flips between presets; doing this in an effect avoids duplicating
+  // "reset draft" logic at every callsite.
+  useEffect(() => {
+    if (loadedProfile) {
+      setProfileDraft(loadedProfile)
+    }
+  }, [loadedProfile])
+
+  useEffect(() => {
+    if (selectedProfileName === '') {
+      setProfileDraft(null)
+    }
+  }, [selectedProfileName])
+
   const setRunField = (key: keyof BacktestRunForm, value: string) => {
     setRunForm((current) => ({ ...current, [key]: value }))
   }
@@ -269,11 +304,26 @@ function BacktestPage() {
       return
     }
 
+    // PR-12: when a preset is selected, ship the (possibly edited)
+    // StrategyProfile inline as `profileOverride`. The server uses it
+    // for strategy construction and still records `profileName` on the
+    // result row so the list view shows which preset this started from.
+    if (selectedProfileName !== '' && profileDraft !== null) {
+      request.profileName = selectedProfileName
+      request.profileOverride = profileDraft
+    }
+
     runBacktest.mutate(request, {
       onSuccess: (result) => {
         setSelectedId(result.id)
       },
     })
+  }
+
+  const handleResetProfileDraft = () => {
+    if (loadedProfile) {
+      setProfileDraft(loadedProfile)
+    }
   }
 
   return (
@@ -316,6 +366,43 @@ function BacktestPage() {
         {isCSVMetaError && (
           <p className="mt-1 text-xs text-accent-red">
             CSV期間の自動取得に失敗しました。CSVパスを確認してください。
+          </p>
+        )}
+
+        {/* PR-12 profile picker. Selecting a preset loads its StrategyProfile
+            into an editable inline form below; leaving it blank keeps the
+            manual-risk-fields path from before. Router profiles appear in
+            the list but are disabled (edit-and-run is out of scope). */}
+        <label className="mt-4 block">
+          <span className="mb-2 block text-sm text-slate-300">プロファイル</span>
+          <select
+            value={selectedProfileName}
+            onChange={(event) => setSelectedProfileName(event.target.value)}
+            className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-white outline-none transition focus:border-cyan-200 sm:w-[480px]"
+            aria-label="戦略プロファイル"
+          >
+            <option value="" className="bg-bg-card text-white">
+              （なし／手動設定）
+            </option>
+            {(profilesList?.profiles ?? []).map((p) => (
+              <option
+                key={p.name}
+                value={p.name}
+                disabled={p.isRouter}
+                className="bg-bg-card text-white"
+              >
+                {p.name}
+                {p.isRouter ? '（router・編集不可）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedProfileName !== '' && profileLoading && (
+          <p className="mt-1 text-xs text-text-secondary">プロファイルを読み込み中...</p>
+        )}
+        {profileDraft && (
+          <p className="mt-1 text-xs text-text-secondary">
+            説明: {profileDraft.description || '（説明なし）'}
           </p>
         )}
 
@@ -380,63 +467,80 @@ function BacktestPage() {
               type="number"
               step="0.0001"
             />
-            <RunField
-              label="Stop Loss (%)"
-              value={runForm.stopLossPercent}
-              onChange={(value) => setRunField('stopLossPercent', value)}
-              type="number"
-              step="0.1"
-            />
-            <RunField
-              label="Stop Loss ATR × (optional)"
-              value={runForm.stopLossAtrMultiplier}
-              onChange={(value) => setRunField('stopLossAtrMultiplier', value)}
-              type="number"
-              step="0.1"
-            />
-            <RunField
-              label="Trailing ATR × (optional)"
-              value={runForm.trailingAtrMultiplier}
-              onChange={(value) => setRunField('trailingAtrMultiplier', value)}
-              type="number"
-              step="0.1"
-            />
-            <RunField
-              label="Take Profit (%)"
-              value={runForm.takeProfitPercent}
-              onChange={(value) => setRunField('takeProfitPercent', value)}
-              type="number"
-              step="0.1"
-            />
-            <RunField
-              label="Max Position Amount (optional)"
-              value={runForm.maxPositionAmount}
-              onChange={(value) => setRunField('maxPositionAmount', value)}
-              type="number"
-              step="1"
-            />
-            <RunField
-              label="Max Daily Loss (optional)"
-              value={runForm.maxDailyLoss}
-              onChange={(value) => setRunField('maxDailyLoss', value)}
-              type="number"
-              step="1"
-            />
-            <RunField
-              label="Max Consecutive Losses (optional)"
-              value={runForm.maxConsecutiveLosses}
-              onChange={(value) => setRunField('maxConsecutiveLosses', value)}
-              type="number"
-              step="1"
-            />
-            <RunField
-              label="Cooldown Minutes (optional)"
-              value={runForm.cooldownMinutes}
-              onChange={(value) => setRunField('cooldownMinutes', value)}
-              type="number"
-              step="1"
-            />
+            {/* PR-12: manual-mode risk inputs. Hidden when a preset is
+                active — the ProfileEditor below drives strategy_risk. */}
+            {profileDraft === null && (
+              <>
+                <RunField
+                  label="Stop Loss (%)"
+                  value={runForm.stopLossPercent}
+                  onChange={(value) => setRunField('stopLossPercent', value)}
+                  type="number"
+                  step="0.1"
+                />
+                <RunField
+                  label="Stop Loss ATR × (optional)"
+                  value={runForm.stopLossAtrMultiplier}
+                  onChange={(value) => setRunField('stopLossAtrMultiplier', value)}
+                  type="number"
+                  step="0.1"
+                />
+                <RunField
+                  label="Trailing ATR × (optional)"
+                  value={runForm.trailingAtrMultiplier}
+                  onChange={(value) => setRunField('trailingAtrMultiplier', value)}
+                  type="number"
+                  step="0.1"
+                />
+                <RunField
+                  label="Take Profit (%)"
+                  value={runForm.takeProfitPercent}
+                  onChange={(value) => setRunField('takeProfitPercent', value)}
+                  type="number"
+                  step="0.1"
+                />
+                <RunField
+                  label="Max Position Amount (optional)"
+                  value={runForm.maxPositionAmount}
+                  onChange={(value) => setRunField('maxPositionAmount', value)}
+                  type="number"
+                  step="1"
+                />
+                <RunField
+                  label="Max Daily Loss (optional)"
+                  value={runForm.maxDailyLoss}
+                  onChange={(value) => setRunField('maxDailyLoss', value)}
+                  type="number"
+                  step="1"
+                />
+                <RunField
+                  label="Max Consecutive Losses (optional)"
+                  value={runForm.maxConsecutiveLosses}
+                  onChange={(value) => setRunField('maxConsecutiveLosses', value)}
+                  type="number"
+                  step="1"
+                />
+                <RunField
+                  label="Cooldown Minutes (optional)"
+                  value={runForm.cooldownMinutes}
+                  onChange={(value) => setRunField('cooldownMinutes', value)}
+                  type="number"
+                  step="1"
+                />
+              </>
+            )}
           </div>
+
+          {/* PR-12: inline StrategyProfile editor. Rendered only when a
+              preset is active; edits flow up to profileDraft which ships
+              on run as profileOverride. */}
+          {profileDraft !== null && (
+            <ProfileEditor
+              draft={profileDraft}
+              onChange={setProfileDraft}
+              onReset={handleResetProfileDraft}
+            />
+          )}
 
           {runValidationError !== '' && (
             <div className="mt-4 rounded-2xl border border-accent-red/40 bg-accent-red/10 px-4 py-3 text-sm text-accent-red">
@@ -614,6 +718,171 @@ function RunField({
         step={step}
         className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-white outline-none transition placeholder:text-slate-500 focus:border-cyan-200"
       />
+    </label>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* PR-12 ProfileEditor                                                 */
+/* ------------------------------------------------------------------ */
+
+// ProfileEditor renders the StrategyProfile draft as a flat form organised
+// by JSON section (indicators / stance_rules / signal_rules / strategy_risk
+// / htf_filter). All edits flow through `onChange` so the parent stays
+// the single source of truth; the child never holds derived state.
+type ProfileEditorProps = {
+  draft: StrategyProfile
+  onChange: (next: StrategyProfile) => void
+  onReset: () => void
+}
+
+function ProfileEditor({ draft, onChange, onReset }: ProfileEditorProps) {
+  const num = (value: number | undefined): string =>
+    value === undefined ? '' : String(value)
+
+  const onNumber = (apply: (d: StrategyProfile, v: number) => void) => (raw: string) => {
+    const parsed = raw === '' ? 0 : Number(raw)
+    if (!Number.isFinite(parsed)) return
+    const next = structuredClone(draft)
+    apply(next, parsed)
+    onChange(next)
+  }
+
+  const onBool = (apply: (d: StrategyProfile, v: boolean) => void) => (checked: boolean) => {
+    const next = structuredClone(draft)
+    apply(next, checked)
+    onChange(next)
+  }
+
+  const onModeChange = (raw: string) => {
+    const next = structuredClone(draft)
+    next.htf_filter.mode = raw === '' ? undefined : raw
+    onChange(next)
+  }
+
+  return (
+    <div className="mt-6 rounded-2xl border border-cyan-200/25 bg-cyan-200/5 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-[0.28em] text-cyan-200">Strategy Profile</p>
+          <h3 className="mt-1 text-base font-semibold text-white">{draft.name}</h3>
+        </div>
+        <button
+          type="button"
+          onClick={onReset}
+          className="rounded-full border border-cyan-200/40 px-3 py-1.5 text-xs text-cyan-200 transition hover:bg-cyan-200/15"
+        >
+          プリセット値に戻す
+        </button>
+      </div>
+
+      <ProfileSection title="Indicators">
+        <RunField label="sma_short" type="number" step="1" value={num(draft.indicators.sma_short)} onChange={onNumber((d, v) => { d.indicators.sma_short = v })} />
+        <RunField label="sma_long" type="number" step="1" value={num(draft.indicators.sma_long)} onChange={onNumber((d, v) => { d.indicators.sma_long = v })} />
+        <RunField label="rsi_period" type="number" step="1" value={num(draft.indicators.rsi_period)} onChange={onNumber((d, v) => { d.indicators.rsi_period = v })} />
+        <RunField label="macd_fast" type="number" step="1" value={num(draft.indicators.macd_fast)} onChange={onNumber((d, v) => { d.indicators.macd_fast = v })} />
+        <RunField label="macd_slow" type="number" step="1" value={num(draft.indicators.macd_slow)} onChange={onNumber((d, v) => { d.indicators.macd_slow = v })} />
+        <RunField label="macd_signal" type="number" step="1" value={num(draft.indicators.macd_signal)} onChange={onNumber((d, v) => { d.indicators.macd_signal = v })} />
+        <RunField label="bb_period" type="number" step="1" value={num(draft.indicators.bb_period)} onChange={onNumber((d, v) => { d.indicators.bb_period = v })} />
+        <RunField label="bb_multiplier" type="number" step="0.1" value={num(draft.indicators.bb_multiplier)} onChange={onNumber((d, v) => { d.indicators.bb_multiplier = v })} />
+        <RunField label="atr_period" type="number" step="1" value={num(draft.indicators.atr_period)} onChange={onNumber((d, v) => { d.indicators.atr_period = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="Stance Rules">
+        <RunField label="rsi_oversold" type="number" step="1" value={num(draft.stance_rules.rsi_oversold)} onChange={onNumber((d, v) => { d.stance_rules.rsi_oversold = v })} />
+        <RunField label="rsi_overbought" type="number" step="1" value={num(draft.stance_rules.rsi_overbought)} onChange={onNumber((d, v) => { d.stance_rules.rsi_overbought = v })} />
+        <RunField label="sma_convergence_threshold" type="number" step="0.0001" value={num(draft.stance_rules.sma_convergence_threshold)} onChange={onNumber((d, v) => { d.stance_rules.sma_convergence_threshold = v })} />
+        <RunField label="bb_squeeze_lookback" type="number" step="1" value={num(draft.stance_rules.bb_squeeze_lookback)} onChange={onNumber((d, v) => { d.stance_rules.bb_squeeze_lookback = v })} />
+        <RunField label="breakout_volume_ratio" type="number" step="0.1" value={num(draft.stance_rules.breakout_volume_ratio)} onChange={onNumber((d, v) => { d.stance_rules.breakout_volume_ratio = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="Signal Rules / Trend Follow">
+        <BoolField label="enabled" checked={draft.signal_rules.trend_follow.enabled} onChange={onBool((d, v) => { d.signal_rules.trend_follow.enabled = v })} />
+        <BoolField label="require_ema_cross" checked={draft.signal_rules.trend_follow.require_ema_cross} onChange={onBool((d, v) => { d.signal_rules.trend_follow.require_ema_cross = v })} />
+        <BoolField label="require_macd_confirm" checked={draft.signal_rules.trend_follow.require_macd_confirm} onChange={onBool((d, v) => { d.signal_rules.trend_follow.require_macd_confirm = v })} />
+        <BoolField label="require_obv_alignment (PR-9)" checked={draft.signal_rules.trend_follow.require_obv_alignment ?? false} onChange={onBool((d, v) => { d.signal_rules.trend_follow.require_obv_alignment = v })} />
+        <RunField label="rsi_buy_max" type="number" step="1" value={num(draft.signal_rules.trend_follow.rsi_buy_max)} onChange={onNumber((d, v) => { d.signal_rules.trend_follow.rsi_buy_max = v })} />
+        <RunField label="rsi_sell_min" type="number" step="1" value={num(draft.signal_rules.trend_follow.rsi_sell_min)} onChange={onNumber((d, v) => { d.signal_rules.trend_follow.rsi_sell_min = v })} />
+        <RunField label="adx_min (0=disabled)" type="number" step="1" value={num(draft.signal_rules.trend_follow.adx_min ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.trend_follow.adx_min = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="Signal Rules / Contrarian">
+        <BoolField label="enabled" checked={draft.signal_rules.contrarian.enabled} onChange={onBool((d, v) => { d.signal_rules.contrarian.enabled = v })} />
+        <RunField label="rsi_entry" type="number" step="1" value={num(draft.signal_rules.contrarian.rsi_entry)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.rsi_entry = v })} />
+        <RunField label="rsi_exit" type="number" step="1" value={num(draft.signal_rules.contrarian.rsi_exit)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.rsi_exit = v })} />
+        <RunField label="macd_histogram_limit" type="number" step="0.5" value={num(draft.signal_rules.contrarian.macd_histogram_limit)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.macd_histogram_limit = v })} />
+        <RunField label="adx_max (0=disabled)" type="number" step="1" value={num(draft.signal_rules.contrarian.adx_max ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.adx_max = v })} />
+        <RunField label="stoch_entry_max (0=disabled)" type="number" step="1" value={num(draft.signal_rules.contrarian.stoch_entry_max ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.stoch_entry_max = v })} />
+        <RunField label="stoch_exit_min (0=disabled)" type="number" step="1" value={num(draft.signal_rules.contrarian.stoch_exit_min ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.contrarian.stoch_exit_min = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="Signal Rules / Breakout">
+        <BoolField label="enabled" checked={draft.signal_rules.breakout.enabled} onChange={onBool((d, v) => { d.signal_rules.breakout.enabled = v })} />
+        <BoolField label="require_macd_confirm" checked={draft.signal_rules.breakout.require_macd_confirm} onChange={onBool((d, v) => { d.signal_rules.breakout.require_macd_confirm = v })} />
+        <RunField label="volume_ratio_min" type="number" step="0.1" value={num(draft.signal_rules.breakout.volume_ratio_min)} onChange={onNumber((d, v) => { d.signal_rules.breakout.volume_ratio_min = v })} />
+        <RunField label="adx_min (0=disabled)" type="number" step="1" value={num(draft.signal_rules.breakout.adx_min ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.breakout.adx_min = v })} />
+        <RunField label="donchian_period (0=disabled, PR-11)" type="number" step="1" value={num(draft.signal_rules.breakout.donchian_period ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.breakout.donchian_period = v })} />
+        <RunField label="cmf_buy_min [0,1] (PR-9)" type="number" step="0.01" value={num(draft.signal_rules.breakout.cmf_buy_min ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.breakout.cmf_buy_min = v })} />
+        <RunField label="cmf_sell_max [-1,0] (PR-9)" type="number" step="0.01" value={num(draft.signal_rules.breakout.cmf_sell_max ?? 0)} onChange={onNumber((d, v) => { d.signal_rules.breakout.cmf_sell_max = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="Strategy Risk">
+        <RunField label="stop_loss_percent" type="number" step="0.1" value={num(draft.strategy_risk.stop_loss_percent)} onChange={onNumber((d, v) => { d.strategy_risk.stop_loss_percent = v })} />
+        <RunField label="take_profit_percent" type="number" step="0.1" value={num(draft.strategy_risk.take_profit_percent)} onChange={onNumber((d, v) => { d.strategy_risk.take_profit_percent = v })} />
+        <RunField label="stop_loss_atr_multiplier" type="number" step="0.1" value={num(draft.strategy_risk.stop_loss_atr_multiplier)} onChange={onNumber((d, v) => { d.strategy_risk.stop_loss_atr_multiplier = v })} />
+        <RunField label="trailing_atr_multiplier" type="number" step="0.1" value={num(draft.strategy_risk.trailing_atr_multiplier ?? 0)} onChange={onNumber((d, v) => { d.strategy_risk.trailing_atr_multiplier = v })} />
+        <RunField label="max_position_amount" type="number" step="1" value={num(draft.strategy_risk.max_position_amount)} onChange={onNumber((d, v) => { d.strategy_risk.max_position_amount = v })} />
+        <RunField label="max_daily_loss" type="number" step="1" value={num(draft.strategy_risk.max_daily_loss)} onChange={onNumber((d, v) => { d.strategy_risk.max_daily_loss = v })} />
+      </ProfileSection>
+
+      <ProfileSection title="HTF Filter">
+        <BoolField label="enabled" checked={draft.htf_filter.enabled} onChange={onBool((d, v) => { d.htf_filter.enabled = v })} />
+        <BoolField label="block_counter_trend" checked={draft.htf_filter.block_counter_trend} onChange={onBool((d, v) => { d.htf_filter.block_counter_trend = v })} />
+        <RunField label="alignment_boost" type="number" step="0.01" value={num(draft.htf_filter.alignment_boost)} onChange={onNumber((d, v) => { d.htf_filter.alignment_boost = v })} />
+        <label className="block">
+          <span className="mb-2 block text-sm text-slate-300">mode</span>
+          <select
+            value={draft.htf_filter.mode ?? ''}
+            onChange={(event) => onModeChange(event.target.value)}
+            className="w-full rounded-2xl border border-white/10 bg-white/6 px-4 py-3 text-white outline-none transition focus:border-cyan-200"
+          >
+            <option value="" className="bg-bg-card text-white">ema (default)</option>
+            <option value="ema" className="bg-bg-card text-white">ema</option>
+            <option value="ichimoku" className="bg-bg-card text-white">ichimoku</option>
+          </select>
+        </label>
+      </ProfileSection>
+    </div>
+  )
+}
+
+function ProfileSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="mt-5">
+      <h4 className="text-xs uppercase tracking-[0.22em] text-cyan-200/80">{title}</h4>
+      <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+    </section>
+  )
+}
+
+function BoolField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string
+  checked: boolean
+  onChange: (value: boolean) => void
+}) {
+  return (
+    <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/6 px-4 py-3">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-4 w-4 accent-cyan-200"
+      />
+      <span className="text-sm text-slate-300">{label}</span>
     </label>
   )
 }
