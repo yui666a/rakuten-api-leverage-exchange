@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_diag_range",
+  "description": "Diagnostic router. default = sl6 + range override = sl14. Unknown/no-fire = sl6. Range fire = sl14.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+    "overrides": {
+      "range": "experiment_2026-04-22_sl14_tf60_35"
+    }
+  }
+}

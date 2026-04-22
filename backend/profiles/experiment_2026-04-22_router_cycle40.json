@@ -1,0 +1,11 @@
+{
+  "name": "experiment_2026-04-22_router_cycle40",
+  "description": "PR-5 cycle40 base profile for the detector_config WFO sweep. Same shape as router_v5a — default sl14_tf60_35 (aggressive), bear-trend + volatile -> sl6_tr30_tp6_tf60_35 (defensive). detector_config is intentionally left empty so the WFO grid can sweep TrendADXMin × VolatileATRPercentMin via parameterGrid override paths and discover thresholds at which the detector emits more than just bull-trend on LTC 15m.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl14_tf60_35",
+    "overrides": {
+      "bear-trend": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+      "volatile":   "experiment_2026-04-22_sl6_tr30_tp6_tf60_35"
+    }
+  }
+}

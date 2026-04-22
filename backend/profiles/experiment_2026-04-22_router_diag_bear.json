@@ -1,0 +1,10 @@
+{
+  "name": "experiment_2026-04-22_router_diag_bear",
+  "description": "Diagnostic router for cycle40 detector emission analysis. default = sl6 + bear-trend override = sl14. If detector emits bear-trend = sl14. If unknown = sl6.",
+  "regime_routing": {
+    "default": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+    "overrides": {
+      "bear-trend": "experiment_2026-04-22_sl14_tf60_35"
+    }
+  }
+}
