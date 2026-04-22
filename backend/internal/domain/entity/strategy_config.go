@@ -19,6 +19,15 @@ type StrategyProfile struct {
 	SignalRules SignalRulesConfig  `json:"signal_rules"`
 	Risk        StrategyRiskConfig `json:"strategy_risk"`
 	HTFFilter   HTFFilterConfig    `json:"htf_filter"`
+	// RegimeRouting is optional. When set (non-nil), the profile is
+	// treated as a router that delegates to child profiles by Regime.
+	// See RegimeRoutingConfig and usecase/strategy.ProfileRouter.
+	//
+	// Pointer (not value) so the JSON round-trip preserves "this
+	// profile has no routing block" — a value-typed RegimeRoutingConfig
+	// always serialises an empty map, which would corrupt the existing
+	// TestStrategyProfile_JSONRoundTrip contract.
+	RegimeRouting *RegimeRoutingConfig `json:"regime_routing,omitempty"`
 }
 
 // IndicatorConfig declares the lookback periods and shape parameters used when
@@ -106,6 +115,53 @@ type HTFFilterConfig struct {
 	Mode string `json:"mode,omitempty"`
 }
 
+// RegimeRoutingConfig declares regime-conditional profile delegation.
+// When set, the loaded profile becomes a *router*: the strategy looks
+// up the current Regime (see usecase/regime.Detector) and delegates to
+// the child profile named by Default (when no regime-specific override
+// applies) or by Overrides[regime].
+//
+// Child profiles are loaded by the same Loader from the same base
+// directory. Children must NOT themselves carry regime_routing — depth
+// is capped at 1 to keep the routing graph readable and to avoid
+// silent infinite-loop debugging.
+//
+// Example: cycle28-37 produced two finalists, one strong on
+// trending bull regimes (sl14_tf60_35) and one robust to bear /
+// volatile regimes (sl6_tr30_tp6_tf60_35). A regime router pairing the
+// two looks like:
+//
+//	"regime_routing": {
+//	  "default": "experiment_2026-04-22_sl14_tf60_35",
+//	  "overrides": {
+//	    "bear-trend": "experiment_2026-04-22_sl6_tr30_tp6_tf60_35",
+//	    "volatile":   "experiment_2026-04-22_sl6_tr30_tp6_tf60_35"
+//	  }
+//	}
+type RegimeRoutingConfig struct {
+	// Default is the child profile name used when the detector emits
+	// RegimeUnknown (warmup) or a regime not listed in Overrides.
+	// Required when regime_routing is set; the profile is otherwise a
+	// no-op routing wrapper that just runs Default 100% of the time.
+	Default string `json:"default"`
+
+	// Overrides maps Regime label → child profile name. Keys must be
+	// known Regime values (bull-trend / bear-trend / range / volatile);
+	// "" / "unknown" is rejected because it would shadow Default.
+	Overrides map[string]string `json:"overrides,omitempty"`
+}
+
+// IsRouting reports whether this profile is a router. Centralised so
+// callers do not duplicate the "Default != """ check.
+func (r RegimeRoutingConfig) IsRouting() bool { return r.Default != "" }
+
+// HasRouting is the nil-safe form for *RegimeRoutingConfig fields on
+// StrategyProfile — handles "no routing block at all" without forcing
+// callers to write `p.RegimeRouting != nil && p.RegimeRouting.IsRouting()`.
+func (p StrategyProfile) HasRouting() bool {
+	return p.RegimeRouting != nil && p.RegimeRouting.IsRouting()
+}
+
 // StrategyRiskConfig configures the per-strategy risk envelope (position
 // sizing, stop-loss, take-profit, daily loss cap).
 type StrategyRiskConfig struct {
@@ -134,6 +190,22 @@ func (p StrategyProfile) Validate() error {
 
 	if p.Name == "" {
 		errs = append(errs, errors.New("name must not be empty"))
+	}
+
+	// Routing profiles delegate every per-bar decision to children, so
+	// indicator periods / signal rules / risk envelope on the router
+	// itself are unused. Skip the field-level checks below and only
+	// validate the routing block.
+	if p.RegimeRouting != nil && p.RegimeRouting.Default != "" {
+		for key := range p.RegimeRouting.Overrides {
+			if !Regime(key).IsValidLabel() {
+				errs = append(errs, fmt.Errorf("regime_routing.overrides has unknown regime key %q (want one of bull-trend, bear-trend, range, volatile)", key))
+			}
+		}
+		if len(errs) == 0 {
+			return nil
+		}
+		return fmt.Errorf("invalid strategy profile: %w", errors.Join(errs...))
 	}
 
 	ind := p.Indicators
@@ -187,6 +259,13 @@ func (p StrategyProfile) Validate() error {
 	}
 	if p.Risk.TakeProfitPercent < 0 {
 		errs = append(errs, fmt.Errorf("strategy_risk.take_profit_percent must be >= 0 (got %v)", p.Risk.TakeProfitPercent))
+	}
+
+	// regime_routing.overrides without a default is also flagged — a
+	// non-empty Overrides without Default is almost certainly a typo
+	// (the writer meant to set both).
+	if p.RegimeRouting != nil && len(p.RegimeRouting.Overrides) > 0 && p.RegimeRouting.Default == "" {
+		errs = append(errs, errors.New("regime_routing.default must be set when regime_routing.overrides is non-empty"))
 	}
 
 	if len(errs) == 0 {

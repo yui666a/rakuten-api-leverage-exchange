@@ -273,10 +273,31 @@ func TestRegime_IsKnown(t *testing.T) {
 		entity.RegimeBearTrend: true,
 		entity.RegimeRange:     true,
 		entity.RegimeVolatile:  true,
+		entity.Regime("typo"):  true, // IsKnown is "non-empty", not "valid label"
 	}
 	for r, want := range cases {
 		if r.IsKnown() != want {
 			t.Errorf("Regime(%q).IsKnown() = %v, want %v", r, r.IsKnown(), want)
+		}
+	}
+}
+
+// IsValidLabel is the strict-validation predicate used by config
+// loading; it differs from IsKnown by rejecting typos.
+func TestRegime_IsValidLabel(t *testing.T) {
+	cases := map[entity.Regime]bool{
+		entity.RegimeUnknown:       false, // sentinel, never valid as a key
+		entity.RegimeBullTrend:     true,
+		entity.RegimeBearTrend:     true,
+		entity.RegimeRange:         true,
+		entity.RegimeVolatile:      true,
+		entity.Regime("typo"):      false, // unknown string -> invalid
+		entity.Regime("Bull"):      false, // case-sensitive
+		entity.Regime("bear-trnd"): false,
+	}
+	for r, want := range cases {
+		if r.IsValidLabel() != want {
+			t.Errorf("Regime(%q).IsValidLabel() = %v, want %v", r, r.IsValidLabel(), want)
 		}
 	}
 }
