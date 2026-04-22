@@ -143,8 +143,11 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 
 	// Apply profile defaults to zero-valued individual fields so spec §8.2's
 	// precedence rule holds: profile first, then any non-zero individual
-	// parameter in the request overrides.
-	applyProfileDefaults(&req, profile)
+	// parameter in the request overrides. resolveRiskProfile redirects
+	// router profiles (which carry no Risk of their own) to their
+	// default child's Risk — see resolveRiskProfile for the limitation
+	// notes.
+	applyProfileDefaults(&req, resolveRiskProfile(baseDir, profile))
 
 	// Legacy callers (no profile) still get the historical hard-coded
 	// defaults when individual fields are zero.
@@ -281,6 +284,43 @@ func loadProfileForRequest(baseDir, name string) (*entity.StrategyProfile, error
 		return nil, err
 	}
 	return profile, nil
+}
+
+// resolveRiskProfile returns the profile whose Risk fields should be
+// used to populate per-run RiskConfig defaults.
+//
+// For flat profiles, this is the loaded profile itself. For routing
+// profiles (PR-5 part B), the router's own Risk struct is empty by
+// design — the router only declares routing rules, not exit thresholds.
+// In that case we fall back to the *default child*'s Risk so the run's
+// SL/TP/ATR settings are at least consistent with one of the routed
+// strategies rather than the legacy hard-coded SL=5/TP=10 fallback.
+//
+// Known limitation (tracked as PR-5 part E): per-regime SL/TP
+// differentiation is not yet implemented. The tickRiskHandler in the
+// runner is constructed once per run with one fixed RiskConfig, so
+// even though ProfileRouter swaps signal-generation per regime, every
+// bar's exit logic uses the same SL/TP values. Promotion candidates
+// surfaced before PR-5 part E are therefore "best of {default child
+// risk, router signal mix}" — not "true regime-specialised risk".
+//
+// On any loader error for the child, we silently fall back to the
+// router profile (i.e. legacy defaults will apply downstream). The
+// router's own builder will reject the bad child later with a clearer
+// 400, so we do not need to surface the lookup error here.
+func resolveRiskProfile(baseDir string, profile *entity.StrategyProfile) *entity.StrategyProfile {
+	if profile == nil || !profile.HasRouting() {
+		return profile
+	}
+	defaultName := profile.RegimeRouting.Default
+	if defaultName == "" {
+		return profile
+	}
+	child, err := loadProfileForRequest(baseDir, defaultName)
+	if err != nil || child == nil {
+		return profile
+	}
+	return child
 }
 
 // applyProfileDefaults overlays the profile's risk values onto the request

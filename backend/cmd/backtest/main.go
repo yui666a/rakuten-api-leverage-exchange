@@ -140,7 +140,7 @@ func runCommand(args []string) error {
 		return err
 	}
 
-	input, err := buildRunInput(f, profile)
+	input, err := buildRunInput(f, resolveRiskProfile(profile, profilesBaseDir))
 	if err != nil {
 		return err
 	}
@@ -185,6 +185,31 @@ func visitedFlagNames(fs *flag.FlagSet) map[string]bool {
 		set[ff.Name] = true
 	})
 	return set
+}
+
+// resolveRiskProfile mirrors the HTTP handler helper of the same name:
+// for a router profile (RegimeRouting.Default set) the router itself
+// has no Risk fields, so fall back to the *default child*'s Risk so
+// the run's SL/TP/ATR settings track at least one of the routed
+// strategies. See the handler-side resolveRiskProfile for the full
+// rationale and the part E (per-regime risk) limitation note.
+//
+// On any loader error we silently fall back to the router profile
+// (downstream legacy defaults will apply); the strategy builder will
+// reject the bad child later with a clearer error.
+func resolveRiskProfile(profile *entity.StrategyProfile, baseDir string) *entity.StrategyProfile {
+	if profile == nil || !profile.HasRouting() {
+		return profile
+	}
+	defaultName := profile.RegimeRouting.Default
+	if defaultName == "" {
+		return profile
+	}
+	child, err := loadProfileIfSet(defaultName, baseDir)
+	if err != nil || child == nil {
+		return profile
+	}
+	return child
 }
 
 // loadProfileIfSet loads a StrategyProfile from <baseDir>/<name>.json if

@@ -162,7 +162,11 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 		Slippage:       req.Slippage,
 		TradeAmount:    req.TradeAmount,
 	}
-	applyProfileDefaults(&shared, baseProfile)
+	// resolveRiskProfile lets a router base profile inherit Risk
+	// defaults from its default child, instead of falling through to
+	// the legacy SL=5/TP=10 hard-coded defaults that would otherwise
+	// override every WFO grid evaluation.
+	applyProfileDefaults(&shared, resolveRiskProfile(baseDir, baseProfile))
 	applyLegacyDefaults(&shared)
 
 	primary, err := csvinfra.LoadCandles(shared.DataPath)

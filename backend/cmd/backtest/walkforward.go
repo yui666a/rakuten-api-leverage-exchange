@@ -132,6 +132,14 @@ func walkForwardCommand(args []string) error {
 			if err != nil {
 				return nil, err
 			}
+			// For router profiles, pull SL/TP/ATR risk values from
+			// the default child since the router itself carries no
+			// Risk fields. See cmd/backtest/main.go::resolveRiskProfile
+			// for the limitation note.
+			riskProfile := pf
+			if resolved := resolveRiskProfile(&pf, profilesBaseDir); resolved != nil {
+				riskProfile = *resolved
+			}
 			cfg := entity.BacktestConfig{
 				Symbol:           primary.Symbol,
 				SymbolID:         primary.SymbolID,
@@ -148,12 +156,12 @@ func walkForwardCommand(args []string) error {
 				cfg.HigherTFInterval = ""
 			}
 			risk := entity.RiskConfig{
-				MaxPositionAmount:     nonZeroFloat(pf.Risk.MaxPositionAmount, 1_000_000_000.0),
-				MaxDailyLoss:          nonZeroFloat(pf.Risk.MaxDailyLoss, 1_000_000_000.0),
-				StopLossPercent:       pf.Risk.StopLossPercent,
-				StopLossATRMultiplier: pf.Risk.StopLossATRMultiplier,
-				TrailingATRMultiplier: pf.Risk.TrailingATRMultiplier,
-				TakeProfitPercent:     pf.Risk.TakeProfitPercent,
+				MaxPositionAmount:     nonZeroFloat(riskProfile.Risk.MaxPositionAmount, 1_000_000_000.0),
+				MaxDailyLoss:          nonZeroFloat(riskProfile.Risk.MaxDailyLoss, 1_000_000_000.0),
+				StopLossPercent:       riskProfile.Risk.StopLossPercent,
+				StopLossATRMultiplier: riskProfile.Risk.StopLossATRMultiplier,
+				TrailingATRMultiplier: riskProfile.Risk.TrailingATRMultiplier,
+				TakeProfitPercent:     riskProfile.Risk.TakeProfitPercent,
 				InitialCapital:        *initialBalance,
 			}
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
