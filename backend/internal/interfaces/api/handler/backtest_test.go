@@ -15,13 +15,13 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	_ "modernc.org/sqlite"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	btinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	_ "modernc.org/sqlite"
 )
 
 type mockBacktestResultRepo struct {
@@ -713,6 +713,91 @@ func TestApplyProfileDefaults_IndividualFieldOverrides(t *testing.T) {
 		applyProfileDefaults(req, nil)
 		if req.StopLossPercent != 3 {
 			t.Errorf("StopLossPercent = %v, want 3 (unchanged)", req.StopLossPercent)
+		}
+	})
+}
+
+// TestResolveRiskProfile_RouterFollowsDefaultChild guards the PR-D fix:
+// router profiles carry no Risk fields of their own, so the handler
+// must redirect risk-defaults lookup to the default child before
+// applyProfileDefaults runs. Without this fix every router profile
+// silently fell through to the legacy SL=5/TP=10 hard-coded defaults
+// regardless of which child the router would actually delegate to,
+// producing the cycle39 "all 4 router variants give identical
+// numbers" silent-no-op.
+func TestResolveRiskProfile_RouterFollowsDefaultChild(t *testing.T) {
+	dir := setupProfilesDir(t, map[string][]byte{
+		// Default child carries the real Risk envelope.
+		"router_child_default": []byte(`{
+			"name": "router_child_default",
+			"indicators": {
+				"sma_short": 20, "sma_long": 50, "rsi_period": 14,
+				"macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
+				"bb_period": 20, "bb_multiplier": 2.0, "atr_period": 14
+			},
+			"stance_rules": {"rsi_oversold": 30, "rsi_overbought": 70},
+			"strategy_risk": {
+				"stop_loss_percent": 14,
+				"take_profit_percent": 4,
+				"max_position_amount": 100000,
+				"max_daily_loss": 50000
+			}
+		}`),
+	})
+
+	t.Run("router profile -> default child Risk", func(t *testing.T) {
+		router := &entity.StrategyProfile{
+			Name: "router",
+			RegimeRouting: &entity.RegimeRoutingConfig{
+				Default: "router_child_default",
+			},
+		}
+		got := resolveRiskProfile(dir, router)
+		if got == nil {
+			t.Fatal("resolveRiskProfile returned nil")
+		}
+		if got.Name != "router_child_default" {
+			t.Errorf("got name %q, want router_child_default (router fall-through failed)", got.Name)
+		}
+		if got.Risk.StopLossPercent != 14 {
+			t.Errorf("StopLossPercent = %v, want 14 (child's risk)", got.Risk.StopLossPercent)
+		}
+		if got.Risk.TakeProfitPercent != 4 {
+			t.Errorf("TakeProfitPercent = %v, want 4", got.Risk.TakeProfitPercent)
+		}
+	})
+
+	t.Run("flat profile -> itself unchanged", func(t *testing.T) {
+		flat := &entity.StrategyProfile{
+			Name: "flat",
+			Risk: entity.StrategyRiskConfig{StopLossPercent: 8},
+		}
+		got := resolveRiskProfile(dir, flat)
+		if got != flat {
+			t.Errorf("flat profile must return itself; got %p want %p", got, flat)
+		}
+	})
+
+	t.Run("nil profile -> nil", func(t *testing.T) {
+		if got := resolveRiskProfile(dir, nil); got != nil {
+			t.Errorf("nil input must return nil; got %v", got)
+		}
+	})
+
+	t.Run("router with missing default child -> falls back to router itself", func(t *testing.T) {
+		// resolveRiskProfile silently swallows the loader error and
+		// returns the router. Downstream legacy defaults will then
+		// apply, and the strategy builder will reject the bad child
+		// with a clearer 400 — so this fall-through is safe.
+		router := &entity.StrategyProfile{
+			Name: "router",
+			RegimeRouting: &entity.RegimeRoutingConfig{
+				Default: "this_child_does_not_exist",
+			},
+		}
+		got := resolveRiskProfile(dir, router)
+		if got != router {
+			t.Errorf("missing-child fallback must return the router itself; got %p want %p", got, router)
 		}
 	})
 }

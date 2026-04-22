@@ -95,7 +95,11 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 		MaxPositionAmount:     req.MaxPositionAmount,
 		MaxDailyLoss:          req.MaxDailyLoss,
 	}
-	applyProfileDefaults(&shared, profile)
+	// resolveRiskProfile redirects router profiles to their default
+	// child's Risk so per-run SL/TP/ATR defaults match one of the
+	// routed strategies rather than the legacy SL=5/TP=10 fallback.
+	// See resolveRiskProfile for the per-regime SL/TP limitation.
+	applyProfileDefaults(&shared, resolveRiskProfile(baseDir, profile))
 	applyLegacyDefaults(&shared)
 
 	// Load CSVs once and share across all period runs. Each period uses the
