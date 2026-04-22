@@ -141,6 +141,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			opts = append(opts, handler.WithWalkForwardRepo(deps.WalkForwardResultRepo))
 		}
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
+		// PR-12: profile discovery endpoints used by the FE backtest picker.
+		// The same profilesBaseDir default is used so /profiles and
+		// /backtest/run share the same filesystem view.
+		profileHandler := handler.NewProfileHandler("")
+		v1.GET("/profiles", profileHandler.List)
+		v1.GET("/profiles/:name", profileHandler.Get)
+
 		v1.POST("/backtest/run", backtestHandler.Run)
 		v1.GET("/backtest/csv-meta", backtestHandler.CSVMeta)
 		v1.GET("/backtest/results", backtestHandler.ListResults)

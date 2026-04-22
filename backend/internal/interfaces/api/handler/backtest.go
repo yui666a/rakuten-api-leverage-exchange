@@ -114,6 +114,15 @@ type runBacktestRequest struct {
 	PDCACycleID    string  `json:"pdcaCycleId,omitempty"`
 	Hypothesis     string  `json:"hypothesis,omitempty"`
 	ParentResultID *string `json:"parentResultId,omitempty"`
+
+	// PR-12: FE "edit & run" flow. When set, ProfileOverride supersedes
+	// ProfileName for the strategy-construction path: the supplied
+	// StrategyProfile is used directly (after Validate) instead of
+	// loading a preset from disk. ProfileName is still recorded on the
+	// result so the saved row shows which preset the user started from.
+	// Router profiles are rejected here (the picker UI hides them from
+	// edit-and-run) — editing a router without children is out of scope.
+	ProfileOverride *entity.StrategyProfile `json:"profileOverride,omitempty"`
 }
 
 func (h *BacktestHandler) Run(c *gin.Context) {
@@ -135,10 +144,27 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	if baseDir == "" {
 		baseDir = defaultProfilesBaseDir
 	}
-	profile, loadErr := loadProfileForRequest(baseDir, req.ProfileName)
-	if loadErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": loadErr.Error()})
-		return
+	var profile *entity.StrategyProfile
+	if req.ProfileOverride != nil {
+		// PR-12: caller-supplied profile from the FE edit-and-run form.
+		// Validate up-front so the error surfaces as 400 with the same
+		// message shape as a preset that fails loadProfileForRequest.
+		if err := req.ProfileOverride.Validate(); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profileOverride: " + err.Error()})
+			return
+		}
+		if req.ProfileOverride.HasRouting() {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "profileOverride must not carry regime_routing (router editing is out of scope for edit-and-run)"})
+			return
+		}
+		profile = req.ProfileOverride
+	} else {
+		var loadErr error
+		profile, loadErr = loadProfileForRequest(baseDir, req.ProfileName)
+		if loadErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": loadErr.Error()})
+			return
+		}
 	}
 
 	// Apply profile defaults to zero-valued individual fields so spec §8.2's

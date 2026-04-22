@@ -1019,3 +1019,161 @@ func TestBacktestHandler_ListResults_NoFilters(t *testing.T) {
 		t.Errorf("expected all filters zero, got %+v", repo.lastFilter)
 	}
 }
+
+// TestBacktestHandler_Run_ProfileOverride_UsesSuppliedProfile is the PR-12
+// edit-and-run wiring guard. When the request carries `profileOverride`,
+// the handler must use its values (not load a preset from disk) for
+// strategy construction, risk defaults, and bb_squeeze_lookback.
+func TestBacktestHandler_Run_ProfileOverride_UsesSuppliedProfile(t *testing.T) {
+	// No profiles on disk — this proves the override path does not require
+	// a preset to exist.
+	router, _, _ := newRunRouter(t, t.TempDir())
+	csvPath := makeCSVForRunTests(t)
+
+	// Minimal valid StrategyProfile (same shape as validProfileJSON in the
+	// strategyprofile loader tests).
+	override := map[string]any{
+		"name":        "edit_and_run",
+		"description": "Inline profile from FE",
+		"indicators": map[string]any{
+			"sma_short":     10,
+			"sma_long":      30,
+			"rsi_period":    14,
+			"macd_fast":     12,
+			"macd_slow":     26,
+			"macd_signal":   9,
+			"bb_period":     20,
+			"bb_multiplier": 2.0,
+			"atr_period":    14,
+		},
+		"stance_rules": map[string]any{
+			"rsi_oversold":              25.0,
+			"rsi_overbought":            75.0,
+			"sma_convergence_threshold": 0.001,
+			"bb_squeeze_lookback":       5,
+			"breakout_volume_ratio":     1.5,
+		},
+		"signal_rules": map[string]any{
+			"trend_follow": map[string]any{
+				"enabled":              true,
+				"require_macd_confirm": true,
+				"require_ema_cross":    true,
+				"rsi_buy_max":          70.0,
+				"rsi_sell_min":         30.0,
+			},
+			"contrarian": map[string]any{
+				"enabled":              true,
+				"rsi_entry":            30.0,
+				"rsi_exit":             70.0,
+				"macd_histogram_limit": 10.0,
+			},
+			"breakout": map[string]any{
+				"enabled":              true,
+				"volume_ratio_min":     1.5,
+				"require_macd_confirm": true,
+			},
+		},
+		"strategy_risk": map[string]any{
+			"stop_loss_percent":        5.0,
+			"take_profit_percent":      10.0,
+			"stop_loss_atr_multiplier": 0.0,
+			"max_position_amount":      100000.0,
+			"max_daily_loss":           50000.0,
+		},
+		"htf_filter": map[string]any{
+			"enabled":             true,
+			"block_counter_trend": true,
+			"alignment_boost":     0.1,
+		},
+	}
+	body := runRequestBody(t, csvPath, map[string]any{
+		"profileName":     "edit_and_run", // just for audit labelling
+		"profileOverride": override,
+	})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var got entity.BacktestResult
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// The ProfileName label from the request should still be persisted so
+	// the UI can show "which preset did they start from".
+	if got.ProfileName != "edit_and_run" {
+		t.Errorf("ProfileName = %q, want %q", got.ProfileName, "edit_and_run")
+	}
+}
+
+// TestBacktestHandler_Run_ProfileOverride_ValidationFailure_400 is the
+// counterpart: an override that fails Validate() (here: negative
+// atr_period) must come back as 400, not 500.
+func TestBacktestHandler_Run_ProfileOverride_ValidationFailure_400(t *testing.T) {
+	router, _, _ := newRunRouter(t, t.TempDir())
+	csvPath := makeCSVForRunTests(t)
+
+	override := map[string]any{
+		"name": "bad_profile",
+		"indicators": map[string]any{
+			"sma_short":     10,
+			"sma_long":      30,
+			"rsi_period":    14,
+			"macd_fast":     12,
+			"macd_slow":     26,
+			"macd_signal":   9,
+			"bb_period":     20,
+			"bb_multiplier": 2.0,
+			"atr_period":    -1, // invalid — Validate rejects negative periods
+		},
+		"stance_rules": map[string]any{
+			"rsi_oversold":              25.0,
+			"rsi_overbought":            75.0,
+			"sma_convergence_threshold": 0.001,
+			"bb_squeeze_lookback":       5,
+			"breakout_volume_ratio":     1.5,
+		},
+		"signal_rules":  map[string]any{},
+		"strategy_risk": map[string]any{},
+		"htf_filter":    map[string]any{},
+	}
+	body := runRequestBody(t, csvPath, map[string]any{"profileOverride": override})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid override, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "atr_period") {
+		t.Errorf("expected error to mention atr_period, got %s", w.Body.String())
+	}
+}
+
+// TestBacktestHandler_Run_ProfileOverride_RejectsRouter ensures that the
+// FE cannot edit-and-run a regime_routing profile — resolving its children
+// against a live profiles dir is out of scope for PR-12.
+func TestBacktestHandler_Run_ProfileOverride_RejectsRouter(t *testing.T) {
+	router, _, _ := newRunRouter(t, t.TempDir())
+	csvPath := makeCSVForRunTests(t)
+
+	override := map[string]any{
+		"name":          "router_profile",
+		"description":   "routing",
+		"indicators":    map[string]any{"sma_short": 10, "sma_long": 30, "rsi_period": 14, "macd_fast": 12, "macd_slow": 26, "macd_signal": 9, "bb_period": 20, "bb_multiplier": 2.0, "atr_period": 14},
+		"stance_rules":  map[string]any{"rsi_oversold": 25.0, "rsi_overbought": 75.0, "sma_convergence_threshold": 0.001, "bb_squeeze_lookback": 5, "breakout_volume_ratio": 1.5},
+		"signal_rules":  map[string]any{},
+		"strategy_risk": map[string]any{},
+		"htf_filter":    map[string]any{},
+		"regime_routing": map[string]any{
+			"default": "some_child",
+		},
+	}
+	body := runRequestBody(t, csvPath, map[string]any{"profileOverride": override})
+	w := postRun(t, router, body)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for router override, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "regime_routing") {
+		t.Errorf("expected error to mention regime_routing, got %s", w.Body.String())
+	}
+}
