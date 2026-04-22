@@ -17,11 +17,33 @@ const (
 	RegimeVolatile  Regime = "volatile"
 )
 
-// IsKnown reports whether r is a real regime label (not the warmup-only
-// RegimeUnknown sentinel). Centralised so callers do not hard-code the
-// "" comparison.
+// IsKnown reports whether r is anything other than RegimeUnknown — the
+// "the detector has committed to a real regime" check. This is the
+// hot-path predicate: the router uses it on every Evaluate to decide
+// whether to consult the overrides map or fall through to default.
+//
+// Note: IsKnown returns true for *any* non-empty Regime value,
+// including stringly-typed garbage like Regime("bear-trnd"). For the
+// stricter "is this string one of the four legal labels" check used
+// by config validation, see IsValidLabel.
 func (r Regime) IsKnown() bool {
 	return r != RegimeUnknown
+}
+
+// IsValidLabel reports whether r is one of the four canonical regime
+// labels (bull-trend / bear-trend / range / volatile). Used by config
+// validation to reject typos in regime_routing.overrides keys before
+// they silently shadow a real branch at runtime.
+//
+// RegimeUnknown is *not* a valid label here — it is a sentinel for the
+// warmup state and must never be a routing key (it would shadow the
+// router's Default branch).
+func (r Regime) IsValidLabel() bool {
+	switch r {
+	case RegimeBullTrend, RegimeBearTrend, RegimeRange, RegimeVolatile:
+		return true
+	}
+	return false
 }
 
 // RegimeClassification is one detector emission. ADXValue / ATRPercent /
