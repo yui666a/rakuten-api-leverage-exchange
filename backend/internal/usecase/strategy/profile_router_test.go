@@ -555,6 +555,95 @@ func TestBuildStrategyFromProfile_RouterAndFlatProduceDifferentSignals(t *testin
 	// The two together close the silent-no-op gap end-to-end.
 }
 
+// TestBuildStrategyFromProfile_ThreadsDetectorConfig is the PR-5 part F
+// wiring guard: a router profile with a detector_config block must
+// produce a ProfileRouter whose internal detector uses those
+// thresholds (not regime.DefaultConfig). Without this assertion, a
+// future refactor could silently drop the per-profile detector
+// thresholds and the cycle40 sweep would only ever see one regime.
+//
+// The test exercises the threshold by constructing a stream the
+// default detector would call "bull-trend" but a high-ADX-threshold
+// detector would call "range" (because ADX never crosses the bumped
+// floor). If detector_config is honoured, the router routes
+// differently for the two configs.
+func TestBuildStrategyFromProfile_ThreadsDetectorConfig(t *testing.T) {
+	flatBull := flatProfile("flat_bull")
+	flatBear := flatProfile("flat_bear")
+	loader := &stubLoader{
+		profiles: map[string]*entity.StrategyProfile{
+			"flat_bull": flatBull,
+			"flat_bear": flatBear,
+		},
+	}
+
+	// Same routing config (default + bear-trend override), only
+	// detector thresholds differ. Hysteresis = 1 so the very first
+	// bar commits, isolating the threshold effect from dwell.
+	mkRouter := func(adxMin float64) *entity.StrategyProfile {
+		return &entity.StrategyProfile{
+			Name: "router_threshold_test",
+			RegimeRouting: &entity.RegimeRoutingConfig{
+				Default:   "flat_bull",
+				Overrides: map[string]string{"bear-trend": "flat_bear"},
+				DetectorConfig: &entity.RegimeDetectorConfig{
+					TrendADXMin:    adxMin,
+					HysteresisBars: 1,
+				},
+			},
+		}
+	}
+
+	// ADX 25 strongly trending bear (HTF SMA20<SMA50) — this should
+	// be a "bear-trend" with the default ADX floor of 20, but a
+	// "range" with a floor of 50.
+	in := entity.IndicatorSet{
+		ADX14: fp(25),
+		ATR14: fp(1.0),
+		SMA20: fp(95),
+		SMA50: fp(100),
+	}
+
+	loose, err := BuildStrategyFromProfile(loader, mkRouter(20))
+	if err != nil {
+		t.Fatalf("loose builder: %v", err)
+	}
+	tight, err := BuildStrategyFromProfile(loader, mkRouter(50))
+	if err != nil {
+		t.Fatalf("tight builder: %v", err)
+	}
+
+	looseRouter, ok := loose.(*ProfileRouter)
+	if !ok {
+		t.Fatalf("loose: got %T, want *ProfileRouter", loose)
+	}
+	tightRouter, ok := tight.(*ProfileRouter)
+	if !ok {
+		t.Fatalf("tight: got %T, want *ProfileRouter", tight)
+	}
+
+	// Drive each detector once with the bear-trending bar.
+	now := time.Unix(1_700_000_000, 0)
+	if _, err := looseRouter.Evaluate(context.Background(), &in, nil, 100, now); err != nil {
+		t.Fatalf("loose Evaluate: %v", err)
+	}
+	if _, err := tightRouter.Evaluate(context.Background(), &in, nil, 100, now); err != nil {
+		t.Fatalf("tight Evaluate: %v", err)
+	}
+
+	// Loose threshold (ADX>=20) classifies the bar as bear-trend so
+	// the detector commits bear; tight threshold (ADX>=50) keeps
+	// the same bar in range.
+	if looseRouter.CommittedRegime() != entity.RegimeBearTrend {
+		t.Errorf("loose router regime = %q, want bear-trend (TrendADXMin=20 should accept ADX=25)",
+			looseRouter.CommittedRegime())
+	}
+	if tightRouter.CommittedRegime() != entity.RegimeRange {
+		t.Errorf("tight router regime = %q, want range (TrendADXMin=50 should reject ADX=25)",
+			tightRouter.CommittedRegime())
+	}
+}
+
 // actionStrategy is a stub that returns a fixed SignalAction on every
 // Evaluate. Used by the wiring-confirmation test to make the per-bar
 // action stream assertable.

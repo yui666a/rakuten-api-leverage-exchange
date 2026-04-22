@@ -149,6 +149,38 @@ type RegimeRoutingConfig struct {
 	// known Regime values (bull-trend / bear-trend / range / volatile);
 	// "" / "unknown" is rejected because it would shadow Default.
 	Overrides map[string]string `json:"overrides,omitempty"`
+
+	// DetectorConfig optionally tunes the regime detector thresholds
+	// for this router profile. nil (or an empty struct, since pointer
+	// elision is awkward inside a value field) falls back to
+	// regime.DefaultConfig — the cycle39 result motivated exposing
+	// these so the WFO can sweep them and find thresholds that
+	// actually emit more than one regime on the asset under test.
+	//
+	// All three fields are optional; zero / negative values are
+	// replaced by regime.DefaultConfig values inside regime.NewDetector.
+	DetectorConfig *RegimeDetectorConfig `json:"detector_config,omitempty"`
+}
+
+// RegimeDetectorConfig mirrors regime.Config in the JSON schema. Kept in
+// the entity package so the strategy / handler layers can populate it
+// without importing the regime usecase package directly (the builder
+// at strategy.BuildStrategyFromProfile is the single place that
+// translates this into a regime.Config value).
+type RegimeDetectorConfig struct {
+	// TrendADXMin: ADX value at or above which a directional regime
+	// (bull-trend / bear-trend) becomes eligible. 0 / unset → 20
+	// (Wilder's "trend present" threshold).
+	TrendADXMin float64 `json:"trend_adx_min,omitempty"`
+
+	// VolatileATRPercentMin: ATR/price threshold (in percent units,
+	// e.g. 2.5 = 2.5%) at or above which a non-trending bar is
+	// classified as volatile rather than range. 0 / unset → 2.5.
+	VolatileATRPercentMin float64 `json:"volatile_atr_percent_min,omitempty"`
+
+	// HysteresisBars: minimum consecutive bars a new candidate regime
+	// must persist before the detector switches to it. 0 / unset → 3.
+	HysteresisBars int `json:"hysteresis_bars,omitempty"`
 }
 
 // IsRouting reports whether this profile is a router. Centralised so
@@ -200,6 +232,21 @@ func (p StrategyProfile) Validate() error {
 		for key := range p.RegimeRouting.Overrides {
 			if !Regime(key).IsValidLabel() {
 				errs = append(errs, fmt.Errorf("regime_routing.overrides has unknown regime key %q (want one of bull-trend, bear-trend, range, volatile)", key))
+			}
+		}
+		// detector_config: zero / unset means "use regime.DefaultConfig",
+		// so we only reject negative values that would otherwise be
+		// silently coerced. Tightness checks (e.g. ADX 0..100) belong
+		// in the detector — Validate stays at "structural sanity".
+		if dc := p.RegimeRouting.DetectorConfig; dc != nil {
+			if dc.TrendADXMin < 0 {
+				errs = append(errs, fmt.Errorf("regime_routing.detector_config.trend_adx_min must be >= 0 (got %v)", dc.TrendADXMin))
+			}
+			if dc.VolatileATRPercentMin < 0 {
+				errs = append(errs, fmt.Errorf("regime_routing.detector_config.volatile_atr_percent_min must be >= 0 (got %v)", dc.VolatileATRPercentMin))
+			}
+			if dc.HysteresisBars < 0 {
+				errs = append(errs, fmt.Errorf("regime_routing.detector_config.hysteresis_bars must be >= 0 (got %d)", dc.HysteresisBars))
 			}
 		}
 		if len(errs) == 0 {

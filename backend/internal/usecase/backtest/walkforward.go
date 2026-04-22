@@ -265,17 +265,21 @@ func ExpandCombinedGrid(numeric []ParameterOverride, strs []ParameterStringOverr
 //
 // Supported override paths (keep this comment in lockstep with the switch
 // below — unknown paths error out, so the switch is the authoritative list):
-//   strategy_risk.stop_loss_percent
-//   strategy_risk.take_profit_percent
-//   strategy_risk.stop_loss_atr_multiplier
-//   strategy_risk.trailing_atr_multiplier
-//   strategy_risk.max_position_amount
-//   strategy_risk.max_daily_loss
-//   signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
-//   signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max,stoch_entry_max,stoch_exit_min}
-//   signal_rules.breakout.{volume_ratio_min,adx_min}
-//   stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
-//   htf_filter.alignment_boost
+//
+//	strategy_risk.stop_loss_percent
+//	strategy_risk.take_profit_percent
+//	strategy_risk.stop_loss_atr_multiplier
+//	strategy_risk.trailing_atr_multiplier
+//	strategy_risk.max_position_amount
+//	strategy_risk.max_daily_loss
+//	signal_rules.trend_follow.{rsi_buy_max,rsi_sell_min,adx_min}
+//	signal_rules.contrarian.{rsi_entry,rsi_exit,macd_histogram_limit,adx_max,stoch_entry_max,stoch_exit_min}
+//	signal_rules.breakout.{volume_ratio_min,adx_min}
+//	stance_rules.{rsi_oversold,rsi_overbought,sma_convergence_threshold,breakout_volume_ratio}
+//	htf_filter.alignment_boost
+//	regime_routing.detector_config.trend_adx_min
+//	regime_routing.detector_config.volatile_atr_percent_min
+//	regime_routing.detector_config.hysteresis_bars
 //
 // String-valued axes (e.g. htf_filter.mode) live on a separate path via
 // ApplyStringOverrides so the numeric API contract stays purely float64.
@@ -327,6 +331,36 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 			out.StanceRules.BreakoutVolumeRatio = value
 		case "htf_filter.alignment_boost":
 			out.HTFFilter.AlignmentBoost = value
+		case "regime_routing.detector_config.trend_adx_min",
+			"regime_routing.detector_config.volatile_atr_percent_min",
+			"regime_routing.detector_config.hysteresis_bars":
+			// Routing detector thresholds: only meaningful when the
+			// profile is a router. We allocate the nested config on
+			// demand so a non-router profile that happens to receive
+			// this path through a typo still surfaces the override
+			// path itself as supported (the strategy builder will
+			// then ignore detector_config for flat profiles).
+			if out.RegimeRouting == nil {
+				out.RegimeRouting = &entity.RegimeRoutingConfig{}
+			}
+			if out.RegimeRouting.DetectorConfig == nil {
+				out.RegimeRouting.DetectorConfig = &entity.RegimeDetectorConfig{}
+			}
+			switch path {
+			case "regime_routing.detector_config.trend_adx_min":
+				out.RegimeRouting.DetectorConfig.TrendADXMin = value
+			case "regime_routing.detector_config.volatile_atr_percent_min":
+				out.RegimeRouting.DetectorConfig.VolatileATRPercentMin = value
+			case "regime_routing.detector_config.hysteresis_bars":
+				// HysteresisBars is an int — a fractional grid value
+				// would silently truncate, so reject up front to
+				// match the existing "no silent rounding" contract
+				// for grid axes.
+				if value != float64(int(value)) {
+					return entity.StrategyProfile{}, fmt.Errorf("walk-forward: regime_routing.detector_config.hysteresis_bars must be an integer (got %v)", value)
+				}
+				out.RegimeRouting.DetectorConfig.HysteresisBars = int(value)
+			}
 		default:
 			return entity.StrategyProfile{}, fmt.Errorf("walk-forward: unsupported override path %q", path)
 		}
@@ -339,7 +373,8 @@ func ApplyOverrides(base entity.StrategyProfile, overrides map[string]float64) (
 //
 // Supported override paths (keep this comment in lockstep with the switch
 // below — unknown paths error out, so the switch is the authoritative list):
-//   htf_filter.mode   values: "" | "ema" | "ichimoku"
+//
+//	htf_filter.mode   values: "" | "ema" | "ichimoku"
 //
 // The allowed values for each path are enforced here at the override
 // boundary rather than in StrategyProfile.Validate() so pre-existing

@@ -80,9 +80,27 @@ func BuildStrategyFromProfile(loader ProfileLoader, root *entity.StrategyProfile
 
 	return NewProfileRouter(ProfileRouterInput{
 		Name:            root.Name,
+		DetectorConfig:  detectorConfigFromProfile(rr.DetectorConfig),
 		DefaultStrategy: defaultStrategy,
 		Overrides:       overrides,
 	})
+}
+
+// detectorConfigFromProfile translates the entity-level RegimeDetectorConfig
+// (JSON-shaped, optional) into the regime.Config the runtime detector
+// expects. nil input or unset (zero) fields fall through to
+// regime.DefaultConfig inside regime.NewDetector — this function only
+// promotes positive values so the detector's "0 means default"
+// contract stays single-sourced.
+func detectorConfigFromProfile(dc *entity.RegimeDetectorConfig) regime.Config {
+	if dc == nil {
+		return regime.Config{}
+	}
+	return regime.Config{
+		TrendADXMin:           dc.TrendADXMin,
+		VolatileATRPercentMin: dc.VolatileATRPercentMin,
+		HysteresisBars:        dc.HysteresisBars,
+	}
 }
 
 // loadChild loads one child profile and enforces depth-1 (children
