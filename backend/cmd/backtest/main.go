@@ -695,7 +695,7 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		cfg.HigherTFInterval = ""
 	}
 
-	return bt.RunInput{
+	in := bt.RunInput{
 		Config:         cfg,
 		TradeAmount:    f.TradeAmount,
 		PrimaryCandles: primary.Candles,
@@ -711,7 +711,12 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 			MaxConsecutiveLosses:  0,
 			CooldownMinutes:       0,
 		},
-	}, nil
+	}
+	if profile != nil {
+		in.BBSqueezeLookback = profile.StanceRules.BBSqueezeLookback
+		in.PositionSizing = profile.Risk.PositionSizing
+	}
+	return in, nil
 }
 
 func parseParamRange(spec string) (bt.ParamRange, error) {

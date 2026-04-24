@@ -195,8 +195,11 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			// the IndicatorHandler's RecentSqueeze actually respects
 			// the profile. Zero falls back to the legacy default of 5.
 			var bbLookback int
+			var positionSizing *entity.PositionSizingConfig
 			if profile != nil {
-				bbLookback = resolveRiskProfile(baseDir, profile).StanceRules.BBSqueezeLookback
+				resolved := resolveRiskProfile(baseDir, profile)
+				bbLookback = resolved.StanceRules.BBSqueezeLookback
+				positionSizing = resolved.Risk.PositionSizing
 			}
 			input := bt.RunInput{
 				Config:            cfg,
@@ -204,6 +207,7 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				PrimaryCandles:    primary.Candles,
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: bbLookback,
+				PositionSizing:    positionSizing,
 				RiskConfig: entity.RiskConfig{
 					MaxPositionAmount:     shared.MaxPositionAmount,
 					MaxDailyLoss:          shared.MaxDailyLoss,

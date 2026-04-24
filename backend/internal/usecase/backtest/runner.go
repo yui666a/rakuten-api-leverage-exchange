@@ -12,6 +12,7 @@ import (
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
@@ -28,6 +29,16 @@ type RunInput struct {
 	// 5 no longer dominates. Zero means "use the legacy default of 5" for
 	// callers that don't set a profile (baseline DefaultStrategy runs).
 	BBSqueezeLookback int
+
+	// PositionSizing declares dynamic lot sizing for the run. nil / zero-value
+	// keeps the legacy fixed-lot behaviour (TradeAmount is used verbatim on
+	// every approved signal).
+	PositionSizing *entity.PositionSizingConfig
+
+	// MinConfidence mirrors the live pipeline's minConfidence so the sizer's
+	// confidence scaling matches the live path. 0 disables confidence
+	// scaling (the sizer passes the multiplier through as 1.0).
+	MinConfidence float64
 }
 
 // RunnerOption tunes optional aspects of a BacktestRunner at construction.
@@ -137,8 +148,16 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	}
 	strategyHandler := NewStrategyHandler(strategy)
 	riskHandler := &RiskHandler{
-		RiskManager: riskMgr,
-		TradeAmount: input.TradeAmount,
+		RiskManager:     riskMgr,
+		TradeAmount:     input.TradeAmount,
+		StopLossPercent: riskCfg.StopLossPercent,
+		MinConfidence:   input.MinConfidence,
+	}
+	if ps := input.PositionSizing; ps != nil && ps.Mode != "" && ps.Mode != "fixed" {
+		defaults := positionsize.VenueDefaults(input.Config.Symbol)
+		riskHandler.Sizer = positionsize.New(ps, defaults)
+		riskHandler.Equity = EquityFunc(func() float64 { return sim.Balance() })
+		riskHandler.Peak = NewPeakTracker(input.Config.InitialBalance)
 	}
 	executionHandler := &ExecutionHandler{
 		Executor:    simAdapter,
@@ -185,10 +204,14 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		if !ok || candleEvent.Interval != input.Config.PrimaryInterval {
 			continue
 		}
+		equityNow := sim.Equity(map[int64]float64{input.Config.SymbolID: candleEvent.Candle.Close})
 		equityPoints = append(equityPoints, EquityPoint{
 			Timestamp: candleEvent.Timestamp,
-			Equity:    sim.Equity(map[int64]float64{input.Config.SymbolID: candleEvent.Candle.Close}),
+			Equity:    equityNow,
 		})
+		if riskHandler.Peak != nil {
+			riskHandler.Peak.Observe(equityNow)
+		}
 	}
 
 	lastCandle := primaryCandles[len(primaryCandles)-1]

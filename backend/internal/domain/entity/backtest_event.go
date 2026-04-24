@@ -58,6 +58,11 @@ type SignalEvent struct {
 	Signal    Signal
 	Price     float64
 	Timestamp int64
+	// CurrentATR carries the latest ATR value (price units) forward so
+	// downstream sizing can scale by realised volatility without re-reading
+	// the indicator stream. 0 means "unknown / warmup" and triggers the
+	// sizer's ATR fallback.
+	CurrentATR float64
 }
 
 func (e SignalEvent) EventType() string     { return EventTypeSignal }
@@ -67,6 +72,10 @@ type ApprovedSignalEvent struct {
 	Signal    Signal
 	Price     float64
 	Timestamp int64
+	// Amount is the sized lot produced by the risk handler. Downstream
+	// executors use this value verbatim so that backtest and live code
+	// share one sizing decision. 0 means "no-trade" (rejected by sizer).
+	Amount float64
 }
 
 func (e ApprovedSignalEvent) EventType() string     { return EventTypeApproved }
