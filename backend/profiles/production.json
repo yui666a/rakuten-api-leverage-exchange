@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "description": "Promoted from experiment_2026-04-22_sl14_tf60_35 on 2026-04-22 — see docs/pdca/2026-04-22_promotion_v5.md for the full rationale and 2022-regime caveat. Aggressive v5 candidate: gM +16.22% / worst +9.26% on 2023-04..2026-03 (all 1yr/2yr/3yr positive, 3yr DD 6.01%). Known limitation: blows up to -57.97% on 2022-01..2025-01 (2022 bear regime). Defensive alternative kept as experiment_2026-04-22_sl6_tr30_tp6_tf60_35.json for rollback.",
+  "description": "Promoted from experiment_2026-04-22_sl14_bblk3_cmf010 on 2026-04-24 — see docs/pdca/2026-04-24_promotion_v6.md. v6 combined candidate (v5 base + bb_squeeze_lookback=3 + CMF BUY gate 0.10). LTC/JPY 4-period verification (3m/6m/1y/2y from 2026-04-16): geomMeanReturn +7.32%, allPositive=true, worstMaxDD 6.53%. 10-cycle Local optimum confirmed in cycle45-55. Known limitation: blows up to -57.97% on 2022-01..2025-01 (2022 bear regime). Cross-asset (BTC/JPY) 4-period verification showed +24.88% geomMeanReturn but 2y MaxDD 48.98% — do not use for BTC without re-tuning.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -16,7 +16,7 @@
     "rsi_oversold": 32,
     "rsi_overbought": 68,
     "sma_convergence_threshold": 0.002,
-    "bb_squeeze_lookback": 5,
+    "bb_squeeze_lookback": 3,
     "breakout_volume_ratio": 1.5
   },
   "signal_rules": {
@@ -36,7 +36,8 @@
     "breakout": {
       "enabled": true,
       "volume_ratio_min": 1.5,
-      "require_macd_confirm": true
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
     }
   },
   "strategy_risk": {
