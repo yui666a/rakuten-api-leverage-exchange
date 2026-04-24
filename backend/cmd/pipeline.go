@@ -54,6 +54,13 @@ type TradingPipeline struct {
 	baseStepAmount float64 // シンボルごとの最小注文刻み幅（例: BTC=0.01, LTC=0.1）
 	minOrderAmount float64 // シンボルごとの最小注文数量
 	minConfidence  float64 // シグナル最小信頼度（これ未満はHOLD扱い）
+	// sizer is the optional dynamic position sizer. nil keeps the legacy
+	// JPY→amount / confidence-scaled behaviour. When non-nil, the sizer's
+	// output replaces the computed amount and also supersedes
+	// scaleByConfidence so confidence handling is identical to the
+	// backtest path.
+	sizer           PositionSizer
+	stopLossPercent float64 // Passed to the sizer for risk_pct SL distance.
 
 	restClient       repository.OrderClient
 	symbolFetcher    repository.SymbolFetcher
@@ -72,23 +79,44 @@ type TradingPipeline struct {
 
 // tradingSnapshot は evaluate / stopLoss ループで使う、ロック下にコピーしたフィールド束。
 type tradingSnapshot struct {
-	symbolID       int64
-	tradeAmount    float64
-	baseStepAmount float64
-	minOrderAmount float64
-	minConfidence  float64
+	symbolID        int64
+	tradeAmount     float64
+	baseStepAmount  float64
+	minOrderAmount  float64
+	minConfidence   float64
+	sizer           PositionSizer
+	stopLossPercent float64
 }
 
 func (p *TradingPipeline) snapshot() tradingSnapshot {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return tradingSnapshot{
-		symbolID:       p.symbolID,
-		tradeAmount:    p.tradeAmount,
-		baseStepAmount: p.baseStepAmount,
-		minOrderAmount: p.minOrderAmount,
-		minConfidence:  p.minConfidence,
+		symbolID:        p.symbolID,
+		tradeAmount:     p.tradeAmount,
+		baseStepAmount:  p.baseStepAmount,
+		minOrderAmount:  p.minOrderAmount,
+		minConfidence:   p.minConfidence,
+		sizer:           p.sizer,
+		stopLossPercent: p.stopLossPercent,
 	}
+}
+
+// PositionSizer is the narrow interface pipeline uses to delegate lot sizing
+// to the shared backtest/live sizer. It intentionally mirrors
+// positionsize.Sizer.Sized so a single implementation serves both paths.
+type PositionSizer interface {
+	Sized(requested, entryPrice, slPercent, equity, atr, ddPct, confidence, minConfidence float64) (amount float64, skipReason string)
+}
+
+// SetPositionSizer attaches a dynamic sizer and the profile's stop-loss
+// percent. Must be called before Start (or during SwitchSymbol). Passing nil
+// restores the legacy scaleByConfidence behaviour.
+func (p *TradingPipeline) SetPositionSizer(s PositionSizer, stopLossPct float64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sizer = s
+	p.stopLossPercent = stopLossPct
 }
 
 // TradingPipelineConfig はパイプラインの設定。
@@ -378,8 +406,28 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		return
 	}
 
-	scaledTradeAmount := snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)
-	amount := scaledTradeAmount / price
+	var amount float64
+	if snap.sizer != nil {
+		// Use the shared sizer so the same lot math that runs in the
+		// backtest runs in production. RequestedAmount is the JPY-based
+		// legacy baseline converted to the asset unit so "fixed" mode
+		// inside the sizer stays bit-identical with the pre-sizer path.
+		baseline := (snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)) / price
+		equity := p.riskMgr.GetStatus().Balance
+		var atr float64
+		if indicators != nil && indicators.ATR14 != nil {
+			atr = *indicators.ATR14
+		}
+		sized, skipReason := snap.sizer.Sized(baseline, price, snap.stopLossPercent, equity, atr, 0, signal.Confidence, snap.minConfidence)
+		if skipReason != "" || sized <= 0 {
+			slog.Warn("pipeline: sizer rejected trade", "skipReason", skipReason, "sized", sized)
+			return
+		}
+		amount = sized
+	} else {
+		scaledTradeAmount := snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)
+		amount = scaledTradeAmount / price
+	}
 	// シンボルの baseStepAmount に合わせて切り捨て丸め
 	amount = roundDownToStep(amount, snap.baseStepAmount)
 	if amount <= 0 || amount < snap.minOrderAmount {

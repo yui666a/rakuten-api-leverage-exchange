@@ -244,6 +244,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				PrimaryCandles:    primary.Candles,
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: profile.StanceRules.BBSqueezeLookback,
+				PositionSizing:    profile.Risk.PositionSizing,
 				RiskConfig:        risk,
 			})
 			if err != nil {

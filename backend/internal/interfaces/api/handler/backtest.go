@@ -251,8 +251,11 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	// value on the profile keeps the legacy default via the runner's
 	// "only override if > 0" guard.
 	var bbLookback int
+	var positionSizing *entity.PositionSizingConfig
 	if profile != nil {
-		bbLookback = resolveRiskProfile(baseDir, profile).StanceRules.BBSqueezeLookback
+		resolved := resolveRiskProfile(baseDir, profile)
+		bbLookback = resolved.StanceRules.BBSqueezeLookback
+		positionSizing = resolved.Risk.PositionSizing
 	}
 
 	result, err := runner.Run(context.Background(), bt.RunInput{
@@ -261,6 +264,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		PrimaryCandles:    primary.Candles,
 		HigherCandles:     higherCandles,
 		BBSqueezeLookback: bbLookback,
+		PositionSizing:    positionSizing,
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:     req.MaxPositionAmount,
 			MaxDailyLoss:          req.MaxDailyLoss,

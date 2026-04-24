@@ -237,19 +237,89 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 		return nil, nil
 	}
 
+	var atr float64
+	if indicators.ATR14 != nil {
+		atr = *indicators.ATR14
+	}
 	return []entity.Event{
 		entity.SignalEvent{
-			Signal:    *signal,
-			Price:     indicatorEvent.LastPrice,
-			Timestamp: indicatorEvent.Timestamp,
+			Signal:     *signal,
+			Price:      indicatorEvent.LastPrice,
+			Timestamp:  indicatorEvent.Timestamp,
+			CurrentATR: atr,
 		},
 	}, nil
 }
 
-// RiskHandler gates SignalEvents using RiskManager with injected event time.
+// EquityProvider exposes the running account equity to the risk handler so
+// the position sizer can compute risk_pct lots from the *current* balance
+// rather than the static initial balance. backtest wires it to the SimExecutor;
+// live code can pass a PositionManager-backed adapter.
+type EquityProvider interface {
+	Equity() float64
+}
+
+// EquityFunc adapts a plain closure into an EquityProvider, useful for tests.
+type EquityFunc func() float64
+
+func (f EquityFunc) Equity() float64 { return f() }
+
+// PeakTracker keeps the running peak equity and exposes the current drawdown
+// in percent. A nil tracker is treated as "no DD scaling" — the sizer sees 0.
+type PeakTracker struct {
+	peak float64
+}
+
+func NewPeakTracker(initial float64) *PeakTracker {
+	return &PeakTracker{peak: initial}
+}
+
+// Observe feeds the current equity into the tracker and returns the new DD%.
+func (p *PeakTracker) Observe(equity float64) float64 {
+	if p == nil {
+		return 0
+	}
+	if equity > p.peak {
+		p.peak = equity
+	}
+	if p.peak <= 0 {
+		return 0
+	}
+	dd := (p.peak - equity) / p.peak
+	if dd < 0 {
+		return 0
+	}
+	return dd * 100
+}
+
+// SignalSizer is the narrow port the RiskHandler uses to compute a lot. It
+// matches positionsize.Sizer.Compute so backtest and live code share one
+// implementation without an import-cycle gymnastic.
+type SignalSizer interface {
+	Sized(requested, entryPrice, slPercent, equity, atr, ddPct, confidence, minConfidence float64) (amount float64, skipReason string)
+}
+
+// RiskHandler gates SignalEvents using RiskManager with injected event time
+// and (optionally) a position sizer that decides the lot per trade.
 type RiskHandler struct {
 	RiskManager *usecase.RiskManager
+	// TradeAmount is the fixed/requested lot in fixed-sizing mode and the
+	// baseline for the sizer when one is attached.
 	TradeAmount float64
+	// Sizer is optional. When non-nil, every approved signal's Amount is the
+	// sizer's output; when nil, approved signals inherit TradeAmount verbatim
+	// to preserve pre-PR-A behaviour.
+	Sizer SignalSizer
+	// StopLossPercent mirrors riskCfg.StopLossPercent and is needed to
+	// compute the JPY-per-unit SL distance inside the sizer.
+	StopLossPercent float64
+	// Equity / Peak provide the runtime context the sizer consumes. Either
+	// may be nil; a nil Equity forces the sizer's fixed-mode fallback.
+	Equity EquityProvider
+	Peak   *PeakTracker
+	// MinConfidence mirrors pipeline.minConfidence so the sizer's confidence
+	// scaling matches the live path's cut-off semantics.
+	MinConfidence float64
 }
 
 func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.Event, error) {
@@ -264,6 +334,32 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 		return nil, fmt.Errorf("trade amount must be positive")
 	}
 
+	amount := h.TradeAmount
+	if h.Sizer != nil {
+		equity := 0.0
+		if h.Equity != nil {
+			equity = h.Equity.Equity()
+		}
+		var ddPct float64
+		if h.Peak != nil && equity > 0 {
+			ddPct = h.Peak.Observe(equity)
+		}
+		sized, skipReason := h.Sizer.Sized(
+			h.TradeAmount,
+			signalEvent.Price,
+			h.StopLossPercent,
+			equity,
+			signalEvent.CurrentATR,
+			ddPct,
+			signalEvent.Signal.Confidence,
+			h.MinConfidence,
+		)
+		if skipReason != "" || sized <= 0 {
+			return nil, nil
+		}
+		amount = sized
+	}
+
 	side := entity.OrderSideBuy
 	if signalEvent.Signal.Action == entity.SignalActionSell {
 		side = entity.OrderSideSell
@@ -271,7 +367,7 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 	proposal := entity.OrderProposal{
 		SymbolID: signalEvent.Signal.SymbolID,
 		Side:     side,
-		Amount:   h.TradeAmount,
+		Amount:   amount,
 		Price:    signalEvent.Price,
 		IsClose:  false,
 	}
@@ -286,6 +382,7 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 			Signal:    signalEvent.Signal,
 			Price:     signalEvent.Price,
 			Timestamp: signalEvent.Timestamp,
+			Amount:    amount,
 		},
 	}, nil
 }
@@ -496,6 +593,10 @@ type SignalExecutor interface {
 }
 
 // ExecutionHandler converts approved SignalEvents into OrderEvents.
+//
+// The executor trusts ApprovedSignalEvent.Amount when set (the risk handler
+// has already sized the lot). TradeAmount remains as a legacy fallback for
+// older callers that emit ApprovedSignalEvent with Amount == 0.
 type ExecutionHandler struct {
 	Executor    SignalExecutor
 	TradeAmount float64
@@ -509,7 +610,12 @@ func (h *ExecutionHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	if h.Executor == nil {
 		return nil, fmt.Errorf("executor is nil")
 	}
-	if h.TradeAmount <= 0 {
+
+	amount := signalEvent.Amount
+	if amount <= 0 {
+		amount = h.TradeAmount
+	}
+	if amount <= 0 {
 		return nil, fmt.Errorf("trade amount must be positive")
 	}
 
@@ -522,7 +628,7 @@ func (h *ExecutionHandler) Handle(_ context.Context, event entity.Event) ([]enti
 		signalEvent.Signal.SymbolID,
 		side,
 		signalEvent.Price,
-		h.TradeAmount,
+		amount,
 		signalEvent.Signal.Reason,
 		signalEvent.Timestamp,
 	)
