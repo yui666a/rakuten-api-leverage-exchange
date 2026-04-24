@@ -1,4 +1,5 @@
 import type { TradeHistoryItem } from '../lib/api'
+import { formatAmount } from '../lib/format'
 
 export type TradeHistoryRow = TradeHistoryItem & { currencyPair?: string }
 
@@ -55,7 +56,7 @@ export function TradeHistoryTable({ trades, showCurrencyPair = false }: TradeHis
                   <td className={`px-5 py-4 font-medium ${trade.orderSide === 'BUY' ? 'text-accent-green' : 'text-accent-red'}`}>
                     {trade.orderSide}
                   </td>
-                  <td className="px-5 py-4">{trade.amount}</td>
+                  <td className="px-5 py-4">{formatAmount(trade.amount)}</td>
                   <td className="px-5 py-4">{formatYen(trade.price)}</td>
                   <td className={`px-5 py-4 ${trade.profit >= 0 ? 'text-accent-green' : 'text-accent-red'}`}>
                     {formatYen(trade.profit)}

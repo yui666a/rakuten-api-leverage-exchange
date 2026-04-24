@@ -20,6 +20,7 @@ import type {
   StrategyProfile,
   SummaryBreakdown,
 } from '../lib/api'
+import { formatAmount } from '../lib/format'
 
 export const Route = createFileRoute('/backtest')({ component: BacktestPage })
 
@@ -1227,7 +1228,7 @@ function TradeRow({ trade }: { trade: BacktestTrade }) {
       <td className="px-3 py-2 text-right text-white">
         {trade.exitPrice.toLocaleString('ja-JP')}
       </td>
-      <td className="px-3 py-2 text-right text-white">{trade.amount}</td>
+      <td className="px-3 py-2 text-right text-white">{formatAmount(trade.amount)}</td>
       <td className={`px-3 py-2 text-right font-medium ${pnlColor(trade.pnl)}`}>
         {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}
       </td>
