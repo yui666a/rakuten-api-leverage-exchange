@@ -227,6 +227,62 @@ type StrategyRiskConfig struct {
 	TrailingATRMultiplier float64 `json:"trailing_atr_multiplier"`
 	MaxPositionAmount     float64 `json:"max_position_amount"`
 	MaxDailyLoss          float64 `json:"max_daily_loss"`
+
+	// PositionSizing configures dynamic lot sizing. nil (or Mode == "fixed" /
+	// unset) keeps the legacy behaviour: the runtime supplied trade amount is
+	// used as-is. When set, the sizer computes per-trade lot size from
+	// equity, signal confidence, ATR, and drawdown. See usecase/positionsize.
+	PositionSizing *PositionSizingConfig `json:"position_sizing,omitempty"`
+}
+
+// PositionSizingConfig declares how per-trade lot size is derived at runtime.
+// All fields are optional; zero values fall back to conservative defaults
+// inside the sizer so existing profiles remain bit-identical.
+type PositionSizingConfig struct {
+	// Mode selects the sizing algorithm.
+	//   - ""      : treated as "fixed" (legacy behaviour, bit-identical).
+	//   - "fixed" : the runtime trade amount is used as-is (legacy).
+	//   - "risk_pct" : per-trade risk budget is a fraction of equity; lot
+	//     size = risk_jpy / (entry_price × stop_loss_percent).
+	Mode string `json:"mode,omitempty"`
+
+	// RiskPerTradePct is the fraction of equity risked on a single trade,
+	// expressed in percent (1.0 = 1%). Only consulted when Mode == "risk_pct".
+	// Must be > 0 and ≤ 10.0 when Mode is "risk_pct"; 0 falls back to 1.0.
+	RiskPerTradePct float64 `json:"risk_per_trade_pct,omitempty"`
+
+	// MaxPositionPctOfEquity caps the notional value of a single position as
+	// a fraction of equity in percent (20 = 20%). 0 disables the cap.
+	MaxPositionPctOfEquity float64 `json:"max_position_pct_of_equity,omitempty"`
+
+	// ATRAdjust enables volatility normalisation. When true, the lot size is
+	// scaled by TargetATRPct / (current_atr/entry_price*100), clamped to
+	// [ATRScaleMin, ATRScaleMax]. Ignored when current ATR is missing.
+	ATRAdjust      bool    `json:"atr_adjust,omitempty"`
+	TargetATRPct   float64 `json:"target_atr_pct,omitempty"`
+	ATRScaleMin    float64 `json:"atr_scale_min,omitempty"`
+	ATRScaleMax    float64 `json:"atr_scale_max,omitempty"`
+
+	// DrawdownScaleDown triggers lot-size de-escalation when equity is in
+	// drawdown. Thresholds are in percent of peak equity. 0 disables the
+	// corresponding tier.
+	DDScaleDown DrawdownScaleConfig `json:"drawdown_scale_down,omitzero"`
+
+	// MinLot / LotStep control venue-side rounding. 0 disables and falls
+	// back to the executor's defaults.
+	MinLot  float64 `json:"min_lot,omitempty"`
+	LotStep float64 `json:"lot_step,omitempty"`
+}
+
+// DrawdownScaleConfig is a two-tier DD-based lot scaler.
+//   - TierAPct (e.g. 10.0) = first threshold; when DD ≥ TierAPct, lot *= TierAScale.
+//   - TierBPct (e.g. 15.0) = second threshold; when DD ≥ TierBPct, lot *= TierBScale.
+// 0 on either tier disables that tier.
+type DrawdownScaleConfig struct {
+	TierAPct   float64 `json:"tier_a_pct,omitempty"`
+	TierAScale float64 `json:"tier_a_scale,omitempty"`
+	TierBPct   float64 `json:"tier_b_pct,omitempty"`
+	TierBScale float64 `json:"tier_b_scale,omitempty"`
 }
 
 // Validate reports structural problems in the profile. The goal is to reject
@@ -351,6 +407,36 @@ func (p StrategyProfile) Validate() error {
 	// (the writer meant to set both).
 	if p.RegimeRouting != nil && len(p.RegimeRouting.Overrides) > 0 && p.RegimeRouting.Default == "" {
 		errs = append(errs, errors.New("regime_routing.default must be set when regime_routing.overrides is non-empty"))
+	}
+
+	if ps := p.Risk.PositionSizing; ps != nil {
+		switch ps.Mode {
+		case "", "fixed", "risk_pct":
+		default:
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.mode must be one of fixed|risk_pct (got %q)", ps.Mode))
+		}
+		if ps.RiskPerTradePct < 0 || ps.RiskPerTradePct > 10 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.risk_per_trade_pct must be in [0, 10] (got %v)", ps.RiskPerTradePct))
+		}
+		if ps.MaxPositionPctOfEquity < 0 || ps.MaxPositionPctOfEquity > 100 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.max_position_pct_of_equity must be in [0, 100] (got %v)", ps.MaxPositionPctOfEquity))
+		}
+		if ps.TargetATRPct < 0 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.target_atr_pct must be >= 0 (got %v)", ps.TargetATRPct))
+		}
+		if ps.ATRScaleMin < 0 || ps.ATRScaleMax < 0 || (ps.ATRScaleMin > 0 && ps.ATRScaleMax > 0 && ps.ATRScaleMin > ps.ATRScaleMax) {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.atr_scale_min/max invalid (min=%v max=%v)", ps.ATRScaleMin, ps.ATRScaleMax))
+		}
+		if ps.MinLot < 0 || ps.LotStep < 0 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.min_lot/lot_step must be >= 0 (min=%v step=%v)", ps.MinLot, ps.LotStep))
+		}
+		d := ps.DDScaleDown
+		if d.TierAPct < 0 || d.TierBPct < 0 || d.TierAScale < 0 || d.TierBScale < 0 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.drawdown_scale_down values must be >= 0"))
+		}
+		if d.TierAPct > 0 && d.TierBPct > 0 && d.TierAPct >= d.TierBPct {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.drawdown_scale_down.tier_a_pct (%v) must be < tier_b_pct (%v)", d.TierAPct, d.TierBPct))
+		}
 	}
 
 	if len(errs) == 0 {
