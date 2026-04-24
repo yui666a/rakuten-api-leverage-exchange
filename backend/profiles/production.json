@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "description": "Promoted from experiment_2026-04-22_sl14_tf60_35 on 2026-04-22 — see docs/pdca/2026-04-22_promotion_v5.md for the full rationale and 2022-regime caveat. Aggressive v5 candidate: gM +16.22% / worst +9.26% on 2023-04..2026-03 (all 1yr/2yr/3yr positive, 3yr DD 6.01%). Known limitation: blows up to -57.97% on 2022-01..2025-01 (2022 bear regime). Defensive alternative kept as experiment_2026-04-22_sl6_tr30_tp6_tf60_35.json for rollback.",
+  "description": "Promoted from experiment_2026-04-22_sl14_bblk3_cmf010 on 2026-04-23 — see docs/pdca/2026-04-23_promotion_v6.md for full rationale. v6 = v5 sl14 base + bb_squeeze_lookback 5→3 (cycle44 WFO winner) + breakout.cmf_buy_min 0→0.10 (cycle45 WFO 9/10 robust). Multi-period 4 window (3m/6m/1y/2y): aggregate geomMean +7.32% (v5 +6.88%), 2y +15.03% (+2.15pp vs v5), 2y MaxDD 6.54% (−0.32pp). All 4 windows MaxDD ≤ 7% and positive return. Known limitation: 4y-incl-2022 still blows up to −46.67% (2022 bear regime), same caveat as v5. Defensive alternative kept as experiment_2026-04-22_sl6_tr30_tp6_tf60_35.json. Local optimum confirmed across 10 consecutive rejected experiment cycles (cycle45-55).",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -16,7 +16,7 @@
     "rsi_oversold": 32,
     "rsi_overbought": 68,
     "sma_convergence_threshold": 0.002,
-    "bb_squeeze_lookback": 5,
+    "bb_squeeze_lookback": 3,
     "breakout_volume_ratio": 1.5
   },
   "signal_rules": {
@@ -36,7 +36,8 @@
     "breakout": {
       "enabled": true,
       "volume_ratio_min": 1.5,
-      "require_macd_confirm": true
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
     }
   },
   "strategy_risk": {
