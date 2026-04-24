@@ -1,0 +1,56 @@
+{
+  "name": "experiment_2026-04-23_sl14_bblk3_vol21_cmf05",
+  "description": "cycle51 winner candidate from breakout sweep: combined base (bblk3=3) + breakout.volume_ratio_min 1.5->2.1 + cmf_buy_min 0.10->0.05. Discovery: signal_rules.breakout.volume_ratio_min is clamped by stance_rules.breakout_volume_ratio=1.5, so only values >=1.8 are active. stance_rules.breakout_volume_ratio also raised 1.5->2.1 to let the signal gate actually bite.",
+  "indicators": {
+    "sma_short": 20,
+    "sma_long": 50,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_multiplier": 2.0,
+    "atr_period": 14
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 3,
+    "breakout_volume_ratio": 2.1
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 2.1,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.05
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
