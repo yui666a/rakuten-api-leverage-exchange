@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { buildRealtimeWebSocketUrl, type LiveTicker, type RealtimeEventMessage } from '../lib/api'
+import { useNotificationSettings } from './useNotificationSettings'
+import { formatRiskEvent, formatTradeEvent } from '../lib/notify-format'
+import { playBeep, showNotification } from '../lib/notifier'
 
 type ConnectionState = 'connecting' | 'connected' | 'disconnected'
 
@@ -9,6 +12,14 @@ export function useMarketTickerStream(symbolId: number) {
   const [ticker, setTicker] = useState<LiveTicker | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
   const lastIndicatorInvalidateRef = useRef(0)
+  const { shouldFire, settings } = useNotificationSettings()
+  // Read the latest values inside socket callbacks via refs so we don't have
+  // to tear down + rebuild the WebSocket whenever the user toggles
+  // notifications. The socket lifetime is tied to symbolId only.
+  const shouldFireRef = useRef(shouldFire)
+  const soundEnabledRef = useRef(settings.soundEnabled)
+  shouldFireRef.current = shouldFire
+  soundEnabledRef.current = settings.soundEnabled
 
   useEffect(() => {
     // symbolId 変更時に旧シンボルの価格が残らないよう、即座にリセット
@@ -63,6 +74,27 @@ export function useMarketTickerStream(symbolId: number) {
             return
           case 'orderbook':
             return
+          case 'trade_event': {
+            // Open/close 約定: trades / positions / pnl の表示も最新化する。
+            void queryClient.invalidateQueries({ queryKey: ['trades', symbolId] })
+            void queryClient.invalidateQueries({ queryKey: ['positions'] })
+            void queryClient.invalidateQueries({ queryKey: ['pnl'] })
+            if (shouldFireRef.current) {
+              const desc = formatTradeEvent(payload.data)
+              showNotification(desc)
+              if (soundEnabledRef.current) playBeep(desc.beep)
+            }
+            return
+          }
+          case 'risk_event': {
+            void queryClient.invalidateQueries({ queryKey: ['status'] })
+            if (shouldFireRef.current) {
+              const desc = formatRiskEvent(payload.data)
+              showNotification(desc)
+              if (soundEnabledRef.current) playBeep(desc.beep)
+            }
+            return
+          }
         }
       })
 
