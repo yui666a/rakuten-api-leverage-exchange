@@ -38,5 +38,17 @@ services:
       - /app/frontend/node_modules
     restart: unless-stopped
 
+  csv-updater:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.csv-updater
+    volumes:
+      - ./backend/data:/app/backend/data
+    environment:
+      TZ: Asia/Tokyo
+      RUN_ON_START: "1"
+    restart: unless-stopped
+
 volumes:
   backend-db:
+
