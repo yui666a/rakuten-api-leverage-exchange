@@ -12,8 +12,11 @@ COPY scripts/csv-updater-entrypoint.sh /usr/local/bin/csv-updater-entrypoint.sh
 RUN chmod +x /app/backend/scripts/fetch_incremental.sh /usr/local/bin/csv-updater-entrypoint.sh
 
 # crond reads /etc/crontabs/root by default in alpine.
-# Run hourly at minute 5 (avoid edge of API rate windows on the dot).
-RUN printf '5 * * * * /app/backend/scripts/fetch_incremental.sh >> /proc/1/fd/1 2>&1\n' \
+# Run every 3 hours at minute 27. Minute 27 sits between the PT15M close
+# boundaries (00/15/30/45) so it avoids competing with the live trading
+# pipeline's own candle-fetch bursts. 3-hour cadence keeps the CSVs fresh
+# enough for backtests without hammering the Rakuten API.
+RUN printf '27 */3 * * * /app/backend/scripts/fetch_incremental.sh >> /proc/1/fd/1 2>&1\n' \
   > /etc/crontabs/root
 
 ENTRYPOINT ["/usr/local/bin/csv-updater-entrypoint.sh"]
