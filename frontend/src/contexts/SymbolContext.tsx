@@ -90,6 +90,34 @@ export function SymbolProvider({ children }: { children: ReactNode }) {
   // 未ロード時に fallback tradeAmount で PUT して誤上書きするのを防ぐ。
   const isSwitchAllowed = tradingConfig !== undefined
 
+  // Defense-in-depth (D): if URL says LTC but the backend's pipeline still
+  // points at BTC (e.g. fresh container, persistence not yet caught up), the
+  // WS subscription would silently stay on the wrong asset and the dashboard
+  // would freeze on stale ticks. Auto-PUT once on mount to close the gap.
+  // We only fire when:
+  //   - both URL and backend config are settled (no race during boot)
+  //   - the symbols differ
+  //   - no PUT is already in-flight (avoid loops on transient errors)
+  useEffect(() => {
+    if (!tradingConfig) return
+    if (!resolvedFromUrl) return
+    if (updateConfig.isPending) return
+    if (resolvedFromUrl.id === tradingConfig.symbolId) return
+    console.warn(
+      '[SymbolContext] mismatch between URL symbol and backend trading_config; auto-syncing',
+      { urlSymbolId: resolvedFromUrl.id, backendSymbolId: tradingConfig.symbolId },
+    )
+    updateConfig.mutate(
+      { symbolId: resolvedFromUrl.id, tradeAmount: tradingConfig.tradeAmount },
+      {
+        onSuccess: () => {
+          void queryClient.invalidateQueries({ queryKey: ['candles'] })
+          void queryClient.invalidateQueries({ queryKey: ['indicators'] })
+        },
+      },
+    )
+  }, [resolvedFromUrl, tradingConfig, updateConfig, queryClient])
+
   const switchSymbol = useCallback(
     (newSymbolId: number) => {
       if (!tradingConfig) return

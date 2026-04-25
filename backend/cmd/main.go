@@ -48,6 +48,7 @@ func main() {
 	marketDataRepo := database.NewMarketDataRepo(db)
 	tradeHistoryRepo := database.NewTradeHistoryRepo(db)
 	riskStateRepo := database.NewRiskStateRepo(db)
+	tradingConfigRepo := database.NewTradingConfigRepo(db)
 
 	// --- Usecase ---
 	marketDataSvc := usecase.NewMarketDataService(marketDataRepo)
@@ -80,7 +81,23 @@ func main() {
 	})
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
 
+	// Default to the config-file values, then let the persisted state (if any)
+	// override them. This is what fixes the "WS resubscribes to BTC after every
+	// docker restart even though I picked LTC last time" silent failure: the
+	// pipeline now boots with the user's last selection.
 	symbolID := cfg.Trading.SymbolID
+	tradeAmount := cfg.Trading.TradeAmount
+	if persisted, err := tradingConfigRepo.Load(context.Background()); err != nil {
+		slog.Warn("trading config restore failed; falling back to config defaults", "error", err)
+	} else if persisted != nil {
+		if persisted.SymbolID > 0 {
+			symbolID = persisted.SymbolID
+		}
+		if persisted.TradeAmount > 0 {
+			tradeAmount = persisted.TradeAmount
+		}
+		slog.Info("trading config restored from db", "symbolID", symbolID, "tradeAmount", tradeAmount)
+	}
 
 	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "PT15M", 500); err != nil {
 		slog.Warn("initial candle bootstrap failed", "error", err)
@@ -95,7 +112,7 @@ func main() {
 		EventDrivenPipelineConfig{
 			SymbolID:          symbolID,
 			StateSyncInterval: time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
-			TradeAmount:       cfg.Trading.TradeAmount,
+			TradeAmount:       tradeAmount,
 			MinConfidence:     cfg.Trading.MinConfidence,
 			StopLossPercent:   cfg.Risk.StopLossPercent,
 			TakeProfitPercent: cfg.Risk.TakeProfitPercent,
@@ -132,6 +149,16 @@ func main() {
 		// 新シンボルのローソク足を bootstrap（main の ctx を使う）
 		if err := bootstrapCandles(ctx, restClient, marketDataSvc, newID, "PT15M", 500); err != nil {
 			slog.Warn("candle bootstrap for new symbol failed", "symbolID", newID, "error", err)
+		}
+
+		// Persist so the next restart boots with the user's choice instead of
+		// the config default. Save errors are logged but don't fail the switch
+		// — losing persistence is less bad than refusing the switch.
+		if err := tradingConfigRepo.Save(ctx, repository.TradingConfigState{
+			SymbolID:    newID,
+			TradeAmount: pipeline.TradeAmount(),
+		}); err != nil {
+			slog.Warn("persist trading config failed", "symbolID", newID, "error", err)
 		}
 
 		// 上書き方式: 古い値を drain してから送信。
