@@ -47,6 +47,10 @@ function riskTitle(kind: RiskEventPayload['kind']): string {
       return '⏸ クールダウン開始'
     case 'daily_loss_warning':
       return '⚠️ 日次損失警告'
+    case 'circuit_breaker':
+      return '🚨 サーキットブレーカー作動'
+    case 'reconciliation_drift':
+      return '⚠️ 整合性ずれ検出'
     default:
       return 'リスクイベント'
   }

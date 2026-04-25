@@ -10,6 +10,10 @@ export type StatusResponse = {
   status: 'running' | 'stopped'
   tradingHalted: boolean
   manuallyStopped: boolean
+  // haltReason carries the latest automatic-halt cause when present
+  // (e.g. "circuit_breaker:price_jump", "reconciliation:position_mismatch").
+  // Empty / undefined when running or halted by a plain manual /stop.
+  haltReason?: string
   balance: number
   dailyLoss: number
   totalPosition: number
@@ -46,6 +50,12 @@ export type IndicatorSet = {
   macdLine: number | null
   signalLine: number | null
   histogram: number | null
+  // Orderbook-derived signals (PR-J). Optional on the wire because legacy
+  // backtest runs / live without a BookSource still produce snapshots
+  // without these fields.
+  microprice?: number | null
+  ofiShort?: number | null
+  ofiLong?: number | null
   timestamp: number
 }
 
@@ -190,6 +200,8 @@ export type RiskEventKind =
   | 'consecutive_losses'
   | 'cooldown_started'
   | 'daily_loss_warning'
+  | 'circuit_breaker'
+  | 'reconciliation_drift'
 
 export type RiskEventSeverity = 'info' | 'warning' | 'critical'
 
@@ -207,6 +219,17 @@ export type RiskEventPayload = {
   timestamp: number
 }
 
+// PositionUpdatePayload mirrors the eventengine.Position shape pushed by
+// RealExecutor.SyncPositions when the venue snapshot changes.
+export type PositionUpdatePayload = {
+  positionId: number
+  symbolId: number
+  side: 'BUY' | 'SELL'
+  entryPrice: number
+  amount: number
+  entryTimestamp: number
+}
+
 export type RealtimeEventMessage =
   | { type: 'ticker'; symbolId: number; data: LiveTicker }
   | { type: 'status'; symbolId?: number; data: StatusResponse }
@@ -215,6 +238,46 @@ export type RealtimeEventMessage =
   | { type: 'market_trades'; symbolId: number; data: RealtimeMarketTrades }
   | { type: 'trade_event'; symbolId: number; data: TradeEventPayload }
   | { type: 'risk_event'; symbolId?: number; data: RiskEventPayload }
+  | { type: 'position_update'; symbolId: number; data: PositionUpdatePayload[] }
+
+// ---------------------------------------------------------------------------
+// Execution Quality (PR-Q2) — GET /api/v1/execution-quality
+// ---------------------------------------------------------------------------
+
+export type ExecutionQualityBehaviorBucket = {
+  count: number
+  makerCount: number
+  makerRatio: number
+  feeJpy: number
+}
+
+export type ExecutionQualityReport = {
+  windowSec: number
+  fromTimestamp: number
+  toTimestamp: number
+  trades: {
+    count: number
+    makerCount: number
+    takerCount: number
+    unknownCount: number
+    makerRatio: number
+    totalFeeJpy: number
+    avgSlippageBps?: number
+    byOrderBehavior?: Record<string, ExecutionQualityBehaviorBucket>
+  }
+  circuitBreaker: {
+    halted: boolean
+    haltReason?: string
+  }
+}
+
+export async function fetchExecutionQuality(windowSec = 86400): Promise<ExecutionQualityReport> {
+  const res = await fetch(`${API_BASE}/execution-quality?windowSec=${windowSec}`)
+  if (!res.ok) {
+    throw new Error(`execution-quality fetch failed: ${res.status}`)
+  }
+  return (await res.json()) as ExecutionQualityReport
+}
 
 // --- Backtest types ---
 

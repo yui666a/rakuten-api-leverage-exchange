@@ -82,6 +82,13 @@ export function useMarketTickerStream(symbolId: number) {
           case 'orderbook':
             setOrderbook(payload.data)
             return
+          case 'position_update':
+            // RealExecutor pushes position changes immediately on diff
+            // detection (see PR-O). Invalidate the positions query so the
+            // dashboard panel refreshes without waiting for the periodic
+            // sync interval.
+            void queryClient.invalidateQueries({ queryKey: ['positions'] })
+            return
           case 'trade_event': {
             // Open/close 約定: trades / positions / pnl の表示も最新化する。
             void queryClient.invalidateQueries({ queryKey: ['trades', symbolId] })
