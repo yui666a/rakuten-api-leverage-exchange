@@ -23,4 +23,20 @@ type MarketDataRepository interface {
 
 	// GetLatestTicker returns the most recent ticker for a symbol.
 	GetLatestTicker(ctx context.Context, symbolID int64) (*entity.Ticker, error)
+
+	// SaveTrades batch-saves market trade ticks. Duplicates (by trade ID) are ignored.
+	SaveTrades(ctx context.Context, symbolID int64, trades []entity.MarketTrade) error
+
+	// SaveOrderbook persists a single orderbook snapshot. depthLimit caps how many
+	// ask/bid levels are serialized into the JSON column (0 = all available levels).
+	SaveOrderbook(ctx context.Context, ob entity.Orderbook, depthLimit int) error
+
+	// GetOrderbookHistory returns orderbook snapshots for a symbol within [from, to],
+	// oldest first, up to limit rows. from/to are unix milliseconds; 0 means unbounded.
+	GetOrderbookHistory(ctx context.Context, symbolID int64, from, to int64, limit int) ([]entity.Orderbook, error)
+
+	// PurgeOldMarketData removes rows older than cutoffMillis from the high-volume
+	// market data tables (tickers, trades, orderbook_snapshots). Returns total
+	// rows deleted across all three.
+	PurgeOldMarketData(ctx context.Context, cutoffMillis int64) (int64, error)
 }
