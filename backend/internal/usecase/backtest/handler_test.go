@@ -333,3 +333,105 @@ func TestTickRiskHandler_WorstCaseStopLossOnBothHit(t *testing.T) {
 		t.Fatalf("expected stop_loss by worst-case, got %s", order.Reason)
 	}
 }
+
+// indicatorBookFake feeds IndicatorHandler with a fixed sequence of
+// orderbooks keyed by timestamp. It returns the most recent ob whose
+// timestamp <= ts, mirroring OrderbookReplay's contract.
+type indicatorBookFake struct {
+	books []entity.Orderbook // ascending by timestamp
+}
+
+func (f *indicatorBookFake) LatestBefore(_ context.Context, _ int64, ts int64) (entity.Orderbook, bool, error) {
+	var pick entity.Orderbook
+	found := false
+	for _, ob := range f.books {
+		if ob.Timestamp > ts {
+			break
+		}
+		pick = ob
+		found = true
+	}
+	return pick, found, nil
+}
+
+func TestIndicatorHandler_AttachesMicropriceAndOFIWhenBookSourceWired(t *testing.T) {
+	books := []entity.Orderbook{
+		{
+			Timestamp: 1_000, BestBid: 100, BestAsk: 102,
+			Bids: []entity.OrderbookEntry{{Price: 100, Amount: 5}},
+			Asks: []entity.OrderbookEntry{{Price: 102, Amount: 5}},
+		},
+		{
+			Timestamp: 2_000, BestBid: 100, BestAsk: 102,
+			Bids: []entity.OrderbookEntry{{Price: 100, Amount: 8}},
+			Asks: []entity.OrderbookEntry{{Price: 102, Amount: 2}},
+		},
+	}
+	src := &indicatorBookFake{books: books}
+
+	h := NewIndicatorHandler("PT15M", "", 500)
+	h.SetBookSource(src, 10_000, 60_000, 5)
+
+	// Two primary candles to drive the indicator path. Build the minimum
+	// IndicatorSet that the handler needs (it does not require warmed-up
+	// SMA/RSI to attach Microprice/OFI).
+	candle := entity.Candle{Open: 100, High: 102, Low: 99, Close: 101, Time: 1_000, Volume: 1}
+	_, err := h.Handle(context.Background(), entity.CandleEvent{
+		SymbolID:  7,
+		Interval:  "PT15M",
+		Candle:    candle,
+		Timestamp: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("first handle: %v", err)
+	}
+
+	candle2 := entity.Candle{Open: 101, High: 103, Low: 100, Close: 102, Time: 2_000, Volume: 1}
+	out, err := h.Handle(context.Background(), entity.CandleEvent{
+		SymbolID:  7,
+		Interval:  "PT15M",
+		Candle:    candle2,
+		Timestamp: 2_000,
+	})
+	if err != nil {
+		t.Fatalf("second handle: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 indicator event, got %d", len(out))
+	}
+	indEv := out[0].(entity.IndicatorEvent)
+
+	// Microprice for the second snapshot: bid-heavy (8 vs 2). Expected
+	// (100*2 + 102*8) / 10 = 101.6
+	if indEv.Primary.Microprice == nil {
+		t.Fatal("expected Microprice to be populated")
+	}
+	if got := *indEv.Primary.Microprice; got < 101.59 || got > 101.61 {
+		t.Fatalf("microprice = %f, want ~101.6", got)
+	}
+
+	// OFI short window: bid +3, ask -3 over 1s window with denom 10 →
+	// (3 - (-3)) / 10 = 0.6
+	if indEv.Primary.OFIShort == nil {
+		t.Fatal("expected OFIShort to be populated")
+	}
+	if got := *indEv.Primary.OFIShort; got < 0.59 || got > 0.61 {
+		t.Fatalf("OFIShort = %f, want ~0.6", got)
+	}
+}
+
+func TestIndicatorHandler_NilBookSourceLeavesFieldsUnset(t *testing.T) {
+	h := NewIndicatorHandler("PT15M", "", 500)
+	candle := entity.Candle{Open: 100, High: 102, Low: 99, Close: 101, Time: 1_000, Volume: 1}
+	out, err := h.Handle(context.Background(), entity.CandleEvent{
+		SymbolID: 7, Interval: "PT15M", Candle: candle, Timestamp: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	indEv := out[0].(entity.IndicatorEvent)
+	if indEv.Primary.Microprice != nil || indEv.Primary.OFIShort != nil || indEv.Primary.OFILong != nil {
+		t.Fatalf("orderbook-derived fields must stay nil: mp=%v short=%v long=%v",
+			indEv.Primary.Microprice, indEv.Primary.OFIShort, indEv.Primary.OFILong)
+	}
+}

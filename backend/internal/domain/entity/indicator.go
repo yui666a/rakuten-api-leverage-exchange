@@ -59,6 +59,20 @@ type IndicatorSet struct {
 	OBVSlope20 *float64 `json:"obvSlope20"`
 	CMF20      *float64 `json:"cmf20"`
 
+	// Orderbook-derived signals (PR-J). All nil unless a BookSource is wired
+	// into the IndicatorHandler and a recent enough snapshot exists.
+	//
+	// Microprice = (BestBid * askVol + BestAsk * bidVol) / (askVol + bidVol)
+	// — leans toward the heavier side of the book; richer than plain mid.
+	Microprice *float64 `json:"microprice,omitempty"`
+
+	// OFIShort / OFILong = sum over the rolling window (10s / 60s by default)
+	// of (Δbid_topN_depth − Δask_topN_depth), normalised by topN_depth so the
+	// number is dimensionless ([-1, +1]ish). Positive = bid pressure
+	// (taker-buy intent), negative = ask pressure.
+	OFIShort *float64 `json:"ofiShort,omitempty"`
+	OFILong  *float64 `json:"ofiLong,omitempty"`
+
 	Timestamp int64 `json:"timestamp"`
 }
 

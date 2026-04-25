@@ -132,6 +132,45 @@ type IndicatorHandler struct {
 
 	primaryCandles map[int64][]entity.Candle
 	higherCandles  map[int64][]entity.Candle
+
+	// bookSource and OFI calculators are optional (PR-J). When wired,
+	// every primary-interval Candle event also computes Microprice and
+	// short/long-window OFI from the most recent orderbook snapshot at or
+	// before the candle close timestamp. nil keeps the legacy behaviour
+	// (Microprice / OFI fields stay nil on the IndicatorSet).
+	bookSource    indicatorBookSource
+	ofiShort      map[int64]*indicator.OFICalculator
+	ofiLong       map[int64]*indicator.OFICalculator
+	ofiShortMs    int64
+	ofiLongMs     int64
+	ofiTopN       int
+}
+
+// indicatorBookSource is the narrow port the handler needs to look up the
+// book at signal time. It mirrors booklimit.BookSource so callers can pass
+// the same MarketDataService / OrderbookReplay used elsewhere.
+type indicatorBookSource interface {
+	LatestBefore(ctx context.Context, symbolID, ts int64) (entity.Orderbook, bool, error)
+}
+
+// SetBookSource enables the orderbook-derived signals. windowShortMs and
+// windowLongMs default to 10s / 60s when zero. topN defaults to 5.
+func (h *IndicatorHandler) SetBookSource(src indicatorBookSource, windowShortMs, windowLongMs int64, topN int) {
+	if topN <= 0 {
+		topN = 5
+	}
+	if windowShortMs <= 0 {
+		windowShortMs = 10_000
+	}
+	if windowLongMs <= 0 {
+		windowLongMs = 60_000
+	}
+	h.bookSource = src
+	h.ofiShortMs = windowShortMs
+	h.ofiLongMs = windowLongMs
+	h.ofiTopN = topN
+	h.ofiShort = make(map[int64]*indicator.OFICalculator)
+	h.ofiLong = make(map[int64]*indicator.OFICalculator)
 }
 
 func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize int) *IndicatorHandler {
@@ -145,6 +184,43 @@ func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize in
 		bbSqueezeLookback: 5, // cycle44: legacy default, overridable via SetBBSqueezeLookback
 		primaryCandles:    make(map[int64][]entity.Candle),
 		higherCandles:     make(map[int64][]entity.Candle),
+	}
+}
+
+// attachBookDerived populates Microprice / OFI on the supplied IndicatorSet
+// when a BookSource is wired and a usable snapshot exists. No-ops when the
+// gate is disabled (legacy path).
+func (h *IndicatorHandler) attachBookDerived(set *entity.IndicatorSet, symbolID, ts int64) {
+	if h == nil || h.bookSource == nil {
+		return
+	}
+	ob, found, err := h.bookSource.LatestBefore(context.Background(), symbolID, ts)
+	if err != nil || !found {
+		return
+	}
+	if mp, ok := indicator.Microprice(ob); ok {
+		v := mp
+		set.Microprice = &v
+	}
+	short := h.ofiShort[symbolID]
+	if short == nil {
+		short = indicator.NewOFICalculator(h.ofiTopN, h.ofiShortMs)
+		h.ofiShort[symbolID] = short
+	}
+	short.Add(ob)
+	if v, ok := short.Compute(); ok {
+		x := v
+		set.OFIShort = &x
+	}
+	long := h.ofiLong[symbolID]
+	if long == nil {
+		long = indicator.NewOFICalculator(h.ofiTopN, h.ofiLongMs)
+		h.ofiLong[symbolID] = long
+	}
+	long.Add(ob)
+	if v, ok := long.Compute(); ok {
+		x := v
+		set.OFILong = &x
 	}
 }
 
@@ -171,6 +247,7 @@ func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	case h.PrimaryInterval:
 		h.primaryCandles[candleEvent.SymbolID] = appendCapped(h.primaryCandles[candleEvent.SymbolID], candleEvent.Candle, h.BufferSize)
 		primary := calculateIndicatorSet(candleEvent.SymbolID, h.primaryCandles[candleEvent.SymbolID], h.bbSqueezeLookback)
+		h.attachBookDerived(&primary, candleEvent.SymbolID, candleEvent.Timestamp)
 
 		var higherTF *entity.IndicatorSet
 		if h.HigherTFInterval != "" {

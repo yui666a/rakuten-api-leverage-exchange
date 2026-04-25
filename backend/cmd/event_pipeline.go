@@ -297,6 +297,10 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
 	indicatorHandler := backtest.NewIndicatorHandler("PT15M", "PT1H", 500)
+	if p.marketDataSvc != nil {
+		// PR-J: feed Microprice / OFI from the live in-memory book cache.
+		indicatorHandler.SetBookSource(p.marketDataSvc, 10_000, 60_000, 5)
+	}
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
 
 	// StrategyHandler: signal generation from indicators (priority 20).
