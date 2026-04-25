@@ -21,6 +21,14 @@ type TouchSource interface {
 	LatestBefore(ctx context.Context, symbolID, ts int64) (entity.Orderbook, bool, error)
 }
 
+// PositionChangePublisher is the side effect SyncPositions runs whenever the
+// venue-side position state changes vs the executor's last snapshot. Used to
+// push immediate updates to the dashboard so a manual /positions page does
+// not have to wait the full sync interval.
+type PositionChangePublisher interface {
+	PublishPositionUpdate(symbolID int64, positions []eventengine.Position)
+}
+
 // RealExecutor implements eventengine.OrderExecutor by executing real orders
 // via the Rakuten API OrderClient.
 type RealExecutor struct {
@@ -42,6 +50,14 @@ type RealExecutor struct {
 	// (e.g. crossed-the-touch) immediately retries with MARKET. Defaults
 	// to true so live trading never silently drops a signal.
 	rejectionFallbackEnabled bool
+	// lastOrderAtMillis records the most recent timestamp at which the
+	// executor placed an order with the venue. The pipeline reads this via
+	// LastOrderAt() to switch position polling into a faster cadence right
+	// after activity, when state drift is most likely to matter.
+	lastOrderAtMillis int64
+	// positionPublisher is invoked from SyncPositions when the local view
+	// changes (count or amount), so the dashboard updates immediately.
+	positionPublisher PositionChangePublisher
 }
 
 // RealExecutorOption configures a RealExecutor at construction time.
@@ -73,6 +89,12 @@ func WithPollInterval(d time.Duration) RealExecutorOption {
 			r.pollInterval = d
 		}
 	}
+}
+
+// WithPositionPublisher wires a PositionChangePublisher so SyncPositions can
+// push immediate updates to the realtime hub when the venue state changes.
+func WithPositionPublisher(p PositionChangePublisher) RealExecutorOption {
+	return func(r *RealExecutor) { r.positionPublisher = p }
 }
 
 func NewRealExecutor(orderClient repository.OrderClient, symbolID int64, spreadPercent float64, opts ...RealExecutorOption) *RealExecutor {
@@ -263,6 +285,15 @@ func (r *RealExecutor) closeLocked(positionID int64, signalPrice float64, reason
 	}, trade, nil
 }
 
+// LastOrderAt returns the unix-millis at which the executor most recently
+// placed an order with the venue. 0 means "no order placed since startup".
+// The live pipeline uses this to gate adaptive position-sync polling.
+func (r *RealExecutor) LastOrderAt() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastOrderAtMillis
+}
+
 // Positions returns a copy of tracked positions.
 func (r *RealExecutor) Positions() []eventengine.Position {
 	r.mu.Lock()
@@ -311,6 +342,10 @@ func (r *RealExecutor) SelectSLTPExit(
 }
 
 // SyncPositions fetches current positions from the API and reconciles in-memory state.
+// When the new snapshot differs from the previous in-memory state and a
+// PositionChangePublisher is wired, an immediate "position_update" event is
+// published — this is what closes the gap a polling-only executor leaves on
+// fast fills and venue-side cancels.
 func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 	apiPositions, err := r.orderClient.GetPositions(ctx, r.symbolID)
 	if err != nil {
@@ -318,7 +353,6 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	synced := make([]eventengine.Position, 0, len(apiPositions))
 	for _, ap := range apiPositions {
@@ -331,13 +365,48 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 			EntryTimestamp: ap.CreatedAt,
 		})
 	}
+	changed := positionsChanged(r.positions, synced)
 	r.positions = synced
+	publisher := r.positionPublisher
+	r.mu.Unlock()
 
 	slog.Info("positions synced from API",
 		"symbolID", r.symbolID,
 		"count", len(synced),
+		"changed", changed,
 	)
+
+	if changed && publisher != nil {
+		// Defensive copy: the executor must keep mutating the slice on the
+		// next sync so callers should not assume slice ownership.
+		out := make([]eventengine.Position, len(synced))
+		copy(out, synced)
+		publisher.PublishPositionUpdate(r.symbolID, out)
+	}
 	return nil
+}
+
+// positionsChanged reports whether two snapshots represent different state
+// for the purposes of triggering a publish. Order is not stable from the
+// venue so we compare keyed by PositionID.
+func positionsChanged(prev, next []eventengine.Position) bool {
+	if len(prev) != len(next) {
+		return true
+	}
+	prevByID := make(map[int64]eventengine.Position, len(prev))
+	for _, p := range prev {
+		prevByID[p.PositionID] = p
+	}
+	for _, n := range next {
+		p, ok := prevByID[n.PositionID]
+		if !ok {
+			return true
+		}
+		if p.Side != n.Side || p.Amount != n.Amount || p.EntryPrice != n.EntryPrice {
+			return true
+		}
+	}
+	return false
 }
 
 // calcPnL computes profit/loss for a position at a given exit price.
@@ -454,9 +523,11 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 
 // submit posts a single order and returns the venue's first response row.
 // Errors propagate up unchanged so the caller can decide whether to escalate
-// or surface the failure.
+// or surface the failure. Records the submission timestamp so the pipeline
+// can adapt its position-polling cadence.
 func (r *RealExecutor) submit(ctx context.Context, req entity.OrderRequest) (entity.Order, error) {
 	orders, err := r.orderClient.CreateOrder(ctx, req)
+	r.lastOrderAtMillis = time.Now().UnixMilli()
 	if err != nil {
 		return entity.Order{}, err
 	}

@@ -289,6 +289,9 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	}
 	if p.marketDataSvc != nil {
 		executorOpts = append(executorOpts, live.WithTouchSource(p.marketDataSvc))
+		if hub := p.marketDataSvc.RealtimeHub(); hub != nil {
+			executorOpts = append(executorOpts, live.WithPositionPublisher(&positionUpdatePublisher{hub: hub}))
+		}
 	}
 	executor := live.NewRealExecutor(p.orderClient, snap.symbolID, 0, executorOpts...)
 
@@ -353,10 +356,21 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	tickerCh := p.marketDataSvc.SubscribeTicker()
 	defer p.marketDataSvc.UnsubscribeTicker(tickerCh)
 
-	// Periodic position sync for the executor (reconcile in-memory state with API).
-	positionSyncInterval := 30 * time.Second
-	positionSyncTicker := time.NewTicker(positionSyncInterval)
+	// Adaptive position sync. The pipeline used to poll on a fixed 30 s
+	// cadence; that's fine for steady-state monitoring but leaves a long
+	// blind spot right after an order fill where the venue knows the new
+	// state and we don't. We now check executor.LastOrderAt() on each tick
+	// and use a 2 s burst window for the first 60 s after activity, then
+	// fall back to the 30 s baseline. The base ticker is the burst rate so
+	// the pipeline can react inside a single burst.
+	const (
+		burstIntervalMs    = 2_000
+		idleIntervalMs     = 30_000
+		burstWindowAfterMs = 60_000
+	)
+	positionSyncTicker := time.NewTicker(time.Duration(burstIntervalMs) * time.Millisecond)
 	defer positionSyncTicker.Stop()
+	var nextSyncMs int64
 
 	// Circuit breaker: opt-in. When any threshold > 0 we wire a Watcher
 	// that observes every WS frame via MarketDataService and a heartbeat
@@ -396,9 +410,18 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 			}
 
 		case <-positionSyncTicker.C:
+			now := time.Now().UnixMilli()
+			if nextSyncMs > 0 && now < nextSyncMs {
+				continue
+			}
 			if err := executor.SyncPositions(ctx); err != nil {
 				slog.Warn("event-pipeline: periodic position sync failed", "error", err)
 			}
+			interval := int64(idleIntervalMs)
+			if last := executor.LastOrderAt(); last > 0 && now-last < int64(burstWindowAfterMs) {
+				interval = int64(burstIntervalMs)
+			}
+			nextSyncMs = now + interval
 		}
 	}
 }
@@ -659,4 +682,18 @@ func (p *EventDrivenPipeline) startReconciler(ctx context.Context, snap eventSna
 		"balHaltPct", p.reconcileConfig.BalanceHaltPct,
 	)
 	return r
+}
+
+// positionUpdatePublisher pushes RealExecutor's diff-detected position events
+// to the realtime hub so the dashboard can refresh immediately on fill,
+// instead of waiting up to one position-sync interval.
+type positionUpdatePublisher struct{ hub *usecase.RealtimeHub }
+
+func (p *positionUpdatePublisher) PublishPositionUpdate(symbolID int64, positions []eventengine.Position) {
+	if p == nil || p.hub == nil {
+		return
+	}
+	if err := p.hub.PublishData("position_update", symbolID, positions); err != nil {
+		slog.Warn("event-pipeline: position_update publish failed", "error", err)
+	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
@@ -492,5 +493,94 @@ func TestRealExecutor_PostOnlyEscalate_DeadlineEscalatesToMarket(t *testing.T) {
 	}
 	if !cancelCalled {
 		t.Fatal("expected CancelOrder to be called when deadline elapses")
+	}
+}
+
+func TestPositionsChanged_DetectsCountAndShape(t *testing.T) {
+	a := []eventengine.Position{{PositionID: 1, Side: entity.OrderSideBuy, Amount: 0.1, EntryPrice: 100}}
+	b := []eventengine.Position{{PositionID: 1, Side: entity.OrderSideBuy, Amount: 0.1, EntryPrice: 100}}
+	if positionsChanged(a, b) {
+		t.Fatal("identical snapshots should not be 'changed'")
+	}
+	c := []eventengine.Position{{PositionID: 1, Side: entity.OrderSideBuy, Amount: 0.2, EntryPrice: 100}}
+	if !positionsChanged(a, c) {
+		t.Fatal("amount change must be detected")
+	}
+	d := []eventengine.Position{
+		{PositionID: 1, Side: entity.OrderSideBuy, Amount: 0.1, EntryPrice: 100},
+		{PositionID: 2, Side: entity.OrderSideSell, Amount: 0.1, EntryPrice: 102},
+	}
+	if !positionsChanged(a, d) {
+		t.Fatal("count change must be detected")
+	}
+	// Order independence (venue may reshuffle).
+	e := []eventengine.Position{
+		{PositionID: 2, Side: entity.OrderSideSell, Amount: 0.1, EntryPrice: 102},
+		{PositionID: 1, Side: entity.OrderSideBuy, Amount: 0.1, EntryPrice: 100},
+	}
+	if positionsChanged(d, e) {
+		t.Fatal("order-independent equality should hold")
+	}
+}
+
+type capturingPublisher struct {
+	events []struct {
+		symbolID  int64
+		positions []eventengine.Position
+	}
+}
+
+func (p *capturingPublisher) PublishPositionUpdate(symbolID int64, positions []eventengine.Position) {
+	p.events = append(p.events, struct {
+		symbolID  int64
+		positions []eventengine.Position
+	}{symbolID, positions})
+}
+
+func TestRealExecutor_SyncPositions_PublishesOnChange(t *testing.T) {
+	calls := 0
+	mock := &mockOrderClient{
+		getPositionsFn: func(ctx context.Context, symbolID int64) ([]entity.Position, error) {
+			calls++
+			if calls == 1 {
+				return []entity.Position{{ID: 10, SymbolID: 7, OrderSide: entity.OrderSideBuy, RemainingAmount: 0.1, Price: 100}}, nil
+			}
+			// Second call: same shape as first → no publish.
+			if calls == 2 {
+				return []entity.Position{{ID: 10, SymbolID: 7, OrderSide: entity.OrderSideBuy, RemainingAmount: 0.1, Price: 100}}, nil
+			}
+			// Third call: amount changed → publish.
+			return []entity.Position{{ID: 10, SymbolID: 7, OrderSide: entity.OrderSideBuy, RemainingAmount: 0.2, Price: 100}}, nil
+		},
+	}
+	pub := &capturingPublisher{}
+	exec := NewRealExecutor(mock, 7, 0, WithPositionPublisher(pub))
+
+	for i := 0; i < 3; i++ {
+		if err := exec.SyncPositions(context.Background()); err != nil {
+			t.Fatalf("sync %d: %v", i, err)
+		}
+	}
+	// Publishes: first sync (no prior state → "changed") + third sync (amount).
+	if len(pub.events) != 2 {
+		t.Fatalf("expected 2 publishes, got %d", len(pub.events))
+	}
+}
+
+func TestRealExecutor_LastOrderAt_BumpsOnSubmit(t *testing.T) {
+	mock := &mockOrderClient{
+		createOrderFn: func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 1, Price: 100}}, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 7, 0)
+	if exec.LastOrderAt() != 0 {
+		t.Fatal("expected zero before any order")
+	}
+	if _, err := exec.Open(7, entity.OrderSideBuy, 100, 0.1, "test", 1000); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if exec.LastOrderAt() == 0 {
+		t.Fatal("expected LastOrderAt to advance after Open")
 	}
 }
