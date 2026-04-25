@@ -81,6 +81,28 @@ func (m *mockMarketDataRepo) GetLatestTicker(_ context.Context, symbolID int64) 
 	return nil, fmt.Errorf("not found")
 }
 
+func (m *mockMarketDataRepo) GetTickersBetween(_ context.Context, symbolID int64, from, to int64, limit int) ([]entity.Ticker, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []entity.Ticker
+	for _, t := range m.tickers {
+		if t.SymbolID != symbolID {
+			continue
+		}
+		if from > 0 && t.Timestamp < from {
+			continue
+		}
+		if to > 0 && t.Timestamp > to {
+			continue
+		}
+		out = append(out, t)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *mockMarketDataRepo) SaveTrades(_ context.Context, _ int64, ts []entity.MarketTrade) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

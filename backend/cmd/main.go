@@ -22,6 +22,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/quality"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
@@ -210,6 +211,15 @@ func main() {
 	// --- REST API ---
 	dailyPnLCalc := usecase.NewDailyPnLCalculator(restClient, 10*time.Second)
 
+	executionQualityReporter := quality.New(
+		restClient,
+		marketDataRepo,
+		quality.HaltStatusFunc(func() (bool, string) {
+			s := riskMgr.GetStatus()
+			return s.ManuallyStopped || s.TradingHalted, s.HaltReason
+		}),
+	)
+
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
 		StanceResolver:      stanceResolver,
@@ -227,6 +237,7 @@ func main() {
 		WalkForwardResultRepo: walkForwardRepo,
 		OnSymbolSwitch:        onSymbolSwitch,
 		DailyPnLCalculator:    dailyPnLCalc,
+		ExecutionQualityReporter: executionQualityReporter,
 	})
 
 	sigCh := make(chan os.Signal, 1)

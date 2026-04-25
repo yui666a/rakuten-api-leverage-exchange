@@ -117,6 +117,41 @@ func (r *MarketDataRepo) GetLatestTicker(ctx context.Context, symbolID int64) (*
 	return &t, nil
 }
 
+func (r *MarketDataRepo) GetTickersBetween(ctx context.Context, symbolID int64, from, to int64, limit int) ([]entity.Ticker, error) {
+	if limit <= 0 {
+		limit = 5000
+	}
+	args := []any{symbolID}
+	q := `SELECT symbol_id, best_ask, best_bid, open, high, low, last, volume, timestamp
+	      FROM tickers WHERE symbol_id = ?`
+	if from > 0 {
+		q += ` AND timestamp >= ?`
+		args = append(args, from)
+	}
+	if to > 0 {
+		q += ` AND timestamp <= ?`
+		args = append(args, to)
+	}
+	q += ` ORDER BY timestamp ASC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := r.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tickers: %w", err)
+	}
+	defer rows.Close()
+
+	var out []entity.Ticker
+	for rows.Next() {
+		var t entity.Ticker
+		if err := rows.Scan(&t.SymbolID, &t.BestAsk, &t.BestBid, &t.Open, &t.High, &t.Low, &t.Last, &t.Volume, &t.Timestamp); err != nil {
+			return nil, fmt.Errorf("scan ticker: %w", err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // SaveTrades batch-inserts market trade ticks. Duplicate trade_ids per symbol are
 // silently ignored via INSERT OR IGNORE — the WS feed retransmits the most recent
 // trades on every "trades" frame, so dedup at write-time keeps the table clean.
