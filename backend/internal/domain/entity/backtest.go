@@ -30,6 +30,12 @@ type BacktestConfig struct {
 	// Zero values disable fee accounting so legacy backtests stay free.
 	MakerFeeRate float64 `json:"makerFeeRate,omitempty"`
 	TakerFeeRate float64 `json:"takerFeeRate,omitempty"`
+
+	// LatencyMs offsets the fill-time orderbook lookup forward by this many
+	// milliseconds. Models the "signal -> network -> venue -> fill" gap so a
+	// backtest cannot benefit from prices unavailable to the live bot.
+	// 0 disables (legacy default).
+	LatencyMs int64 `json:"latencyMs,omitempty"`
 }
 
 // BacktestSummary stores fixed output metrics for a run.

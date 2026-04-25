@@ -138,6 +138,9 @@ type runBacktestRequest struct {
 	// (-0.0001 / 0 for Rakuten Wallet leverage). 0 disables fee accounting.
 	MakerFeeRate float64 `json:"makerFeeRate,omitempty"`
 	TakerFeeRate float64 `json:"takerFeeRate,omitempty"`
+	// LatencyMs shifts the fill-time orderbook lookup forward (Phase H).
+	// 0 = no latency model. 200 = a 200 ms signal-to-fill gap.
+	LatencyMs int64 `json:"latencyMs,omitempty"`
 	TradeAmount           float64 `json:"tradeAmount"`
 	StopLossPercent       float64 `json:"stopLossPercent"`
 	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
@@ -274,6 +277,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		MakerFillProbability: req.MakerFillProbability,
 		MakerFeeRate:         req.MakerFeeRate,
 		TakerFeeRate:         req.TakerFeeRate,
+		LatencyMs:            req.LatencyMs,
 	}
 	if len(higherCandles) == 0 {
 		cfg.HigherTFInterval = ""

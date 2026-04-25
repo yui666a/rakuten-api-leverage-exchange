@@ -38,6 +38,7 @@ type runWalkForwardRequest struct {
 	TakerFeeRate         float64 `json:"takerFeeRate,omitempty"`
 	MaxSlippageBps       float64 `json:"maxSlippageBps,omitempty"`
 	MaxBookSidePct       float64 `json:"maxBookSidePct,omitempty"`
+	LatencyMs            int64   `json:"latencyMs,omitempty"`
 
 	From              string `json:"from"`              // "YYYY-MM-DD"
 	To                string `json:"to"`                // "YYYY-MM-DD"
@@ -227,6 +228,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				MakerFillProbability: req.MakerFillProbability,
 				MakerFeeRate:         req.MakerFeeRate,
 				TakerFeeRate:         req.TakerFeeRate,
+				LatencyMs:            req.LatencyMs,
 			}
 			if len(higherCandles) == 0 {
 				cfg.HigherTFInterval = ""

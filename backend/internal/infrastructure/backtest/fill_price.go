@@ -320,6 +320,41 @@ func (p *PostOnlyLimitFill) lookupTouch(kind FillKind, side entity.OrderSide, ts
 	return 0, false
 }
 
+// LatencyAdjustedSource wraps another FillPriceSource and shifts the
+// timestamp passed to FillPrice forward by LatencyMs. This models the
+// signal-to-fill gap (network + venue queue + ack) so backtests can't
+// benefit from a price that was only visible after the bot would have
+// already committed to its order. The wrapped source still sees signalPrice
+// unchanged so percent-style models keep their semantics.
+//
+// Maker-flag passthrough: when the wrapped source implements MakerFlagSource,
+// the wrapper exposes the same flag through its own LastFillWasMaker so the
+// SimExecutor can keep classifying fills correctly.
+type LatencyAdjustedSource struct {
+	Inner     FillPriceSource
+	LatencyMs int64
+}
+
+// FillPrice forwards to Inner with ts shifted by LatencyMs.
+func (l *LatencyAdjustedSource) FillPrice(kind FillKind, side entity.OrderSide, signalPrice, amount float64, ts int64) (float64, error) {
+	if l == nil || l.Inner == nil {
+		return 0, fmt.Errorf("LatencyAdjustedSource: inner source is nil")
+	}
+	return l.Inner.FillPrice(kind, side, signalPrice, amount, ts+l.LatencyMs)
+}
+
+// LastFillWasMaker proxies to the wrapped source when it implements the
+// MakerFlagSource hook. Returns false otherwise (taker default).
+func (l *LatencyAdjustedSource) LastFillWasMaker() bool {
+	if l == nil || l.Inner == nil {
+		return false
+	}
+	if mfs, ok := l.Inner.(MakerFlagSource); ok {
+		return mfs.LastFillWasMaker()
+	}
+	return false
+}
+
 // LoadOrderbookReplay is a convenience helper for the runner: load the entire
 // snapshot range for a symbol/window and wrap it in an OrderbookReplay.
 //

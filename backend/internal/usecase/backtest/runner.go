@@ -155,6 +155,9 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 			return nil, fmt.Errorf("unknown slippage model: %q", input.Config.SlippageModel)
 		}
 	}
+	if input.Config.LatencyMs > 0 && fillSource != nil {
+		fillSource = &infra.LatencyAdjustedSource{Inner: fillSource, LatencyMs: input.Config.LatencyMs}
+	}
 	sim := infra.NewSimExecutor(infra.SimConfig{
 		InitialBalance:    input.Config.InitialBalance,
 		SpreadPercent:     input.Config.SpreadPercent,
