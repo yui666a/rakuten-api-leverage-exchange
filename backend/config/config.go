@@ -14,6 +14,7 @@ type Config struct {
 	Trading        TradingConfig
 	Backtest       BacktestConfig
 	CircuitBreaker CircuitBreakerConfig
+	Reconcile      ReconcileConfig
 }
 
 type TradingConfig struct {
@@ -73,6 +74,17 @@ type CircuitBreakerConfig struct {
 	StaleCheckIntervalMs int64
 }
 
+// ReconcileConfig mirrors usecase/reconcile/Config. opt-in.
+type ReconcileConfig struct {
+	Enable          bool
+	IntervalSec     int
+	PositionWarnPct float64
+	PositionHaltPct float64
+	BalanceWarnPct  float64
+	BalanceHaltPct  float64
+	OrderTTLSec     int
+}
+
 type RakutenConfig struct {
 	BaseURL   string
 	WSURL     string
@@ -122,6 +134,15 @@ func Load() *Config {
 		Backtest: BacktestConfig{
 			RetentionDays: getEnvInt("BACKTEST_RETENTION_DAYS", 180),
 		},
+		Reconcile: ReconcileConfig{
+			Enable:          getEnvBool("RECONCILE_ENABLED", false),
+			IntervalSec:     getEnvInt("RECONCILE_INTERVAL_SEC", 60),
+			PositionWarnPct: getEnvFloat("RECONCILE_POSITION_WARN_PCT", 0.05),
+			PositionHaltPct: getEnvFloat("RECONCILE_POSITION_HALT_PCT", 0.5),
+			BalanceWarnPct:  getEnvFloat("RECONCILE_BALANCE_WARN_PCT", 0.01),
+			BalanceHaltPct:  getEnvFloat("RECONCILE_BALANCE_HALT_PCT", 0.05),
+			OrderTTLSec:     getEnvInt("RECONCILE_ORDER_TTL_SEC", 300),
+		},
 		CircuitBreaker: CircuitBreakerConfig{
 			// Default = OFF. Operators flip the env vars on once they're
 			// happy with the live book cache so a misconfigured threshold
@@ -157,6 +178,18 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if i, err := strconv.Atoi(value); err == nil {
 			return i
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		switch value {
+		case "1", "true", "True", "TRUE", "yes", "on":
+			return true
+		case "0", "false", "False", "FALSE", "no", "off":
+			return false
 		}
 	}
 	return defaultValue
