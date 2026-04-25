@@ -206,3 +206,78 @@ func TestSimExecutor_OrderbookReplayThinBookErrorPropagates(t *testing.T) {
 		t.Fatalf("expected ThinBookError to propagate from SimExecutor, got %v", err)
 	}
 }
+
+func TestPostOnlyLimitFill_OverrideMaker_FillsAtBestBidForBuy(t *testing.T) {
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 99, BestAsk: 101,
+		Asks: []entity.OrderbookEntry{{Price: 101, Amount: 10}},
+		Bids: []entity.OrderbookEntry{{Price: 99, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	p := &PostOnlyLimitFill{
+		MakerFillProbability: 1.0,
+		TakerSource:          replay,
+		BookSource:           replay,
+		SymbolID:             7,
+		SamplerOverride:      "maker",
+	}
+	got, err := p.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 1500)
+	if err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if got != 99 {
+		t.Fatalf("expected fill at BestBid 99, got %f", got)
+	}
+	if !p.LastFillWasMaker() {
+		t.Fatal("expected LastFillWasMaker=true")
+	}
+}
+
+func TestPostOnlyLimitFill_OverrideTaker_FallsBackToTakerSource(t *testing.T) {
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 99, BestAsk: 101,
+		Asks: []entity.OrderbookEntry{{Price: 101, Amount: 10}},
+		Bids: []entity.OrderbookEntry{{Price: 99, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	p := &PostOnlyLimitFill{
+		MakerFillProbability: 0.0,
+		TakerSource:          replay,
+		BookSource:           replay,
+		SymbolID:             7,
+		SamplerOverride:      "taker",
+	}
+	got, err := p.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 1500)
+	if err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if got != 101 {
+		t.Fatalf("expected taker fill at BestAsk 101, got %f", got)
+	}
+	if p.LastFillWasMaker() {
+		t.Fatal("expected LastFillWasMaker=false on taker fallback")
+	}
+}
+
+func TestPostOnlyLimitFill_DeterministicSampler(t *testing.T) {
+	// Same timestamp must produce the same maker decision across runs.
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 99, BestAsk: 101,
+		Bids: []entity.OrderbookEntry{{Price: 99, Amount: 10}},
+		Asks: []entity.OrderbookEntry{{Price: 101, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	p := &PostOnlyLimitFill{
+		MakerFillProbability: 0.5,
+		TakerSource:          replay,
+		BookSource:           replay,
+		SymbolID:             7,
+	}
+	first, _ := p.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 1500)
+	firstMaker := p.LastFillWasMaker()
+	second, _ := p.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 1500)
+	secondMaker := p.LastFillWasMaker()
+	if first != second || firstMaker != secondMaker {
+		t.Fatalf("non-deterministic: first=(%f,%v) second=(%f,%v)", first, firstMaker, second, secondMaker)
+	}
+}

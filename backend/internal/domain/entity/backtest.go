@@ -13,10 +13,23 @@ type BacktestConfig struct {
 	DailyCarryCost   float64 `json:"dailyCarryCost"`
 	SlippagePercent  float64 `json:"slippagePercent"`
 	// SlippageModel selects how fill prices are computed.
-	//   - "" / "percent"  : legacy spread% / slippage% adjustment (default).
-	//   - "orderbook"     : VWAP from persisted L2 snapshots (Phase G).
+	//   - "" / "percent"        : legacy spread% / slippage% adjustment (default).
+	//   - "orderbook"           : VWAP from persisted L2 snapshots (Phase G).
+	//   - "post_only_with_taker": probabilistic maker fill at touch with
+	//                             percent/orderbook taker fallback (Phase B).
 	// Unknown values fall back to "percent".
 	SlippageModel string `json:"slippageModel,omitempty"`
+
+	// MakerFillProbability is consulted when SlippageModel is
+	// "post_only_with_taker" to decide whether each fill rests as a maker.
+	// 0.5 = coin flip (default). 0 disables the maker path entirely.
+	MakerFillProbability float64 `json:"makerFillProbability,omitempty"`
+
+	// MakerFeeRate / TakerFeeRate are notional-rate fees per fill. Negative
+	// values are rebates (Rakuten Wallet pays -0.0001 to makers, taker is 0).
+	// Zero values disable fee accounting so legacy backtests stay free.
+	MakerFeeRate float64 `json:"makerFeeRate,omitempty"`
+	TakerFeeRate float64 `json:"takerFeeRate,omitempty"`
 }
 
 // BacktestSummary stores fixed output metrics for a run.
@@ -90,6 +103,13 @@ type BacktestSummary struct {
 	// orderbook side did not have enough depth at fill time. Aggregates
 	// open + SL/TP + trailing close skips.
 	ThinBookSkips int `json:"thinBookSkips,omitempty"`
+
+	// TotalFeeJPY is the sum of per-trade fees across the run (negative
+	// values mean net rebate). MakerFillCount + TakerFillCount partitions
+	// the fills (open + close legs) into maker vs taker.
+	TotalFeeJPY     float64 `json:"totalFeeJpy,omitempty"`
+	MakerFillCount  int     `json:"makerFillCount,omitempty"`
+	TakerFillCount  int     `json:"takerFillCount,omitempty"`
 }
 
 // DrawdownPeriod captures one peak-to-recovery drawdown episode. For an
@@ -133,6 +153,14 @@ type BacktestTradeRecord struct {
 	PnLPercent   float64 `json:"pnlPercent"`
 	CarryingCost float64 `json:"carryingCost"`
 	SpreadCost   float64 `json:"spreadCost"`
+	// Fee is the venue-charged fee total for this trade (open + close).
+	// Negative when the trader earned a maker rebate. 0 for legacy backtests
+	// that did not configure MakerFeeRate / TakerFeeRate.
+	Fee          float64 `json:"fee,omitempty"`
+	// OpenIsMaker / CloseIsMaker label which legs were filled as maker. Both
+	// false for taker-only / legacy runs.
+	OpenIsMaker  bool    `json:"openIsMaker,omitempty"`
+	CloseIsMaker bool    `json:"closeIsMaker,omitempty"`
 	ReasonEntry  string  `json:"reasonEntry"`
 	ReasonExit   string  `json:"reasonExit"`
 }

@@ -149,6 +149,8 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 			// the snapshots from the repo because the runner has no repo
 			// dependency by design.
 			return nil, fmt.Errorf("slippage model %q requires FillPriceSource on RunInput", input.Config.SlippageModel)
+		case "post_only_with_taker":
+			return nil, fmt.Errorf("slippage model %q requires FillPriceSource on RunInput (handler must wrap orderbook+post-only)", input.Config.SlippageModel)
 		default:
 			return nil, fmt.Errorf("unknown slippage model: %q", input.Config.SlippageModel)
 		}
@@ -159,6 +161,8 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		DailyCarryingCost: input.Config.DailyCarryCost,
 		SlippagePercent:   input.Config.SlippagePercent,
 		FillPriceSource:   fillSource,
+		MakerFeeRate:      input.Config.MakerFeeRate,
+		TakerFeeRate:      input.Config.TakerFeeRate,
 	})
 	simAdapter := &simExecutorAdapter{sim: sim}
 
@@ -284,6 +288,19 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	// summary is the natural place to merge them. Both stay nil/0 when the
 	// caller did not configure the gate / orderbook-replay path so legacy
 	// runs round-trip identically.
+	for _, tr := range trades {
+		summary.TotalFeeJPY += tr.Fee
+		if tr.OpenIsMaker {
+			summary.MakerFillCount++
+		} else {
+			summary.TakerFillCount++
+		}
+		if tr.CloseIsMaker {
+			summary.MakerFillCount++
+		} else {
+			summary.TakerFillCount++
+		}
+	}
 	if len(riskHandler.BookGateRejects) > 0 {
 		// Defensive copy so later mutations on the handler don't leak
 		// into the persisted summary.

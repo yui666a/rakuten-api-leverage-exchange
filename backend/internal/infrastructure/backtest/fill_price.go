@@ -46,6 +46,15 @@ type FillPriceSource interface {
 	FillPrice(kind FillKind, side entity.OrderSide, signalPrice, amount float64, timestamp int64) (float64, error)
 }
 
+// MakerFlagSource is an optional add-on a FillPriceSource may implement to
+// tell the simulator whether the just-computed fill should be classified as
+// maker or taker. When a source does not implement it, the simulator treats
+// every fill as taker (the conservative default for the percent-slippage and
+// orderbook-replay models, both of which model market-style executions).
+type MakerFlagSource interface {
+	LastFillWasMaker() bool
+}
+
 // LegacyPercentSlippage reproduces the historical "spread% / 2 + slippage%"
 // adjustment so existing backtest invocations stay bit-identical.
 type LegacyPercentSlippage struct {
@@ -205,6 +214,110 @@ func (o *OrderbookReplay) lookup(ts int64) (entity.Orderbook, bool) {
 // stays a leaf with no usecase-side imports.
 type OrderbookHistoryLoader interface {
 	GetOrderbookHistory(ctx context.Context, symbolID int64, from, to int64, limit int) ([]entity.Orderbook, error)
+}
+
+// PostOnlyLimitFill simulates a SOR-style "post-only LIMIT then escalate to
+// MARKET" execution. With probability MakerFillProbability the order rests
+// at BestBid (BUY) / BestAsk (SELL) and fills as a maker; otherwise the
+// order escalates and the underlying TakerSource (typically OrderbookReplay)
+// returns the taker fill.
+//
+// The probability is sampled from a deterministic per-call hash of the trade
+// timestamp + side so a single backtest run is reproducible without an
+// external rand source. Tests can override SamplerOverride to force a maker
+// or taker outcome.
+type PostOnlyLimitFill struct {
+	// MakerFillProbability is the chance (0..1) that a post-only LIMIT
+	// rests long enough to fill at the touch. 0 disables the maker path
+	// (every fill becomes taker, equivalent to TakerSource alone).
+	MakerFillProbability float64
+	// TakerSource handles the fallback. Required.
+	TakerSource FillPriceSource
+	// BookSource feeds BestBid/BestAsk for the maker fill price. When nil,
+	// the maker path falls through to taker.
+	BookSource interface {
+		LatestBefore(ctx context.Context, symbolID, ts int64) (entity.Orderbook, bool, error)
+	}
+	// SymbolID is passed through to BookSource. Set once at construction.
+	SymbolID int64
+	// SamplerOverride lets tests pin the outcome ("maker" / "taker"). Empty
+	// string falls back to the deterministic hash.
+	SamplerOverride string
+
+	// lastWasMaker tracks the most recent FillPrice call's classification so
+	// SimExecutor can read it via the MakerFlagSource interface. Mutated on
+	// every FillPrice call; the simulator must read it before the next one.
+	lastWasMaker bool
+}
+
+// FillPrice implements FillPriceSource.
+func (p *PostOnlyLimitFill) FillPrice(kind FillKind, side entity.OrderSide, signalPrice, amount float64, ts int64) (float64, error) {
+	p.lastWasMaker = false
+	if p.tryMaker(kind, side, ts) {
+		if mid, ok := p.lookupTouch(kind, side, ts); ok && mid > 0 {
+			p.lastWasMaker = true
+			return mid, nil
+		}
+	}
+	if p.TakerSource == nil {
+		return 0, fmt.Errorf("PostOnlyLimitFill: TakerSource is nil")
+	}
+	return p.TakerSource.FillPrice(kind, side, signalPrice, amount, ts)
+}
+
+// LastFillWasMaker reports whether the latest FillPrice call was filled at
+// the touch as a maker (true) or via the taker fallback (false).
+func (p *PostOnlyLimitFill) LastFillWasMaker() bool { return p.lastWasMaker }
+
+// tryMaker returns whether the post-only LIMIT should be treated as having
+// filled this round.
+func (p *PostOnlyLimitFill) tryMaker(_ FillKind, _ entity.OrderSide, ts int64) bool {
+	switch p.SamplerOverride {
+	case "maker":
+		return true
+	case "taker":
+		return false
+	}
+	if p.MakerFillProbability <= 0 {
+		return false
+	}
+	if p.MakerFillProbability >= 1 {
+		return true
+	}
+	// Deterministic hash. We avoid math/rand so two runs with the same
+	// inputs produce identical outcomes — important for backtest reproducibility.
+	h := uint64(ts)
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 33
+	r := float64(h%10_000) / 10_000.0
+	return r < p.MakerFillProbability
+}
+
+// lookupTouch returns the price the maker fill would receive: BestBid for an
+// effective buy, BestAsk for an effective sell. Returns ok=false when the
+// book is missing or the touch is zero, so the caller can fall back to taker.
+func (p *PostOnlyLimitFill) lookupTouch(kind FillKind, side entity.OrderSide, ts int64) (float64, bool) {
+	if p.BookSource == nil {
+		return 0, false
+	}
+	ob, ok, err := p.BookSource.LatestBefore(context.Background(), p.SymbolID, ts)
+	if err != nil || !ok {
+		return 0, false
+	}
+	// Maker BUY rests at BestBid; maker SELL rests at BestAsk.
+	if isSellLike(kind, side) {
+		if ob.BestAsk > 0 {
+			return ob.BestAsk, true
+		}
+	} else {
+		if ob.BestBid > 0 {
+			return ob.BestBid, true
+		}
+	}
+	return 0, false
 }
 
 // LoadOrderbookReplay is a convenience helper for the runner: load the entire

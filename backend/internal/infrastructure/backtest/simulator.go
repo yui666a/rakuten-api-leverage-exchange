@@ -17,6 +17,11 @@ type SimConfig struct {
 	// When nil, the simulator uses LegacyPercentSlippage{SpreadPercent,
 	// SlippagePercent} so existing call sites stay bit-identical.
 	FillPriceSource FillPriceSource
+	// MakerFeeRate / TakerFeeRate are notional-rate fees applied per fill.
+	// Negative values represent rebates (Rakuten Wallet pays -0.01% to
+	// makers). Defaults are 0 for both — legacy backtests stay fee-free.
+	MakerFeeRate float64
+	TakerFeeRate float64
 }
 
 type SimPosition struct {
@@ -27,6 +32,8 @@ type SimPosition struct {
 	Amount         float64
 	EntryTimestamp int64
 	SpreadCostOpen float64
+	OpenFeeJPY     float64 // signed: negative = rebate received on entry
+	OpenWasMaker   bool
 	ReasonEntry    string
 }
 
@@ -79,6 +86,10 @@ func (s *SimExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, a
 	if err != nil {
 		return entity.OrderEvent{}, err
 	}
+	openMaker := s.lastFillWasMaker()
+	openFee := s.feeFor(fill, amount, openMaker)
+	// Fee is applied immediately to balance: rebates credit, costs debit.
+	s.balance -= openFee
 	position := SimPosition{
 		PositionID:     s.nextPosID,
 		SymbolID:       symbolID,
@@ -87,6 +98,8 @@ func (s *SimExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, a
 		Amount:         amount,
 		EntryTimestamp: timestamp,
 		SpreadCostOpen: signalPrice * amount * (s.config.SpreadPercent / 100.0) / 2.0,
+		OpenFeeJPY:     openFee,
+		OpenWasMaker:   openMaker,
 		ReasonEntry:    reason,
 	}
 	s.positions = append(s.positions, position)
@@ -126,10 +139,13 @@ func (s *SimExecutor) Close(positionID int64, signalPrice float64, reason string
 	if err != nil {
 		return entity.OrderEvent{}, nil, err
 	}
+	closeMaker := s.lastFillWasMaker()
+	closeFee := s.feeFor(exitFill, pos.Amount, closeMaker)
+	totalFee := pos.OpenFeeJPY + closeFee
 	spreadCostClose := signalPrice * pos.Amount * (s.config.SpreadPercent / 100.0) / 2.0
 	spreadCostTotal := pos.SpreadCostOpen + spreadCostClose
 	carrying := s.carryingCost(pos, timestamp)
-	pnl := s.calcPnL(pos, exitFill) - carrying
+	pnl := s.calcPnL(pos, exitFill) - carrying - closeFee
 	pnlPct := 0.0
 	if pos.EntryPrice != 0 {
 		if pos.Side == entity.OrderSideBuy {
@@ -168,6 +184,9 @@ func (s *SimExecutor) Close(positionID int64, signalPrice float64, reason string
 		PnLPercent:   pnlPct,
 		CarryingCost: carrying,
 		SpreadCost:   spreadCostTotal,
+		Fee:          totalFee,
+		OpenIsMaker:  pos.OpenWasMaker,
+		CloseIsMaker: closeMaker,
 		ReasonEntry:  pos.ReasonEntry,
 		ReasonExit:   reason,
 	}
@@ -246,6 +265,30 @@ func (s *SimExecutor) Equity(markPriceBySymbol map[int64]float64) float64 {
 
 // entryFillPrice / exitFillPrice were folded into FillPriceSource.
 // LegacyPercentSlippage in fill_price.go preserves the original arithmetic.
+
+// feeFor returns the JPY fee paid for one fill at the supplied price/amount.
+// Sign convention: positive = cost, negative = rebate (Rakuten pays makers
+// -0.01% by default).
+func (s *SimExecutor) feeFor(price, amount float64, isMaker bool) float64 {
+	rate := s.config.TakerFeeRate
+	if isMaker {
+		rate = s.config.MakerFeeRate
+	}
+	if rate == 0 {
+		return 0
+	}
+	notional := price * amount
+	return notional * rate
+}
+
+// lastFillWasMaker queries the FillPriceSource for the most recent fill
+// classification. Sources that don't expose this are treated as taker.
+func (s *SimExecutor) lastFillWasMaker() bool {
+	if mfs, ok := s.fillPriceSource.(MakerFlagSource); ok {
+		return mfs.LastFillWasMaker()
+	}
+	return false
+}
 
 func (s *SimExecutor) carryingCost(pos SimPosition, exitTimestamp int64) float64 {
 	if s.config.DailyCarryingCost <= 0 {
