@@ -5,7 +5,8 @@
 ├── backend/                              # Go バックエンド
 │   ├── cmd/
 │   │   ├── main.go                      #   エントリポイント + WebSocket relay + pipeline 組み立て
-│   │   ├── pipeline.go                  #   TradingPipeline（自動売買ループ）
+│   │   ├── event_pipeline.go            #   EventDrivenPipeline（現行: ローソク足確定駆動の自動売買）
+│   │   ├── pipeline.go                  #   TradingPipeline（legacy: 60秒polling、現環境では未使用）
 │   │   ├── retry.go                     #   リトライユーティリティ
 │   │   ├── sync_state_test.go           #   状態同期テスト
 │   │   ├── backtest/main.go             #   バックテスト CLI (run/optimize/refine/download/walk-forward)
