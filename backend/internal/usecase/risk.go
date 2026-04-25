@@ -15,8 +15,11 @@ type RiskStatus struct {
 	TotalPosition   float64           `json:"totalPosition"`
 	TradingHalted   bool              `json:"tradingHalted"`
 	ManuallyStopped bool              `json:"manuallyStopped"`
-	CurrentATR      float64           `json:"currentAtr"`
-	Config          entity.RiskConfig `json:"config"`
+	// HaltReason carries the latest automatic-halt cause (e.g. "circuit_breaker:price_jump").
+	// Empty when trading is running or was halted by a plain manual /stop.
+	HaltReason string            `json:"haltReason,omitempty"`
+	CurrentATR float64           `json:"currentAtr"`
+	Config     entity.RiskConfig `json:"config"`
 }
 
 type RiskManager struct {
@@ -27,6 +30,7 @@ type RiskManager struct {
 	dailyLoss         float64
 	positions         []entity.Position
 	manualStop        bool
+	haltReason        string
 	highWaterMarks    map[int64]float64 // positionID → best price
 	consecutiveLosses int
 	cooldownUntil     time.Time
@@ -63,6 +67,10 @@ const (
 	RiskEventConsecutiveLoss  RiskEventKind = "consecutive_losses"
 	RiskEventDailyLossWarning RiskEventKind = "daily_loss_warning"
 	RiskEventCooldownStarted  RiskEventKind = "cooldown_started"
+	// RiskEventCircuitBreaker fires when the watcher halts trading due to an
+	// abnormal market or feed condition. Reason carries the trigger label
+	// ("price_jump", "abnormal_spread", "book_feed_stale", "empty_book").
+	RiskEventCircuitBreaker RiskEventKind = "circuit_breaker"
 )
 
 // RiskEventSeverity influences the icon / sound the frontend picks. Kept as
@@ -463,12 +471,43 @@ func (rm *RiskManager) StartTrading() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.manualStop = false
+	rm.haltReason = ""
 }
 
 func (rm *RiskManager) StopTrading() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.manualStop = true
+	rm.haltReason = ""
+}
+
+// HaltAutomatic stops trading and records the supplied reason so the status
+// API and the realtime hub can surface why the bot is parked. Idempotent:
+// repeated calls with the same reason are no-ops; a different reason
+// updates the field but does not re-publish (the watcher dedups events).
+//
+// Returns true when this call is what flipped trading from running to halted
+// (so the caller can publish the realtime event exactly once).
+func (rm *RiskManager) HaltAutomatic(reason string) (firstHalt bool) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if rm.manualStop {
+		// Already halted (manual or by an earlier circuit-breaker hit).
+		// Keep the most recent reason for visibility.
+		rm.haltReason = reason
+		return false
+	}
+	rm.manualStop = true
+	rm.haltReason = reason
+	return true
+}
+
+// HaltReason returns the last automatic-halt label, or empty when trading
+// is running or was halted by a plain manual /stop.
+func (rm *RiskManager) HaltReason() string {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	return rm.haltReason
 }
 
 func (rm *RiskManager) GetStatus() RiskStatus {
@@ -480,6 +519,7 @@ func (rm *RiskManager) GetStatus() RiskStatus {
 		TotalPosition:   rm.calcTotalPositionValue(),
 		TradingHalted:   rm.dailyLoss >= rm.config.MaxDailyLoss,
 		ManuallyStopped: rm.manualStop,
+		HaltReason:      rm.haltReason,
 		CurrentATR:      rm.currentATR,
 		Config:          rm.config,
 	}

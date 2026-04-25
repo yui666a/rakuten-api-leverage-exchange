@@ -58,6 +58,14 @@ type persistTask struct {
 	trades    *entity.MarketTradesResponse
 }
 
+// MarketDataObserver is a side-effect free port that gets every WS frame
+// after persistence/distribution. Circuit breaker plugs in here to watch
+// market sanity without coupling to the persistence pipeline.
+type MarketDataObserver interface {
+	OnTicker(t entity.Ticker)
+	OnOrderbook(ob entity.Orderbook)
+}
+
 // MarketDataService manages receiving, distributing, and persisting market data.
 type MarketDataService struct {
 	repo repository.MarketDataRepository
@@ -65,6 +73,7 @@ type MarketDataService struct {
 	mu          sync.RWMutex
 	tickerSubs  []chan entity.Ticker
 	realtimeHub *RealtimeHub
+	observers   []MarketDataObserver
 
 	cfg PersistenceConfig
 
@@ -223,6 +232,28 @@ func (s *MarketDataService) SetRealtimeHub(hub *RealtimeHub) {
 	s.realtimeHub = hub
 }
 
+// RealtimeHub exposes the wired hub so adjacent subsystems (circuit breaker
+// publisher, etc.) can publish through the same channel without rewiring
+// their own copy.
+func (s *MarketDataService) RealtimeHub() *RealtimeHub {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.realtimeHub
+}
+
+// AddObserver registers a side-effect observer that sees every ticker /
+// orderbook after persistence and realtime publishing. Multiple observers
+// are fanned out in registration order. Pass-through never blocks; misbehaving
+// observers slow the WS path so callers must keep OnXxx implementations cheap.
+func (s *MarketDataService) AddObserver(o MarketDataObserver) {
+	if o == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.observers = append(s.observers, o)
+}
+
 // SubscribeTicker starts a ticker subscription and returns a receive channel.
 func (s *MarketDataService) SubscribeTicker() <-chan entity.Ticker {
 	ch := make(chan entity.Ticker, 100)
@@ -303,6 +334,10 @@ func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Tick
 			slog.Warn("failed to publish ticker event", "error", err)
 		}
 	}
+
+	for _, o := range s.observers {
+		o.OnTicker(ticker)
+	}
 }
 
 // HandleOrderbook persists an orderbook snapshot (subject to throttle) and
@@ -321,11 +356,15 @@ func (s *MarketDataService) HandleOrderbook(ctx context.Context, ob entity.Order
 
 	s.mu.RLock()
 	hub := s.realtimeHub
+	observers := s.observers
 	s.mu.RUnlock()
 	if hub != nil {
 		if err := hub.PublishData("orderbook", ob.SymbolID, ob); err != nil {
 			slog.Warn("failed to publish orderbook event", "error", err)
 		}
+	}
+	for _, o := range observers {
+		o.OnOrderbook(ob)
 	}
 }
 

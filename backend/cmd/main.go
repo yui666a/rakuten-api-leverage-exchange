@@ -21,6 +21,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
@@ -121,13 +122,22 @@ func main() {
 	// --- Trading Pipeline (Event-Driven) ---
 	pipeline := NewEventDrivenPipeline(
 		EventDrivenPipelineConfig{
-			SymbolID:          symbolID,
-			StateSyncInterval: time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
-			TradeAmount:       tradeAmount,
-			MinConfidence:     cfg.Trading.MinConfidence,
-			StopLossPercent:   cfg.Risk.StopLossPercent,
-			TakeProfitPercent: cfg.Risk.TakeProfitPercent,
-			SOR:               loadSORConfig(),
+			SymbolID:             symbolID,
+			StateSyncInterval:    time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
+			TradeAmount:          tradeAmount,
+			MinConfidence:        cfg.Trading.MinConfidence,
+			StopLossPercent:      cfg.Risk.StopLossPercent,
+			TakeProfitPercent:    cfg.Risk.TakeProfitPercent,
+			SOR:                  loadSORConfig(),
+			CircuitBreaker:       circuitbreaker.Config{
+				AbnormalSpreadPct:    cfg.CircuitBreaker.AbnormalSpreadPct,
+				AbnormalSpreadHoldMs: cfg.CircuitBreaker.AbnormalSpreadHoldMs,
+				PriceJumpPct:         cfg.CircuitBreaker.PriceJumpPct,
+				PriceJumpWindowMs:    cfg.CircuitBreaker.PriceJumpWindowMs,
+				BookFeedStaleAfterMs: cfg.CircuitBreaker.BookFeedStaleAfterMs,
+				EmptyBookHoldMs:      cfg.CircuitBreaker.EmptyBookHoldMs,
+			},
+			StaleCheckIntervalMs: cfg.CircuitBreaker.StaleCheckIntervalMs,
 		},
 		restClient,
 		restClient, // SymbolFetcher

@@ -14,6 +14,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
@@ -47,9 +48,11 @@ type EventDrivenPipeline struct {
 	minOrderAmount    float64
 	minConfidence     float64
 	stateSyncInterval time.Duration
-	stopLossPercent   float64
-	takeProfitPercent float64
-	sorConfig         sor.Config
+	stopLossPercent      float64
+	takeProfitPercent    float64
+	sorConfig            sor.Config
+	circuitBreakerConfig circuitbreaker.Config
+	staleCheckIntervalMs int64
 
 	// sleepFn is used by syncState for retry backoff (test-injectable).
 	sleepFn func(time.Duration)
@@ -57,13 +60,15 @@ type EventDrivenPipeline struct {
 
 // EventDrivenPipelineConfig holds the configuration for EventDrivenPipeline.
 type EventDrivenPipelineConfig struct {
-	SymbolID          int64
-	StateSyncInterval time.Duration
-	TradeAmount       float64
-	MinConfidence     float64
-	StopLossPercent   float64
-	TakeProfitPercent float64
-	SOR               sor.Config
+	SymbolID             int64
+	StateSyncInterval    time.Duration
+	TradeAmount          float64
+	MinConfidence        float64
+	StopLossPercent      float64
+	TakeProfitPercent    float64
+	SOR                  sor.Config
+	CircuitBreaker       circuitbreaker.Config
+	StaleCheckIntervalMs int64
 }
 
 func NewEventDrivenPipeline(
@@ -81,10 +86,12 @@ func NewEventDrivenPipeline(
 		tradeAmount:       cfg.TradeAmount,
 		minConfidence:     cfg.MinConfidence,
 		stateSyncInterval: cfg.StateSyncInterval,
-		stopLossPercent:   cfg.StopLossPercent,
-		takeProfitPercent: cfg.TakeProfitPercent,
-		sorConfig:         cfg.SOR,
-		orderClient:       orderClient,
+		stopLossPercent:      cfg.StopLossPercent,
+		takeProfitPercent:    cfg.TakeProfitPercent,
+		sorConfig:            cfg.SOR,
+		circuitBreakerConfig: cfg.CircuitBreaker,
+		staleCheckIntervalMs: cfg.StaleCheckIntervalMs,
+		orderClient:          orderClient,
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
 		strategy:          strategy,
@@ -344,6 +351,14 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	positionSyncTicker := time.NewTicker(positionSyncInterval)
 	defer positionSyncTicker.Stop()
 
+	// Circuit breaker: opt-in. When any threshold > 0 we wire a Watcher
+	// that observes every WS frame via MarketDataService and a heartbeat
+	// goroutine that polls CheckStale on the configured cadence.
+	cbWatcher := p.startCircuitBreakerLocked(ctx)
+	if cbWatcher != nil {
+		defer cbWatcher.Reset() // re-arm on next pipeline lifecycle
+	}
+
 	slog.Info("event-pipeline: event loop running", "symbolID", snap.symbolID)
 
 	for {
@@ -463,4 +478,100 @@ func (p *EventDrivenPipeline) persistRiskState(ctx context.Context) {
 	}); err != nil {
 		slog.Error("event-pipeline: failed to persist risk state", "error", err)
 	}
+}
+
+// circuitBreakerHubPublisher adapts RealtimeHub.PublishData to
+// circuitbreaker.Publisher. Decoupled here so the usecase package does not
+// learn about the realtime hub directly.
+type circuitBreakerHubPublisher struct {
+	hub *usecase.RealtimeHub
+}
+
+func (p *circuitBreakerHubPublisher) PublishCircuitBreaker(reason, detail string, ts int64) {
+	if p == nil || p.hub == nil {
+		return
+	}
+	payload := usecase.RiskEventPayload{
+		Kind:      usecase.RiskEventCircuitBreaker,
+		Severity:  usecase.RiskSeverityCritical,
+		Message:   "circuit breaker tripped: " + reason,
+		Timestamp: ts,
+	}
+	if detail != "" {
+		payload.Message += " (" + detail + ")"
+	}
+	if err := p.hub.PublishData("risk_event", 0, payload); err != nil {
+		slog.Warn("event-pipeline: circuit-breaker publish failed", "error", err)
+	}
+}
+
+// startCircuitBreakerLocked spins up the watcher + the stale-check heartbeat
+// when at least one threshold is configured. Returns the watcher (nil when
+// the breaker is disabled) so the caller can Reset() on shutdown.
+//
+// Called from runEventLoop, where p.mu is *not* held — we don't need the
+// lock here because the fields we read are set once at construction and the
+// watcher itself is fully thread-safe.
+func (p *EventDrivenPipeline) startCircuitBreakerLocked(ctx context.Context) *circuitbreaker.Watcher {
+	cfg := p.circuitBreakerConfig
+	if cfg.AbnormalSpreadPct == 0 && cfg.PriceJumpPct == 0 && cfg.BookFeedStaleAfterMs == 0 && cfg.EmptyBookHoldMs == 0 {
+		return nil
+	}
+
+	hubPub := &circuitBreakerHubPublisher{hub: nil}
+	// Pull the hub via a side channel so we don't have to expose another
+	// field on the pipeline. RealtimeHub on MarketDataService is the same
+	// instance the rest of the system uses.
+	if p.marketDataSvc != nil {
+		hubPub.hub = p.realtimeHubFromMarketData()
+	}
+
+	w := circuitbreaker.New(cfg, p.riskMgr, hubPub)
+	if p.marketDataSvc != nil {
+		p.marketDataSvc.AddObserver(circuitBreakerObserver{w: w})
+	}
+
+	// Heartbeat for stale-feed detection.
+	if cfg.BookFeedStaleAfterMs > 0 {
+		interval := time.Duration(p.staleCheckIntervalMs) * time.Millisecond
+		if interval <= 0 {
+			interval = 5 * time.Second
+		}
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					w.CheckStale()
+				}
+			}
+		}()
+	}
+	slog.Info("event-pipeline: circuit breaker armed",
+		"abnSpreadPct", cfg.AbnormalSpreadPct,
+		"jumpPct", cfg.PriceJumpPct,
+		"staleAfterMs", cfg.BookFeedStaleAfterMs,
+		"emptyBookHoldMs", cfg.EmptyBookHoldMs,
+	)
+	return w
+}
+
+// circuitBreakerObserver bridges MarketDataObserver → circuitbreaker.Watcher.
+type circuitBreakerObserver struct{ w *circuitbreaker.Watcher }
+
+func (o circuitBreakerObserver) OnTicker(t entity.Ticker)          { o.w.OnTicker(t) }
+func (o circuitBreakerObserver) OnOrderbook(ob entity.Orderbook)   { o.w.OnOrderbook(ob) }
+
+// realtimeHubFromMarketData looks up the hub the MarketDataService publishes
+// on. We avoid plumbing an additional field through every constructor by
+// reaching through this getter; if the API ever drifts the call simply
+// returns nil and the breaker just won't push UI events.
+func (p *EventDrivenPipeline) realtimeHubFromMarketData() *usecase.RealtimeHub {
+	if p.marketDataSvc == nil {
+		return nil
+	}
+	return p.marketDataSvc.RealtimeHub()
 }
