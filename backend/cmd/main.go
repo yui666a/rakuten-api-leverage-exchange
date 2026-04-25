@@ -83,6 +83,9 @@ func main() {
 	// Browser notifications subscribe to "trade_event" on the realtime hub —
 	// wire the executor so successful opens/closes publish there.
 	orderExecutor.SetRealtimeHub(realtimeHub)
+	// Same hub doubles as the risk-event channel so the front-end
+	// notification UI gets DD / consecutive-loss / daily-loss warnings.
+	riskMgr.SetRealtimeHub(realtimeHub)
 
 	// Default to the config-file values, then let the persisted state (if any)
 	// override them. This is what fixes the "WS resubscribes to BTC after every
