@@ -8,6 +8,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api/handler"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/quality"
 )
 
 // PipelineController はTrading Pipelineの開始/停止・銘柄切替を制御するインターフェース。
@@ -43,6 +44,10 @@ type Dependencies struct {
 	// OnSymbolSwitch はシンボル切替時に pipeline から呼び出されるコールバック。
 	// main 側で WebSocket 購読切替とローソク足 bootstrap を実行する。
 	OnSymbolSwitch func(oldID, newID int64)
+
+	// ExecutionQualityReporter (optional). When set, GET /api/v1/execution-quality
+	// is exposed; when nil the endpoint returns 503.
+	ExecutionQualityReporter *quality.Reporter
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -107,6 +112,16 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	if deps.MarketDataService != nil {
 		tickerHandler := handler.NewTickerHandler(deps.MarketDataService)
 		v1.GET("/ticker", tickerHandler.GetTicker)
+	}
+
+	if deps.ExecutionQualityReporter != nil {
+		var defaultSymbol func() int64
+		if deps.Pipeline != nil {
+			pipeline := deps.Pipeline
+			defaultSymbol = func() int64 { return pipeline.SymbolID() }
+		}
+		eqHandler := handler.NewExecutionQualityHandler(deps.ExecutionQualityReporter, defaultSymbol)
+		v1.GET("/execution-quality", eqHandler.Get)
 	}
 
 	if deps.RESTClient != nil {

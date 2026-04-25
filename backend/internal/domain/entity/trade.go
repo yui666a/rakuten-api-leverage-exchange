@@ -21,7 +21,13 @@ type MarketTradesResponse struct {
 type MyTrade struct {
 	ID               int64         `json:"id"`
 	SymbolID         int64         `json:"symbolId"`
+	OrderBehavior    OrderBehavior `json:"orderBehavior"`
 	OrderSide        OrderSide     `json:"orderSide"`
+	OrderType        OrderType     `json:"orderType"`
+	// TradeAction is "MAKER" or "TAKER", per the venue's GET /api/v1/cfd/trade
+	// docs. Used by the execution-quality reporter to compute the maker
+	// fill ratio. Empty string for legacy / mocked trades.
+	TradeAction      string        `json:"tradeAction"`
 	Price            StringFloat64 `json:"price"`
 	Amount           StringFloat64 `json:"amount"`
 	Profit           StringFloat64 `json:"profit"`

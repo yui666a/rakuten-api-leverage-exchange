@@ -24,6 +24,12 @@ type MarketDataRepository interface {
 	// GetLatestTicker returns the most recent ticker for a symbol.
 	GetLatestTicker(ctx context.Context, symbolID int64) (*entity.Ticker, error)
 
+	// GetTickersBetween returns ticker rows in [from, to] (unix-millis),
+	// ascending by timestamp, capped at limit. Used by the execution-quality
+	// reporter to look up the mid price near each my-trade row. limit <= 0
+	// falls back to a server-defined default.
+	GetTickersBetween(ctx context.Context, symbolID int64, from, to int64, limit int) ([]entity.Ticker, error)
+
 	// SaveTrades batch-saves market trade ticks. Duplicates (by trade ID) are ignored.
 	SaveTrades(ctx context.Context, symbolID int64, trades []entity.MarketTrade) error
 
