@@ -4,11 +4,17 @@ import type { RealtimeOrderbook } from '../lib/api'
 type OrderbookPanelProps = {
   orderbook: RealtimeOrderbook | null
   currencyPair?: string
+  // Optional orderbook-derived signals from the latest IndicatorSet.
+  // null / undefined hides the row, mirroring the backend's "not yet
+  // available" convention.
+  microprice?: number | null
+  ofiShort?: number | null
+  ofiLong?: number | null
 }
 
 const ROWS = 12
 
-export function OrderbookPanel({ orderbook, currencyPair }: OrderbookPanelProps) {
+export function OrderbookPanel({ orderbook, currencyPair, microprice, ofiShort, ofiLong }: OrderbookPanelProps) {
   const ask = useMemo(() => buildSide(orderbook?.asks, 'asc', ROWS), [orderbook?.asks])
   const bid = useMemo(() => buildSide(orderbook?.bids, 'desc', ROWS), [orderbook?.bids])
 
@@ -55,8 +61,70 @@ export function OrderbookPanel({ orderbook, currencyPair }: OrderbookPanelProps)
       {!orderbook && (
         <p className="mt-3 text-[11px] text-text-secondary">板を待機中…</p>
       )}
+
+      <BookSignals microprice={microprice} ofiShort={ofiShort} ofiLong={ofiLong} />
     </div>
   )
+}
+
+function BookSignals({
+  microprice,
+  ofiShort,
+  ofiLong,
+}: {
+  microprice?: number | null
+  ofiShort?: number | null
+  ofiLong?: number | null
+}) {
+  const hasAny =
+    (microprice != null && microprice !== 0) ||
+    (ofiShort != null && ofiShort !== 0) ||
+    (ofiLong != null && ofiLong !== 0)
+  if (!hasAny) return null
+  return (
+    <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl border border-white/8 bg-white/5 px-3 py-2 font-mono text-[11px] tabular-nums">
+      <SignalCell label="Micro" value={microprice} formatter={formatPriceCell} />
+      <SignalCell label="OFI 10s" value={ofiShort} formatter={formatRatioCell} />
+      <SignalCell label="OFI 60s" value={ofiLong} formatter={formatRatioCell} />
+    </div>
+  )
+}
+
+function SignalCell({
+  label,
+  value,
+  formatter,
+}: {
+  label: string
+  value: number | null | undefined
+  formatter: (v: number) => { text: string; tone: string }
+}) {
+  if (value == null) {
+    return (
+      <div className="flex flex-col">
+        <span className="text-[10px] uppercase tracking-wider text-text-secondary">{label}</span>
+        <span className="text-text-secondary">—</span>
+      </div>
+    )
+  }
+  const { text, tone } = formatter(value)
+  return (
+    <div className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wider text-text-secondary">{label}</span>
+      <span className={tone}>{text}</span>
+    </div>
+  )
+}
+
+function formatPriceCell(value: number): { text: string; tone: string } {
+  return { text: value.toLocaleString('ja-JP', { maximumFractionDigits: 1 }), tone: 'text-white' }
+}
+
+function formatRatioCell(value: number): { text: string; tone: string } {
+  const text = value.toFixed(3)
+  if (value > 0.05) return { text: `+${text}`, tone: 'text-accent-green' }
+  if (value < -0.05) return { text: text, tone: 'text-accent-red' }
+  return { text, tone: 'text-slate-200' }
 }
 
 type SideRow = {

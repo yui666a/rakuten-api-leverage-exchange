@@ -8,6 +8,8 @@ import { BotControlCard } from '../components/BotControlCard'
 import { LiveTickerCard } from '../components/LiveTickerCard'
 import { ManualTradeCard } from '../components/ManualTradeCard'
 import { OrderbookPanel } from '../components/OrderbookPanel'
+import { ExecutionQualityCard } from '../components/ExecutionQualityCard'
+import { HaltReasonBadge } from '../components/HaltReasonBadge'
 import { useStatus } from '../hooks/useStatus'
 import { usePnl } from '../hooks/usePnl'
 import { useStrategy } from '../hooks/useStrategy'
@@ -57,7 +59,13 @@ function Dashboard() {
       title="トレーディングダッシュボード"
       subtitle="KPI・戦略・ポジション・操作系を集約した監視画面です。"
     >
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+      <HaltReasonBadge
+        haltReason={status?.haltReason}
+        manuallyStopped={status?.manuallyStopped}
+        tradingHalted={status?.tradingHalted}
+      />
+
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <KpiCard
           label="残高"
           value={pnl ? `¥${pnl.balance.toLocaleString()}` : '\u2014'}
@@ -118,7 +126,11 @@ function Dashboard() {
           <OrderbookPanel
             orderbook={orderbook}
             currencyPair={currentSymbol?.currencyPair}
+            microprice={indicators?.microprice ?? null}
+            ofiShort={indicators?.ofiShort ?? null}
+            ofiLong={indicators?.ofiLong ?? null}
           />
+          <ExecutionQualityCard />
           <ManualTradeCard
             symbolId={symbolId}
             currencyPair={currentSymbol?.currencyPair}
