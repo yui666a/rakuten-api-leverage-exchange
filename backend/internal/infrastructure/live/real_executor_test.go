@@ -584,3 +584,31 @@ func TestRealExecutor_LastOrderAt_BumpsOnSubmit(t *testing.T) {
 		t.Fatal("expected LastOrderAt to advance after Open")
 	}
 }
+
+func TestRealExecutor_Iceberg_SubmitsAllSlices(t *testing.T) {
+	calls := 0
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+			calls++
+			return []entity.Order{{ID: int64(900 + calls), Price: 100}}, nil
+		},
+	}
+	router := sor.New(sor.Config{Strategy: sor.StrategyIceberg, SliceCount: 3, MinIntervalMs: 1})
+	exec := NewRealExecutor(mock, 7, 0, WithSOR(router))
+
+	if _, err := exec.Open(7, entity.OrderSideBuy, 100, 0.6, "iceberg", 1000); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("expected 3 venue submissions, got %d", calls)
+	}
+	// All three submits must be MARKET orders with positive amount.
+	for i, c := range mock.calls {
+		if c.OrderData.OrderType != entity.OrderTypeMarket {
+			t.Fatalf("call %d not MARKET: %s", i, c.OrderData.OrderType)
+		}
+		if c.OrderData.Amount <= 0 {
+			t.Fatalf("call %d amount must be positive: %f", i, c.OrderData.Amount)
+		}
+	}
+}

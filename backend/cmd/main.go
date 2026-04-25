@@ -320,7 +320,12 @@ func loadSORConfig() sor.Config {
 			cfg.Strategy = sor.StrategyMarket
 		case string(sor.StrategyPostOnlyEscalate):
 			cfg.Strategy = sor.StrategyPostOnlyEscalate
+		case string(sor.StrategyIceberg):
+			cfg.Strategy = sor.StrategyIceberg
 		}
+	}
+	if v, err := strconv.Atoi(os.Getenv("SOR_SLICE_COUNT")); err == nil && v > 0 {
+		cfg.SliceCount = v
 	}
 	if v, err := strconv.Atoi(os.Getenv("SOR_LIMIT_OFFSET_TICKS")); err == nil && v >= 0 {
 		cfg.LimitOffsetTicks = v

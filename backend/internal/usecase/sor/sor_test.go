@@ -143,3 +143,56 @@ func TestSelector_PostOnlyEscalate_TickSizeFallback(t *testing.T) {
 		t.Fatalf("expected fallback tick to yield 8999.9, got %f", got)
 	}
 }
+
+func TestSelector_Iceberg_SplitsLotIntoSlices(t *testing.T) {
+	s := New(Config{Strategy: StrategyIceberg, SliceCount: 5, MinIntervalMs: 250})
+	plan := s.Plan(SelectInput{
+		SymbolID: 7, Side: entity.OrderSideBuy, Amount: 1.0,
+	})
+	if plan.Strategy != StrategyIceberg {
+		t.Fatalf("strategy: %s", plan.Strategy)
+	}
+	// Expected: 5 Submit steps interleaved with 4 WaitInterval steps.
+	if got := len(plan.Steps); got != 9 {
+		t.Fatalf("expected 9 steps (5 submit + 4 wait), got %d", got)
+	}
+	submitTotal := 0.0
+	for i, step := range plan.Steps {
+		if i%2 == 0 {
+			if step.Kind != StepKindSubmit {
+				t.Fatalf("step %d expected submit, got %s", i, step.Kind)
+			}
+			submitTotal += step.Order.OrderData.Amount
+		} else {
+			if step.Kind != StepKindWaitInterval {
+				t.Fatalf("step %d expected wait, got %s", i, step.Kind)
+			}
+			if step.WaitMs != 250 {
+				t.Fatalf("step %d wait = %d, want 250", i, step.WaitMs)
+			}
+		}
+	}
+	if math.Abs(submitTotal-1.0) > 1e-9 {
+		t.Fatalf("slices total = %f, want 1.0", submitTotal)
+	}
+}
+
+func TestSelector_Iceberg_FallsBackToMarketWhenSliceCountIs1(t *testing.T) {
+	s := New(Config{Strategy: StrategyIceberg, SliceCount: 1})
+	plan := s.Plan(SelectInput{SymbolID: 7, Side: entity.OrderSideBuy, Amount: 1.0})
+	if plan.Strategy != StrategyMarket {
+		t.Fatalf("expected fallback to market, got %s", plan.Strategy)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(plan.Steps))
+	}
+}
+
+func TestSelector_Iceberg_CapsSliceCount(t *testing.T) {
+	s := New(Config{Strategy: StrategyIceberg, SliceCount: 1000})
+	plan := s.Plan(SelectInput{SymbolID: 7, Side: entity.OrderSideBuy, Amount: 1.0})
+	// 20 submit + 19 wait = 39
+	if got := len(plan.Steps); got != 39 {
+		t.Fatalf("expected slice count to be capped at 20 (=39 steps), got %d", got)
+	}
+}
