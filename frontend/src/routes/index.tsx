@@ -7,6 +7,7 @@ import { PositionPanel } from '../components/PositionPanel'
 import { BotControlCard } from '../components/BotControlCard'
 import { LiveTickerCard } from '../components/LiveTickerCard'
 import { ManualTradeCard } from '../components/ManualTradeCard'
+import { OrderbookPanel } from '../components/OrderbookPanel'
 import { useStatus } from '../hooks/useStatus'
 import { usePnl } from '../hooks/usePnl'
 import { useStrategy } from '../hooks/useStrategy'
@@ -28,7 +29,7 @@ function Dashboard() {
   const { data: positions } = usePositions(symbolId)
   const startBot = useStartBot()
   const stopBot = useStopBot()
-  const { ticker, connectionState } = useMarketTickerStream(symbolId)
+  const { ticker, orderbook, connectionState } = useMarketTickerStream(symbolId)
 
   const statusLabel = status?.tradingHalted
     ? 'リスク停止'
@@ -113,6 +114,10 @@ function Dashboard() {
             onStart={() => startBot.mutate()}
             onStop={() => stopBot.mutate()}
             isPending={startBot.isPending || stopBot.isPending}
+          />
+          <OrderbookPanel
+            orderbook={orderbook}
+            currencyPair={currentSymbol?.currencyPair}
           />
           <ManualTradeCard
             symbolId={symbolId}
