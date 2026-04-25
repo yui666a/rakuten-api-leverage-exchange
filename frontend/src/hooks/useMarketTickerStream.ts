@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { buildRealtimeWebSocketUrl, type LiveTicker, type RealtimeEventMessage } from '../lib/api'
+import {
+  buildRealtimeWebSocketUrl,
+  type LiveTicker,
+  type RealtimeEventMessage,
+  type RealtimeOrderbook,
+} from '../lib/api'
 import { useNotificationSettings } from './useNotificationSettings'
 import { formatRiskEvent, formatTradeEvent } from '../lib/notify-format'
 import { playBeep, showNotification } from '../lib/notifier'
@@ -10,6 +15,7 @@ type ConnectionState = 'connecting' | 'connected' | 'disconnected'
 export function useMarketTickerStream(symbolId: number) {
   const queryClient = useQueryClient()
   const [ticker, setTicker] = useState<LiveTicker | null>(null)
+  const [orderbook, setOrderbook] = useState<RealtimeOrderbook | null>(null)
   const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
   const lastIndicatorInvalidateRef = useRef(0)
   const { shouldFire, settings } = useNotificationSettings()
@@ -24,6 +30,7 @@ export function useMarketTickerStream(symbolId: number) {
   useEffect(() => {
     // symbolId 変更時に旧シンボルの価格が残らないよう、即座にリセット
     setTicker(null)
+    setOrderbook(null)
 
     let active = true
     let socket: WebSocket | null = null
@@ -73,6 +80,7 @@ export function useMarketTickerStream(symbolId: number) {
             void queryClient.invalidateQueries({ queryKey: ['trades', symbolId] })
             return
           case 'orderbook':
+            setOrderbook(payload.data)
             return
           case 'trade_event': {
             // Open/close 約定: trades / positions / pnl の表示も最新化する。
@@ -120,6 +128,7 @@ export function useMarketTickerStream(symbolId: number) {
 
   return {
     ticker,
+    orderbook,
     connectionState,
   }
 }
