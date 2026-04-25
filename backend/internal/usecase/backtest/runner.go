@@ -181,6 +181,12 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	if input.BBSqueezeLookback > 0 {
 		indicatorHandler.SetBBSqueezeLookback(input.BBSqueezeLookback)
 	}
+	// PR-J: enable Microprice / OFI when the caller supplied a BookSource.
+	// Same source the pre-trade gate uses, so backtest runs see the same
+	// L2 history.
+	if input.BookSource != nil {
+		indicatorHandler.SetBookSource(input.BookSource, 10_000, 60_000, 5)
+	}
 	strategyHandler := NewStrategyHandler(strategy)
 	riskHandler := &RiskHandler{
 		RiskManager:     riskMgr,
