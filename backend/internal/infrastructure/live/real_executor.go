@@ -454,6 +454,15 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 		return 0, 0, errors.New("empty plan")
 	}
 
+	// Iceberg flow: only Submit + WaitInterval steps, no WaitOrEscalate.
+	// We send slices in order, sleep between them, and surface the *last*
+	// successful slice's order ID + fillPrice. Errors on intermediate
+	// slices are logged and skipped so a single transient failure doesn't
+	// orphan the rest of the iceberg.
+	if plan.Strategy == sor.StrategyIceberg {
+		return r.runIcebergPlan(ctx, plan, signalPrice)
+	}
+
 	// First step is always Submit by construction (verified in tests).
 	primary := plan.Steps[0]
 	if primary.Kind != sor.StepKindSubmit {
@@ -519,6 +528,69 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 		return 0, signalPrice, fmt.Errorf("escalation MARKET fallback failed: %w", err)
 	}
 	return fb.ID, fillPriceOf(fb, signalPrice), nil
+}
+
+// runIcebergPlan sequentially submits each Submit step in the plan with the
+// configured WaitInterval pauses between them. Returns the first successful
+// slice's order ID and the volume-weighted average fill price across all
+// completed slices. Per-slice failures are logged and skipped so partial
+// fills still produce useful order tracking.
+func (r *RealExecutor) runIcebergPlan(ctx context.Context, plan sor.Plan, signalPrice float64) (int64, float64, error) {
+	var (
+		firstID       int64
+		costAccum     float64
+		amtAccum      float64
+		anySucceeded  bool
+		lastErr       error
+	)
+	for _, step := range plan.Steps {
+		select {
+		case <-ctx.Done():
+			return firstID, fallbackVWAP(costAccum, amtAccum, signalPrice), ctx.Err()
+		default:
+		}
+		switch step.Kind {
+		case sor.StepKindSubmit:
+			ord, err := r.submit(ctx, step.Order)
+			if err != nil {
+				slog.Warn("iceberg slice submit failed", "error", err)
+				lastErr = err
+				continue
+			}
+			anySucceeded = true
+			if firstID == 0 {
+				firstID = ord.ID
+			}
+			price := fillPriceOf(ord, signalPrice)
+			costAccum += price * step.Order.OrderData.Amount
+			amtAccum += step.Order.OrderData.Amount
+		case sor.StepKindWaitInterval:
+			if step.WaitMs <= 0 {
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				return firstID, fallbackVWAP(costAccum, amtAccum, signalPrice), ctx.Err()
+			case <-time.After(time.Duration(step.WaitMs) * time.Millisecond):
+			}
+		default:
+			// Skip unexpected kinds — Plan was constructed by the SOR so
+			// hitting one means a mismatch between Selector and runPlan,
+			// not a venue issue.
+			slog.Warn("iceberg unexpected step kind", "kind", step.Kind)
+		}
+	}
+	if !anySucceeded {
+		return 0, signalPrice, lastErr
+	}
+	return firstID, fallbackVWAP(costAccum, amtAccum, signalPrice), nil
+}
+
+func fallbackVWAP(cost, amount, fallback float64) float64 {
+	if amount <= 0 {
+		return fallback
+	}
+	return cost / amount
 }
 
 // submit posts a single order and returns the venue's first response row.

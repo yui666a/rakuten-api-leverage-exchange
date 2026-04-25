@@ -27,6 +27,12 @@ const (
 	// then cancel + replace with MARKET if not fully filled within the
 	// configured escalation window.
 	StrategyPostOnlyEscalate Strategy = "post_only_escalate"
+	// StrategyIceberg: split the lot into SliceCount even pieces and submit
+	// them one at a time with MinIntervalMs between submissions. Each piece
+	// is a plain MARKET order — no maker probing. Useful when a single
+	// MARKET would soak too much of the visible book and trip the pre-trade
+	// gate, or simply to obscure the trader's full size.
+	StrategyIceberg Strategy = "iceberg"
 )
 
 // Config controls the router's choice. Zero value selects the legacy
@@ -50,7 +56,19 @@ type Config struct {
 	// MinIntervalMs bounds back-to-back venue requests so we don't trip
 	// the documented 200 ms / user rate limit. Default DefaultMinIntervalMs.
 	MinIntervalMs int64
+	// SliceCount is how many pieces to split the lot into when using
+	// StrategyIceberg. 0 falls back to DefaultSliceCount (5). Capped at
+	// DefaultSliceCountMax internally to keep the venue rate-limit budget
+	// reasonable.
+	SliceCount int
 }
+
+// DefaultSliceCount is the iceberg fallback when Config.SliceCount is zero.
+const DefaultSliceCount = 5
+
+// DefaultSliceCountMax caps the iceberg slice count so a misconfigured
+// SliceCount cannot DoS the venue.
+const DefaultSliceCountMax = 20
 
 // DefaultEscalateAfterMs is the fallback timeout when Config.EscalateAfterMs
 // is zero. 30 s matches the design discussion: a typical 15 m bar's signal
@@ -89,6 +107,8 @@ type Step struct {
 	// previous Submit step has not fully filled. Populated for
 	// StepKindWaitOrEscalate.
 	FallbackOrder entity.OrderRequest
+	// WaitMs is the fixed pause for StepKindWaitInterval.
+	WaitMs int64
 }
 
 // StepKind describes what the executor must do for a Step.
@@ -102,6 +122,10 @@ const (
 	// when the deadline is reached without a complete fill, the executor
 	// cancels the resting order and submits FallbackOrder.
 	StepKindWaitOrEscalate StepKind = "wait_or_escalate"
+	// StepKindWaitInterval is a fixed pause between two Submit steps. Used
+	// by the iceberg strategy to space out slice submissions and avoid the
+	// venue rate limit.
+	StepKindWaitInterval StepKind = "wait_interval"
 )
 
 // Plan is the full execution plan for one approved signal.
@@ -167,9 +191,48 @@ func (s *Selector) Plan(in SelectInput) Plan {
 	switch s.cfg.Strategy {
 	case StrategyPostOnlyEscalate:
 		return s.planPostOnlyEscalate(in)
+	case StrategyIceberg:
+		return s.planIceberg(in)
 	default:
 		return s.planMarket(in)
 	}
+}
+
+// planIceberg splits the input lot into SliceCount equal MARKET orders with
+// MinIntervalMs spacing. When the resulting per-slice amount would round
+// to 0 (very small lot), falls back to a single MARKET so the signal isn't
+// silently dropped.
+func (s *Selector) planIceberg(in SelectInput) Plan {
+	count := s.cfg.SliceCount
+	if count <= 0 {
+		count = DefaultSliceCount
+	}
+	if count > DefaultSliceCountMax {
+		count = DefaultSliceCountMax
+	}
+	if count <= 1 {
+		return s.planMarket(in)
+	}
+	per := in.Amount / float64(count)
+	if per <= 0 {
+		return s.planMarket(in)
+	}
+	steps := make([]Step, 0, count*2-1)
+	for i := 0; i < count; i++ {
+		// Last slice absorbs any rounding so the total amount matches the
+		// caller's request exactly.
+		amt := per
+		if i == count-1 {
+			amt = in.Amount - per*float64(count-1)
+		}
+		sliceIn := in
+		sliceIn.Amount = amt
+		steps = append(steps, Step{Kind: StepKindSubmit, Order: marketOrder(sliceIn)})
+		if i < count-1 {
+			steps = append(steps, Step{Kind: StepKindWaitInterval, WaitMs: s.cfg.MinIntervalMs})
+		}
+	}
+	return Plan{Strategy: StrategyIceberg, Steps: steps}
 }
 
 func (s *Selector) planMarket(in SelectInput) Plan {
