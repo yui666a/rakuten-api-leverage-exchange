@@ -278,6 +278,23 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	trades := sim.ClosedTrades()
 
 	summary := r.reporter.BuildSummary(input.Config, sim.Balance(), trades, equityPoints)
+
+	// PR-Q1: surface execution-quality counters collected by the handlers.
+	// The runner is the only place that has visibility into both, so the
+	// summary is the natural place to merge them. Both stay nil/0 when the
+	// caller did not configure the gate / orderbook-replay path so legacy
+	// runs round-trip identically.
+	if len(riskHandler.BookGateRejects) > 0 {
+		// Defensive copy so later mutations on the handler don't leak
+		// into the persisted summary.
+		copied := make(map[string]int, len(riskHandler.BookGateRejects))
+		for k, v := range riskHandler.BookGateRejects {
+			copied[k] = v
+		}
+		summary.BookGateRejects = copied
+	}
+	summary.ThinBookSkips = executionHandler.ThinBookSkips + tickRiskHandler.ThinBookSkips
+
 	id, err := NewULID()
 	if err != nil {
 		return nil, err

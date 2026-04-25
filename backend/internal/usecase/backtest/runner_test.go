@@ -501,3 +501,57 @@ func TestBacktestRunner_BookGateBlocksThinTradesEntirely(t *testing.T) {
 		t.Fatalf("expected book gate to block all trades, got %d", result.Summary.TotalTrades)
 	}
 }
+
+// TestBacktestRunner_QualityCountersSurfaceInSummary makes sure that when
+// the orderbook-replay path triggers thin-book skips and the pre-trade gate
+// rejects signals, the counters land on BacktestSummary so reports / API
+// callers can see them.
+func TestBacktestRunner_QualityCountersSurfaceInSummary(t *testing.T) {
+	primary := make([]entity.Candle, 0, 60)
+	baseTime := int64(1_770_000_000_000)
+	price := 100.0
+	for i := 0; i < 60; i++ {
+		price += math.Sin(float64(i)/5.0) * 1.5
+		ts := baseTime + int64(i)*15*60*1000
+		primary = append(primary, entity.Candle{
+			Open: price - 0.5, High: price + 1.0, Low: price - 1.0, Close: price, Time: ts,
+		})
+	}
+	// Snapshots with 0.0001 LTC depth — every signal is gate-rejected.
+	snaps := make([]entity.Orderbook, 0, len(primary))
+	for _, c := range primary {
+		snaps = append(snaps, entity.Orderbook{
+			SymbolID: 7, Timestamp: c.Time,
+			Asks: []entity.OrderbookEntry{{Price: c.Close * 1.001, Amount: 0.0001}},
+			Bids: []entity.OrderbookEntry{{Price: c.Close * 0.999, Amount: 0.0001}},
+			BestAsk: c.Close * 1.001, BestBid: c.Close * 0.999, MidPrice: c.Close,
+		})
+	}
+	replay := newOrderbookReplayForTest(snaps)
+
+	cfg := entity.BacktestConfig{
+		Symbol: "BTC_JPY", SymbolID: 7, PrimaryInterval: "PT15M",
+		FromTimestamp: primary[0].Time, ToTimestamp: primary[len(primary)-1].Time,
+		InitialBalance: 100000, SlippageModel: "orderbook",
+	}
+	risk := entity.RiskConfig{
+		MaxPositionAmount: 1_000_000_000, MaxDailyLoss: 1_000_000_000,
+		StopLossPercent: 5, TakeProfitPercent: 10, InitialCapital: 100000,
+		MaxSlippageBps: 50, MaxBookSidePct: 30,
+	}
+	runner := NewBacktestRunner()
+	result, err := runner.Run(context.Background(), RunInput{
+		Config: cfg, RiskConfig: risk, TradeAmount: 0.01,
+		PrimaryCandles: primary, FillPriceSource: replay, BookSource: replay,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// Gate rejects every approved signal, so the counters must reflect the
+	// activity even though TotalTrades stays 0.
+	if len(result.Summary.BookGateRejects) == 0 {
+		t.Fatal("expected BookGateRejects to be populated when gate fires")
+	}
+	// ThinBookSkips can be 0 here (no signal even reaches the executor)
+	// — that's a valid outcome of the gate working.
+}
