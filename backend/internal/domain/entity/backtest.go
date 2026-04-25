@@ -78,6 +78,18 @@ type BacktestSummary struct {
 	ExpectancyPerTrade float64 `json:"expectancyPerTrade,omitempty"`
 	AvgWinJPY          float64 `json:"avgWinJpy,omitempty"`
 	AvgLossJPY         float64 `json:"avgLossJpy,omitempty"` // absolute value
+
+	// ---- PR-Q1: execution-quality counters surfaced from the runtime ----
+
+	// BookGateRejects buckets pre-trade book-depth gate rejections by reason
+	// ("slippage_exceeds_threshold", "lot_exceeds_book_side_ratio",
+	// "thin_book_pre_trade", "no_book", "stale_book", "empty_book_side").
+	// Empty when the run did not configure the gate.
+	BookGateRejects map[string]int `json:"bookGateRejects,omitempty"`
+	// ThinBookSkips counts orders the simulator could not fill because the
+	// orderbook side did not have enough depth at fill time. Aggregates
+	// open + SL/TP + trailing close skips.
+	ThinBookSkips int `json:"thinBookSkips,omitempty"`
 }
 
 // DrawdownPeriod captures one peak-to-recovery drawdown episode. For an
