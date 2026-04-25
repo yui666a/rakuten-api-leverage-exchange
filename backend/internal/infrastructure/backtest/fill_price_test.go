@@ -281,3 +281,56 @@ func TestPostOnlyLimitFill_DeterministicSampler(t *testing.T) {
 		t.Fatalf("non-deterministic: first=(%f,%v) second=(%f,%v)", first, firstMaker, second, secondMaker)
 	}
 }
+
+func TestLatencyAdjustedSource_ShiftsTimestamp(t *testing.T) {
+	// Two snapshots: snap0 at ts=1000 with BestAsk=100, snap1 at ts=5000
+	// with BestAsk=200. Without latency, a fill at ts=2000 picks snap0
+	// (cost 100). With LatencyMs=4000 shifting to ts=6000, it picks snap1.
+	snap0 := entity.Orderbook{
+		Timestamp: 1000, BestAsk: 100, BestBid: 99,
+		Asks: []entity.OrderbookEntry{{Price: 100, Amount: 10}},
+	}
+	snap1 := entity.Orderbook{
+		Timestamp: 5000, BestAsk: 200, BestBid: 199,
+		Asks: []entity.OrderbookEntry{{Price: 200, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap0, snap1}, 60_000)
+
+	// Baseline (no latency).
+	baseline, err := replay.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 2000)
+	if err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	if baseline != 100 {
+		t.Fatalf("expected baseline 100, got %f", baseline)
+	}
+
+	wrapped := &LatencyAdjustedSource{Inner: replay, LatencyMs: 4000}
+	shifted, err := wrapped.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 2000)
+	if err != nil {
+		t.Fatalf("shifted: %v", err)
+	}
+	if shifted != 200 {
+		t.Fatalf("expected latency-shifted 200, got %f", shifted)
+	}
+}
+
+func TestLatencyAdjustedSource_PassesThroughMakerFlag(t *testing.T) {
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 99, BestAsk: 101,
+		Bids: []entity.OrderbookEntry{{Price: 99, Amount: 10}},
+		Asks: []entity.OrderbookEntry{{Price: 101, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	post := &PostOnlyLimitFill{
+		MakerFillProbability: 1.0, TakerSource: replay, BookSource: replay,
+		SymbolID: 7, SamplerOverride: "maker",
+	}
+	wrapped := &LatencyAdjustedSource{Inner: post, LatencyMs: 0}
+	if _, err := wrapped.FillPrice(FillKindEntry, entity.OrderSideBuy, 0, 1.0, 1500); err != nil {
+		t.Fatalf("fill: %v", err)
+	}
+	if !wrapped.LastFillWasMaker() {
+		t.Fatal("expected wrapper to expose maker=true from inner PostOnlyLimitFill")
+	}
+}
