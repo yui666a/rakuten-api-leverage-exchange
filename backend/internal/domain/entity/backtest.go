@@ -12,6 +12,11 @@ type BacktestConfig struct {
 	SpreadPercent    float64 `json:"spreadPercent"`
 	DailyCarryCost   float64 `json:"dailyCarryCost"`
 	SlippagePercent  float64 `json:"slippagePercent"`
+	// SlippageModel selects how fill prices are computed.
+	//   - "" / "percent"  : legacy spread% / slippage% adjustment (default).
+	//   - "orderbook"     : VWAP from persisted L2 snapshots (Phase G).
+	// Unknown values fall back to "percent".
+	SlippageModel string `json:"slippageModel,omitempty"`
 }
 
 // BacktestSummary stores fixed output metrics for a run.

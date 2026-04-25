@@ -89,6 +89,7 @@ type runFlags struct {
 	Spread         float64
 	CarryingCost   float64
 	Slippage       float64
+	SlippageModel  string
 	TradeAmount    float64
 	StopLoss       float64
 	StopLossATR    float64 // PR-12
@@ -113,6 +114,7 @@ func registerRunFlags(fs *flag.FlagSet, f *runFlags) {
 	fs.Float64Var(&f.Spread, "spread", 0.1, "spread percent")
 	fs.Float64Var(&f.CarryingCost, "carrying-cost", 0.04, "daily carrying cost percent")
 	fs.Float64Var(&f.Slippage, "slippage", 0, "slippage percent")
+	fs.StringVar(&f.SlippageModel, "slippage-model", "percent", "slippage model: percent | orderbook (CLI only supports percent for now)")
 	fs.Float64Var(&f.TradeAmount, "trade-amount", 0.01, "trade amount")
 	fs.Float64Var(&f.StopLoss, "stop-loss", 5, "stop loss percent")
 	fs.Float64Var(&f.StopLossATR, "stop-loss-atr", 0, "stop loss ATR multiplier (0=disabled)")
@@ -690,6 +692,13 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		SpreadPercent:    f.Spread,
 		DailyCarryCost:   f.CarryingCost,
 		SlippagePercent:  f.Slippage,
+		SlippageModel:    f.SlippageModel,
+	}
+	// CLI runs from CSV without a SQLite handle, so the orderbook-replay
+	// model has no snapshot source. Surface that as a clear error rather
+	// than silently falling back.
+	if f.SlippageModel == "orderbook" {
+		return bt.RunInput{}, fmt.Errorf("--slippage-model=orderbook is not supported by the CLI; use POST /api/v1/backtest/run from the running server which has access to persisted snapshots")
 	}
 	if len(higherCandles) == 0 {
 		cfg.HigherTFInterval = ""
