@@ -107,6 +107,32 @@ func RunMigrations(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_orderbook_snapshots_symbol_time
 			ON orderbook_snapshots(symbol_id, timestamp DESC)`,
 
+		// execution_quality_snapshots: PR-Q3. /execution-quality endpoint の
+		// レイテンシと楽天 my-trades 呼び出し回数を抑えるため、worker が
+		// 60 秒間隔で計算結果をここに INSERT し、endpoint は最新行を返す。
+		// by_order_behavior_json は map[string]ExecutionQualityBehaviorBucket
+		// の JSON。avg_slippage_bps は NULL (=mid 不明) 区別のため REAL NULL。
+		`CREATE TABLE IF NOT EXISTS execution_quality_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol_id INTEGER NOT NULL,
+			captured_at INTEGER NOT NULL,
+			window_sec INTEGER NOT NULL,
+			from_ts INTEGER NOT NULL,
+			to_ts INTEGER NOT NULL,
+			trades_count INTEGER NOT NULL,
+			maker_count INTEGER NOT NULL,
+			taker_count INTEGER NOT NULL,
+			unknown_count INTEGER NOT NULL,
+			maker_ratio REAL NOT NULL,
+			total_fee_jpy REAL NOT NULL,
+			avg_slippage_bps REAL,
+			by_order_behavior_json TEXT NOT NULL DEFAULT '{}',
+			halted INTEGER NOT NULL DEFAULT 0,
+			halt_reason TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_execution_quality_snapshots_symbol_time
+			ON execution_quality_snapshots(symbol_id, captured_at DESC)`,
+
 		`CREATE TABLE IF NOT EXISTS trade_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			symbol_id INTEGER NOT NULL,
