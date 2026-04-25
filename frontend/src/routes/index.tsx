@@ -6,6 +6,7 @@ import { IndicatorPanel } from '../components/IndicatorPanel'
 import { PositionPanel } from '../components/PositionPanel'
 import { BotControlCard } from '../components/BotControlCard'
 import { LiveTickerCard } from '../components/LiveTickerCard'
+import { ManualTradeCard } from '../components/ManualTradeCard'
 import { useStatus } from '../hooks/useStatus'
 import { usePnl } from '../hooks/usePnl'
 import { useStrategy } from '../hooks/useStrategy'
@@ -112,6 +113,12 @@ function Dashboard() {
             onStart={() => startBot.mutate()}
             onStop={() => stopBot.mutate()}
             isPending={startBot.isPending || stopBot.isPending}
+          />
+          <ManualTradeCard
+            symbolId={symbolId}
+            currencyPair={currentSymbol?.currencyPair}
+            lotStep={currentSymbol?.baseStepAmount}
+            minLot={currentSymbol?.minOrderAmount}
           />
           <IndicatorPanel indicators={indicators} />
           <PositionPanel positions={positions} />

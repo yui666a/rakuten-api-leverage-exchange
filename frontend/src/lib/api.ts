@@ -595,6 +595,26 @@ export async function sendApi<TResponse, TBody = undefined>(
   return res.json()
 }
 
+export type ManualOrderRequest = {
+  symbolId: number
+  side: 'BUY' | 'SELL'
+  amount: number
+  orderType: 'MARKET'
+  clientOrderId: string
+}
+
+export type ManualOrderResponse = {
+  clientOrderId: string
+  executed: boolean
+  orderId?: number
+  reason?: string
+  duplicate?: boolean
+}
+
+export async function createManualOrder(req: ManualOrderRequest): Promise<ManualOrderResponse> {
+  return sendApi<ManualOrderResponse, ManualOrderRequest>('/orders', 'POST', req)
+}
+
 export function buildRealtimeWebSocketUrl(symbolId: number): string {
   if (typeof window === 'undefined') {
     return `${WS_BASE}/ws?symbolId=${symbolId}`
