@@ -126,10 +126,18 @@ type runBacktestRequest struct {
 	CarryingCost          float64 `json:"carryingCost"`
 	Slippage              float64 `json:"slippage"`
 	// SlippageModel: "" / "percent" → legacy %-based adjustment.
-	// "orderbook" → load persisted L2 snapshots for the run window and
-	// compute VWAP fills against them. The handler returns 400 when the
-	// snapshot coverage is insufficient.
+	// "orderbook"            → load persisted L2 snapshots for the run window
+	//                          and compute VWAP fills against them.
+	// "post_only_with_taker" → probabilistic maker fill at touch with
+	//                          orderbook taker fallback (Phase B).
 	SlippageModel string `json:"slippageModel,omitempty"`
+	// MakerFillProbability seeds the post-only-with-taker model. 0 falls
+	// back to 0.5. Ignored for other slippage models.
+	MakerFillProbability float64 `json:"makerFillProbability,omitempty"`
+	// MakerFeeRate / TakerFeeRate let the caller override the venue defaults
+	// (-0.0001 / 0 for Rakuten Wallet leverage). 0 disables fee accounting.
+	MakerFeeRate float64 `json:"makerFeeRate,omitempty"`
+	TakerFeeRate float64 `json:"takerFeeRate,omitempty"`
 	TradeAmount           float64 `json:"tradeAmount"`
 	StopLossPercent       float64 `json:"stopLossPercent"`
 	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
@@ -259,10 +267,13 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		FromTimestamp:    fromTs,
 		ToTimestamp:      toTs,
 		InitialBalance:   req.InitialBalance,
-		SpreadPercent:    req.Spread,
-		DailyCarryCost:   req.CarryingCost,
-		SlippagePercent:  req.Slippage,
-		SlippageModel:    req.SlippageModel,
+		SpreadPercent:        req.Spread,
+		DailyCarryCost:       req.CarryingCost,
+		SlippagePercent:      req.Slippage,
+		SlippageModel:        req.SlippageModel,
+		MakerFillProbability: req.MakerFillProbability,
+		MakerFeeRate:         req.MakerFeeRate,
+		TakerFeeRate:         req.TakerFeeRate,
 	}
 	if len(higherCandles) == 0 {
 		cfg.HigherTFInterval = ""
@@ -300,13 +311,31 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 
 	var fillSource infrabt.FillPriceSource
 	var bookSource booklimit.BookSource
-	if req.SlippageModel == "orderbook" {
+	switch req.SlippageModel {
+	case "orderbook":
 		replay, err := h.buildOrderbookReplay(c.Request.Context(), cfg)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		fillSource = replay
+		bookSource = replay
+	case "post_only_with_taker":
+		replay, err := h.buildOrderbookReplay(c.Request.Context(), cfg)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		prob := req.MakerFillProbability
+		if prob <= 0 {
+			prob = 0.5
+		}
+		fillSource = &infrabt.PostOnlyLimitFill{
+			MakerFillProbability: prob,
+			TakerSource:          replay,
+			BookSource:           replay,
+			SymbolID:             cfg.SymbolID,
+		}
 		bookSource = replay
 	}
 

@@ -97,3 +97,71 @@ func TestSimExecutor_EquityIncludesUnrealizedPnL(t *testing.T) {
 		t.Fatalf("expected equity above initial with unrealized gain, got %f", eq)
 	}
 }
+
+func TestSimExecutor_AppliesMakerRebateOnEntry(t *testing.T) {
+	// Rebate of -0.01% on a 100 price × 1.0 amount = -0.01 JPY credit.
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 100, BestAsk: 102,
+		Bids: []entity.OrderbookEntry{{Price: 100, Amount: 10}},
+		Asks: []entity.OrderbookEntry{{Price: 102, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	src := &PostOnlyLimitFill{
+		MakerFillProbability: 1.0,
+		TakerSource:          replay,
+		BookSource:           replay,
+		SymbolID:             7,
+		SamplerOverride:      "maker",
+	}
+	sim := NewSimExecutor(SimConfig{
+		InitialBalance:  100_000,
+		FillPriceSource: src,
+		MakerFeeRate:    -0.0001,
+		TakerFeeRate:    0,
+	})
+	if _, err := sim.Open(7, entity.OrderSideBuy, 100, 1.0, "test", 1500); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Maker rebate credits balance by 0.01 (notional 100 * 0.0001).
+	if got := sim.Balance(); got < 100_000.0099 || got > 100_000.0101 {
+		t.Fatalf("expected balance ~100000.01, got %f", got)
+	}
+}
+
+func TestSimExecutor_FeeRecordedOnTradeRecord(t *testing.T) {
+	snap := entity.Orderbook{
+		Timestamp: 1000, BestBid: 100, BestAsk: 102,
+		Bids: []entity.OrderbookEntry{{Price: 100, Amount: 10}},
+		Asks: []entity.OrderbookEntry{{Price: 102, Amount: 10}},
+	}
+	replay := NewOrderbookReplay([]entity.Orderbook{snap}, 60_000)
+	src := &PostOnlyLimitFill{
+		MakerFillProbability: 1.0,
+		TakerSource:          replay,
+		BookSource:           replay,
+		SymbolID:             7,
+		SamplerOverride:      "maker",
+	}
+	sim := NewSimExecutor(SimConfig{
+		InitialBalance:  100_000,
+		FillPriceSource: src,
+		MakerFeeRate:    -0.0001,
+		TakerFeeRate:    0,
+	})
+	if _, err := sim.Open(7, entity.OrderSideBuy, 100, 1.0, "test", 1500); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	_, trade, err := sim.Close(1, 102, "exit", 2000)
+	if err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if trade == nil || !trade.OpenIsMaker || !trade.CloseIsMaker {
+		t.Fatalf("expected both legs maker, got %+v", trade)
+	}
+	// open: -0.0001 * 100 * 1 = -0.01
+	// close: -0.0001 * 100 * 1 = -0.01 (BestBid for SELL close)
+	// Total fee = -0.02 (rebate)
+	if trade.Fee >= 0 {
+		t.Fatalf("expected negative fee (rebate), got %f", trade.Fee)
+	}
+}
