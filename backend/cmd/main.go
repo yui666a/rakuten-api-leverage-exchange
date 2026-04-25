@@ -80,6 +80,9 @@ func main() {
 		CooldownMinutes:       cfg.Risk.CooldownMinutes,
 	})
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
+	// Browser notifications subscribe to "trade_event" on the realtime hub —
+	// wire the executor so successful opens/closes publish there.
+	orderExecutor.SetRealtimeHub(realtimeHub)
 
 	// Default to the config-file values, then let the persisted state (if any)
 	// override them. This is what fixes the "WS resubscribes to BTC after every
