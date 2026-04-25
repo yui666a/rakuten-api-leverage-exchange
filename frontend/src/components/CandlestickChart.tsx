@@ -57,6 +57,9 @@ const ICHIMOKU_KUMO_COLORS = {
 /** Threshold: fetch more data when user scrolls within N bars of the left edge. */
 const SCROLL_THRESHOLD = 20
 
+/** Initial visible bar count — keep wide enough that bodies render as candles, not lines. */
+const INITIAL_VISIBLE_BARS = 120
+
 function calcSMA(closes: number[], period: number): (number | null)[] {
   const result: (number | null)[] = []
   for (let i = 0; i < closes.length; i++) {
@@ -439,6 +442,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        barSpacing: 6,
+        minBarSpacing: 2,
         tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
           const seconds = time as number
           const showDate =
@@ -484,6 +489,13 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       chart.remove()
     }
   }, [])
+
+  // Reset the "first load" flag when the interval changes so the new dataset
+  // also gets the initial-visible-bars treatment instead of inheriting the
+  // previous interval's scroll position.
+  useEffect(() => {
+    prevCandleCountRef.current = 0
+  }, [interval])
 
   // Infinite scroll: detect when user is near the left (oldest) edge
   useEffect(() => {
@@ -531,8 +543,12 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       // Restore the same time window after prepending older candles
       chart.timeScale().setVisibleRange(visibleTimeRange)
     } else if (prevCount === 0) {
-      // First load — fit all content
-      chart.timeScale().fitContent()
+      // First load — show only the most recent N bars so candle bodies render
+      // wide enough to be distinguishable. fitContent() over a 500-bar page would
+      // collapse each bar to ~1px and make the chart look like a line.
+      const lastIdx = chartData.length - 1
+      const fromIdx = Math.max(0, lastIdx - INITIAL_VISIBLE_BARS + 1)
+      chart.timeScale().setVisibleLogicalRange({ from: fromIdx, to: lastIdx + 2 })
     }
     // On refetch with no new candles, do nothing — keep current scroll position
   }, [candles])
