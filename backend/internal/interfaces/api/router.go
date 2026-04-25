@@ -69,6 +69,14 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	v1.GET("/pnl", riskHandler.GetPnL)
 
 	strategyHandler := handler.NewStrategyHandler(deps.StanceResolver)
+	// Wire the live snapshot so GET /strategy reflects the pipeline's
+	// current-bar stance instead of "insufficient indicator data". Nil-guard
+	// each dependency so tests / limited-feature deployments still work.
+	if deps.Pipeline != nil && deps.IndicatorCalculator != nil && deps.MarketDataService != nil {
+		strategyHandler.WithLiveSnapshot(handler.NewPipelineLiveSnapshot(
+			deps.Pipeline, deps.IndicatorCalculator, deps.MarketDataService, "PT15M",
+		))
+	}
 	v1.GET("/strategy", strategyHandler.GetStrategy)
 	v1.PUT("/strategy", strategyHandler.SetStrategy)
 	v1.DELETE("/strategy/override", strategyHandler.DeleteOverride)
