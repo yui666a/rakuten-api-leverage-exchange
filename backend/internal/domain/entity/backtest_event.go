@@ -76,6 +76,10 @@ type ApprovedSignalEvent struct {
 	// executors use this value verbatim so that backtest and live code
 	// share one sizing decision. 0 means "no-trade" (rejected by sizer).
 	Amount float64
+	// Urgency is mirrored from Signal.Urgency by the risk handler so the
+	// executor can route on a single field without reaching back into the
+	// raw signal. Empty value preserves legacy behaviour.
+	Urgency SignalUrgency
 }
 
 func (e ApprovedSignalEvent) EventType() string     { return EventTypeApproved }

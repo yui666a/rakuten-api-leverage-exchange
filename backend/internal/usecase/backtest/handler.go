@@ -487,6 +487,7 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 			Price:     signalEvent.Price,
 			Timestamp: signalEvent.Timestamp,
 			Amount:    amount,
+			Urgency:   signalEvent.Signal.Urgency,
 		},
 	}, nil
 }
@@ -716,6 +717,14 @@ type SignalExecutor interface {
 	Open(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64) (entity.OrderEvent, error)
 }
 
+// UrgencyAwareExecutor is an optional add-on interface. When the underlying
+// executor implements it, ExecutionHandler routes through OpenWithUrgency
+// so the executor can pick a SOR strategy from the urgency hint. Executors
+// that don't implement this stay on the legacy Open path verbatim.
+type UrgencyAwareExecutor interface {
+	OpenWithUrgency(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64, urgency entity.SignalUrgency) (entity.OrderEvent, error)
+}
+
 // ExecutionHandler converts approved SignalEvents into OrderEvents.
 //
 // The executor trusts ApprovedSignalEvent.Amount when set (the risk handler
@@ -752,14 +761,28 @@ func (h *ExecutionHandler) Handle(_ context.Context, event entity.Event) ([]enti
 		side = entity.OrderSideSell
 	}
 
-	orderEvent, err := h.Executor.Open(
-		signalEvent.Signal.SymbolID,
-		side,
-		signalEvent.Price,
-		amount,
-		signalEvent.Signal.Reason,
-		signalEvent.Timestamp,
-	)
+	var orderEvent entity.OrderEvent
+	var err error
+	if uae, ok := h.Executor.(UrgencyAwareExecutor); ok && signalEvent.Urgency != "" {
+		orderEvent, err = uae.OpenWithUrgency(
+			signalEvent.Signal.SymbolID,
+			side,
+			signalEvent.Price,
+			amount,
+			signalEvent.Signal.Reason,
+			signalEvent.Timestamp,
+			signalEvent.Urgency,
+		)
+	} else {
+		orderEvent, err = h.Executor.Open(
+			signalEvent.Signal.SymbolID,
+			side,
+			signalEvent.Price,
+			amount,
+			signalEvent.Signal.Reason,
+			signalEvent.Timestamp,
+		)
+	}
 	if err != nil {
 		var thin *infraThinBookError
 		if errors.As(err, &thin) {

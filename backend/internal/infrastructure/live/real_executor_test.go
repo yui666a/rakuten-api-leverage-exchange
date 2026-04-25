@@ -612,3 +612,50 @@ func TestRealExecutor_Iceberg_SubmitsAllSlices(t *testing.T) {
 		}
 	}
 }
+
+func TestRealExecutor_OpenWithUrgency_UrgentForcesMarketEvenWhenDefaultIsPostOnly(t *testing.T) {
+	calls := 0
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+			calls++
+			return []entity.Order{{ID: int64(1000 + calls), Price: 100}}, nil
+		},
+	}
+	// Default router would be post-only-escalate; urgency=urgent must override.
+	router := sor.New(sor.Config{Strategy: sor.StrategyPostOnlyEscalate, TickSize: 0.1})
+	exec := NewRealExecutor(mock, 7, 0, WithSOR(router))
+
+	if _, err := exec.OpenWithUrgency(7, entity.OrderSideBuy, 100, 0.01, "urgent_test", 1000, entity.SignalUrgencyUrgent); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("urgent must produce a single MARKET submission, got %d calls", calls)
+	}
+	if mock.calls[0].OrderData.OrderType != entity.OrderTypeMarket {
+		t.Fatalf("expected MARKET, got %s", mock.calls[0].OrderData.OrderType)
+	}
+	if mock.calls[0].OrderData.PostOnly != nil {
+		t.Fatalf("urgent must not carry postOnly: %+v", mock.calls[0].OrderData.PostOnly)
+	}
+}
+
+func TestRealExecutor_OpenWithUrgency_NormalRespectsDefaultRouter(t *testing.T) {
+	calls := 0
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+			calls++
+			return []entity.Order{{ID: int64(2000 + calls), Price: 100}}, nil
+		},
+	}
+	// Default = market. Normal urgency must just round-trip to Open which
+	// produces a single MARKET.
+	router := sor.New(sor.Config{Strategy: sor.StrategyMarket})
+	exec := NewRealExecutor(mock, 7, 0, WithSOR(router))
+
+	if _, err := exec.OpenWithUrgency(7, entity.OrderSideBuy, 100, 0.01, "normal_test", 1000, entity.SignalUrgencyNormal); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected 1 venue call, got %d", calls)
+	}
+}
