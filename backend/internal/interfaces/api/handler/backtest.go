@@ -12,11 +12,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	infrabt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
+
+// orderbookReplayStaleAfterMs is how far we let a snapshot drift before
+// declaring it stale. 60 s matches the design discussion: 5 s persist
+// throttle × ~10 missed frames is treated as "venue feed gap" and the
+// trade is skipped rather than filled at a stale price.
+const orderbookReplayStaleAfterMs = 60_000
+
+// orderbookReplayMinCoverageRatio is the minimum (snapshots / 5s buckets in
+// window) ratio required before /backtest/run accepts an "orderbook"
+// slippage model run. 0.8 = at most 20% of the bucketed window may be
+// missing snapshots.
+const orderbookReplayMinCoverageRatio = 0.8
 
 // defaultProfilesBaseDir mirrors the CLI default: strategy profiles live
 // under backend/profiles/ at repository root. See spec §8.3 for why the
@@ -38,6 +52,10 @@ type BacktestHandler struct {
 	// only; wiring this repo re-enables /backtest/walk-forward/:id and
 	// GET listing without touching the happy path.
 	wfRepo repository.WalkForwardResultRepository
+
+	// marketDataSvc supplies persisted L2 snapshots for slippageModel="orderbook".
+	// When nil, that model returns 400 ("orderbook replay unavailable").
+	marketDataSvc *usecase.MarketDataService
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -74,6 +92,15 @@ func WithWalkForwardRepo(repo repository.WalkForwardResultRepository) BacktestHa
 	}
 }
 
+// WithMarketDataService enables slippageModel="orderbook" by giving the
+// handler a way to load persisted L2 snapshots. nil keeps the legacy
+// percent-only behaviour.
+func WithMarketDataService(svc *usecase.MarketDataService) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.marketDataSvc = svc
+	}
+}
+
 func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResultRepository, opts ...BacktestHandlerOption) *BacktestHandler {
 	h := &BacktestHandler{
 		runner:          runner,
@@ -97,6 +124,11 @@ type runBacktestRequest struct {
 	Spread                float64 `json:"spread"`
 	CarryingCost          float64 `json:"carryingCost"`
 	Slippage              float64 `json:"slippage"`
+	// SlippageModel: "" / "percent" → legacy %-based adjustment.
+	// "orderbook" → load persisted L2 snapshots for the run window and
+	// compute VWAP fills against them. The handler returns 400 when the
+	// snapshot coverage is insufficient.
+	SlippageModel string `json:"slippageModel,omitempty"`
 	TradeAmount           float64 `json:"tradeAmount"`
 	StopLossPercent       float64 `json:"stopLossPercent"`
 	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
@@ -223,6 +255,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		SpreadPercent:    req.Spread,
 		DailyCarryCost:   req.CarryingCost,
 		SlippagePercent:  req.Slippage,
+		SlippageModel:    req.SlippageModel,
 	}
 	if len(higherCandles) == 0 {
 		cfg.HigherTFInterval = ""
@@ -258,6 +291,16 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		positionSizing = resolved.Risk.PositionSizing
 	}
 
+	var fillSource infrabt.FillPriceSource
+	if req.SlippageModel == "orderbook" {
+		var err error
+		fillSource, err = h.buildOrderbookFillSource(c.Request.Context(), cfg)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	result, err := runner.Run(context.Background(), bt.RunInput{
 		Config:            cfg,
 		TradeAmount:       req.TradeAmount,
@@ -265,6 +308,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		HigherCandles:     higherCandles,
 		BBSqueezeLookback: bbLookback,
 		PositionSizing:    positionSizing,
+		FillPriceSource:   fillSource,
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:     req.MaxPositionAmount,
 			MaxDailyLoss:          req.MaxDailyLoss,
@@ -302,6 +346,54 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// buildOrderbookFillSource validates that enough L2 snapshots exist for the
+// requested run window and returns an OrderbookReplay-backed FillPriceSource.
+// Returns a user-facing error (caller maps to HTTP 400) when:
+//   - the handler was constructed without a MarketDataService
+//   - the run window is open-ended (we need both endpoints to bound the load)
+//   - fewer than orderbookReplayMinCoverageRatio of the 5 s buckets in the
+//     window have a snapshot
+func (h *BacktestHandler) buildOrderbookFillSource(ctx context.Context, cfg entity.BacktestConfig) (infrabt.FillPriceSource, error) {
+	if h.marketDataSvc == nil {
+		return nil, errors.New("orderbook replay unavailable: backend was started without market data persistence")
+	}
+	if cfg.FromTimestamp <= 0 || cfg.ToTimestamp <= 0 || cfg.ToTimestamp <= cfg.FromTimestamp {
+		return nil, errors.New("orderbook replay requires bounded from/to timestamps")
+	}
+
+	snaps, err := h.marketDataSvc.GetOrderbookHistory(ctx, cfg.SymbolID, cfg.FromTimestamp, cfg.ToTimestamp, 1_000_000)
+	if err != nil {
+		return nil, errors.New("orderbook replay: failed to load snapshots: " + err.Error())
+	}
+	if len(snaps) == 0 {
+		return nil, errors.New("orderbook replay: no L2 snapshots in requested window — backtest with slippageModel=\"percent\" instead, or wait for the persistence worker to accumulate data")
+	}
+
+	// Coverage = snapshots / expected_buckets, where the expected bucket size
+	// is the persistence throttle (5 s). Falls back to a conservative 1.0
+	// floor when the throttle is 0 (test config).
+	bucketSec := int64(5)
+	expected := (cfg.ToTimestamp - cfg.FromTimestamp) / 1000 / bucketSec
+	if expected <= 0 {
+		expected = 1
+	}
+	coverage := float64(len(snaps)) / float64(expected)
+	if coverage < orderbookReplayMinCoverageRatio {
+		return nil, fmtCoverageError(len(snaps), expected, coverage)
+	}
+	return infrabt.NewOrderbookReplay(snaps, orderbookReplayStaleAfterMs), nil
+}
+
+func fmtCoverageError(got int, expected int64, coverage float64) error {
+	return errors.New(
+		"orderbook replay: snapshot coverage too low (" +
+			strconv.Itoa(got) + " of ~" + strconv.FormatInt(expected, 10) +
+			" expected buckets, " +
+			strconv.FormatFloat(coverage*100, 'f', 1, 64) +
+			"%). Wait for more data or use slippageModel=\"percent\".",
+	)
 }
 
 // loadProfileForRequest resolves and loads a profile by name. Returns

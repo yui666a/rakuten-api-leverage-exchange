@@ -11,10 +11,16 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
+	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
+
+// infraThinBookError is a re-export alias so handlers can detect the
+// orderbook-replay's "thin book" sentinel without leaking the infra package
+// name everywhere.
+type infraThinBookError = infra.ThinBookError
 
 // ErrBacktestStrategyMissing is returned by StrategyHandler.Handle when the
 // handler was constructed with a nil port.Strategy. Callers should use
@@ -414,6 +420,11 @@ type TickRiskHandler struct {
 	TakeProfitPercent     float64
 	highWaterMarks        map[int64]float64
 	currentATR            float64
+	// ThinBookSkips counts SL/TP/trailing exits the simulator could not fill
+	// because the orderbook side did not have enough depth (orderbook-replay
+	// slippage model only). Surfaced for logging — the position stays open in
+	// that case, so the next tick will re-attempt the close.
+	ThinBookSkips int
 }
 
 func NewTickRiskHandler(primaryInterval string, executor TickRiskExecutor, stopLossPercent, takeProfitPercent float64) *TickRiskHandler {
@@ -529,6 +540,11 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 			if hit {
 				orderEvent, _, err := h.Executor.Close(pos.PositionID, exitPrice, reason, tickEvent.Timestamp)
 				if err != nil {
+					var thin *infraThinBookError
+					if errors.As(err, &thin) {
+						h.ThinBookSkips++
+						continue
+					}
 					return nil, err
 				}
 				emitted = append(emitted, orderEvent)
@@ -561,6 +577,11 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 			if best > pos.EntryPrice && best-tickEvent.Price >= distance {
 				orderEvent, _, err := h.Executor.Close(pos.PositionID, tickEvent.Price, "trailing_stop", tickEvent.Timestamp)
 				if err != nil {
+					var thin *infraThinBookError
+					if errors.As(err, &thin) {
+						h.ThinBookSkips++
+						continue
+					}
 					return nil, err
 				}
 				emitted = append(emitted, orderEvent)
@@ -570,6 +591,11 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 			if best < pos.EntryPrice && tickEvent.Price-best >= distance {
 				orderEvent, _, err := h.Executor.Close(pos.PositionID, tickEvent.Price, "trailing_stop", tickEvent.Timestamp)
 				if err != nil {
+					var thin *infraThinBookError
+					if errors.As(err, &thin) {
+						h.ThinBookSkips++
+						continue
+					}
 					return nil, err
 				}
 				emitted = append(emitted, orderEvent)
@@ -600,6 +626,10 @@ type SignalExecutor interface {
 type ExecutionHandler struct {
 	Executor    SignalExecutor
 	TradeAmount float64
+	// ThinBookSkips counts approved signals that the simulator could not fill
+	// because the orderbook side did not have enough depth (only meaningful
+	// with the orderbook-replay slippage model). Surfaced for logging.
+	ThinBookSkips int
 }
 
 func (h *ExecutionHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
@@ -633,6 +663,11 @@ func (h *ExecutionHandler) Handle(_ context.Context, event entity.Event) ([]enti
 		signalEvent.Timestamp,
 	)
 	if err != nil {
+		var thin *infraThinBookError
+		if errors.As(err, &thin) {
+			h.ThinBookSkips++
+			return nil, nil
+		}
 		return nil, err
 	}
 	return []entity.Event{orderEvent}, nil

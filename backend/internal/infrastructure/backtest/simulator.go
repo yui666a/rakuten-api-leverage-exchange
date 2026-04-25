@@ -13,6 +13,10 @@ type SimConfig struct {
 	SpreadPercent     float64
 	DailyCarryingCost float64
 	SlippagePercent   float64
+	// FillPriceSource overrides the default percent-based slippage model.
+	// When nil, the simulator uses LegacyPercentSlippage{SpreadPercent,
+	// SlippagePercent} so existing call sites stay bit-identical.
+	FillPriceSource FillPriceSource
 }
 
 type SimPosition struct {
@@ -27,22 +31,31 @@ type SimPosition struct {
 }
 
 type SimExecutor struct {
-	positions    []SimPosition
-	closedTrades []entity.BacktestTradeRecord
-	balance      float64
-	config       SimConfig
-	nextOrderID  int64
-	nextTradeID  int64
-	nextPosID    int64
+	positions       []SimPosition
+	closedTrades    []entity.BacktestTradeRecord
+	balance         float64
+	config          SimConfig
+	fillPriceSource FillPriceSource
+	nextOrderID     int64
+	nextTradeID     int64
+	nextPosID       int64
 }
 
 func NewSimExecutor(config SimConfig) *SimExecutor {
+	src := config.FillPriceSource
+	if src == nil {
+		src = LegacyPercentSlippage{
+			SpreadPercent:   config.SpreadPercent,
+			SlippagePercent: config.SlippagePercent,
+		}
+	}
 	return &SimExecutor{
-		balance:     config.InitialBalance,
-		config:      config,
-		nextOrderID: 1,
-		nextTradeID: 1,
-		nextPosID:   1,
+		balance:         config.InitialBalance,
+		config:          config,
+		fillPriceSource: src,
+		nextOrderID:     1,
+		nextTradeID:     1,
+		nextPosID:       1,
 	}
 }
 
@@ -62,7 +75,10 @@ func (s *SimExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, a
 		}
 	}
 
-	fill := s.entryFillPrice(side, signalPrice)
+	fill, err := s.fillPriceSource.FillPrice(FillKindEntry, side, signalPrice, amount, timestamp)
+	if err != nil {
+		return entity.OrderEvent{}, err
+	}
 	position := SimPosition{
 		PositionID:     s.nextPosID,
 		SymbolID:       symbolID,
@@ -106,7 +122,10 @@ func (s *SimExecutor) Close(positionID int64, signalPrice float64, reason string
 	}
 
 	pos := s.positions[idx]
-	exitFill := s.exitFillPrice(pos.Side, signalPrice)
+	exitFill, err := s.fillPriceSource.FillPrice(FillKindExit, pos.Side, signalPrice, pos.Amount, timestamp)
+	if err != nil {
+		return entity.OrderEvent{}, nil, err
+	}
 	spreadCostClose := signalPrice * pos.Amount * (s.config.SpreadPercent / 100.0) / 2.0
 	spreadCostTotal := pos.SpreadCostOpen + spreadCostClose
 	carrying := s.carryingCost(pos, timestamp)
@@ -225,27 +244,8 @@ func (s *SimExecutor) Equity(markPriceBySymbol map[int64]float64) float64 {
 	return equity
 }
 
-func (s *SimExecutor) entryFillPrice(side entity.OrderSide, signalPrice float64) float64 {
-	adjust := (s.config.SpreadPercent / 100.0 / 2.0) + (s.config.SlippagePercent / 100.0)
-	switch side {
-	case entity.OrderSideSell:
-		return signalPrice * (1 - adjust)
-	default:
-		return signalPrice * (1 + adjust)
-	}
-}
-
-func (s *SimExecutor) exitFillPrice(side entity.OrderSide, signalPrice float64) float64 {
-	adjust := (s.config.SpreadPercent / 100.0 / 2.0) + (s.config.SlippagePercent / 100.0)
-	switch side {
-	case entity.OrderSideSell:
-		// Close SELL by BUY.
-		return signalPrice * (1 + adjust)
-	default:
-		// Close BUY by SELL.
-		return signalPrice * (1 - adjust)
-	}
-}
+// entryFillPrice / exitFillPrice were folded into FillPriceSource.
+// LegacyPercentSlippage in fill_price.go preserves the original arithmetic.
 
 func (s *SimExecutor) carryingCost(pos SimPosition, exitTimestamp int64) float64 {
 	if s.config.DailyCarryingCost <= 0 {

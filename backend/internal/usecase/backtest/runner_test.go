@@ -7,8 +7,13 @@ import (
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
+	infrabt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
+
+func newOrderbookReplayForTest(snaps []entity.Orderbook) *infrabt.OrderbookReplay {
+	return infrabt.NewOrderbookReplay(snaps, 60_000)
+}
 
 func TestMergeCandleEvents_PrefersHigherOnSameTimestamp(t *testing.T) {
 	primary := []entity.Candle{
@@ -323,5 +328,111 @@ func TestBacktestRunner_ATRTrailingChangesResult(t *testing.T) {
 		baseline.Summary.TotalReturn == atrRun.Summary.TotalReturn {
 		t.Fatalf("ATR trailing had no effect on backtest output (trades=%d, return=%v) — wiring regression",
 			baseline.Summary.TotalTrades, baseline.Summary.TotalReturn)
+	}
+}
+
+// TestBacktestRunner_OrderbookReplayDiffersFromPercent verifies that a run
+// driven by a fully-populated OrderbookReplay produces different trade
+// economics than the legacy percent model. We build a synthetic series and
+// hand-craft per-bar orderbooks so the orderbook fills are systematically
+// inferior (wider spread + thin top of book).
+func TestBacktestRunner_OrderbookReplayDiffersFromPercent(t *testing.T) {
+	primary := make([]entity.Candle, 0, 60)
+	baseTime := int64(1_770_000_000_000)
+	price := 100.0
+	for i := 0; i < 60; i++ {
+		price += math.Sin(float64(i)/5.0) * 1.5
+		ts := baseTime + int64(i)*15*60*1000
+		primary = append(primary, entity.Candle{
+			Open:  price - 0.5,
+			High:  price + 1.0,
+			Low:   price - 1.0,
+			Close: price,
+			Time:  ts,
+		})
+	}
+
+	// Build one orderbook snapshot per bar with a 1% spread (much wider than
+	// the percent baseline below, 0.1%).
+	snaps := make([]entity.Orderbook, 0, len(primary))
+	for _, c := range primary {
+		snaps = append(snaps, entity.Orderbook{
+			SymbolID:  7,
+			Timestamp: c.Time,
+			Asks:      []entity.OrderbookEntry{{Price: c.Close * 1.01, Amount: 1.0}},
+			Bids:      []entity.OrderbookEntry{{Price: c.Close * 0.99, Amount: 1.0}},
+		})
+	}
+	replay := newOrderbookReplayForTest(snaps)
+
+	cfg := entity.BacktestConfig{
+		Symbol:          "BTC_JPY",
+		SymbolID:        7,
+		PrimaryInterval: "PT15M",
+		FromTimestamp:   primary[0].Time,
+		ToTimestamp:     primary[len(primary)-1].Time,
+		InitialBalance:  100000,
+		SpreadPercent:   0.1, // legacy model: 0.1% spread
+	}
+	risk := entity.RiskConfig{
+		MaxPositionAmount: 1_000_000_000,
+		MaxDailyLoss:      1_000_000_000,
+		StopLossPercent:   5,
+		TakeProfitPercent: 10,
+		InitialCapital:    100000,
+	}
+
+	runner := NewBacktestRunner()
+	pctResult, err := runner.Run(context.Background(), RunInput{
+		Config: cfg, RiskConfig: risk, TradeAmount: 0.01,
+		PrimaryCandles: primary,
+	})
+	if err != nil {
+		t.Fatalf("percent run: %v", err)
+	}
+
+	cfg.SlippageModel = "orderbook"
+	obResult, err := runner.Run(context.Background(), RunInput{
+		Config: cfg, RiskConfig: risk, TradeAmount: 0.01,
+		PrimaryCandles:  primary,
+		FillPriceSource: replay,
+	})
+	if err != nil {
+		t.Fatalf("orderbook run: %v", err)
+	}
+
+	if pctResult.Summary.TotalTrades == 0 {
+		t.Skip("baseline produced no trades — extend the sine to ensure signal coverage")
+	}
+	if pctResult.Summary.FinalBalance == obResult.Summary.FinalBalance {
+		t.Fatalf("expected different final balances (orderbook spread is 10x wider), got both = %f",
+			pctResult.Summary.FinalBalance)
+	}
+}
+
+// TestBacktestRunner_OrderbookReplayMissingSourceErrors makes sure runner
+// rejects "orderbook" without a FillPriceSource — the handler is responsible
+// for loading snapshots, not the runner.
+func TestBacktestRunner_OrderbookReplayMissingSourceErrors(t *testing.T) {
+	primary := []entity.Candle{
+		{Time: 1, Open: 100, High: 100, Low: 100, Close: 100},
+		{Time: 2, Open: 100, High: 100, Low: 100, Close: 100},
+	}
+	runner := NewBacktestRunner()
+	_, err := runner.Run(context.Background(), RunInput{
+		Config: entity.BacktestConfig{
+			Symbol:          "BTC_JPY",
+			SymbolID:        7,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   1, ToTimestamp: 2,
+			InitialBalance: 100000,
+			SlippageModel:  "orderbook",
+		},
+		RiskConfig:     entity.RiskConfig{InitialCapital: 100000, StopLossPercent: 5},
+		TradeAmount:    0.01,
+		PrimaryCandles: primary,
+	})
+	if err == nil {
+		t.Fatal("expected error when slippageModel=orderbook but no FillPriceSource")
 	}
 }

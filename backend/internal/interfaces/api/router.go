@@ -152,6 +152,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.WalkForwardResultRepo != nil {
 			opts = append(opts, handler.WithWalkForwardRepo(deps.WalkForwardResultRepo))
 		}
+		if deps.MarketDataService != nil {
+			opts = append(opts, handler.WithMarketDataService(deps.MarketDataService))
+		}
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		// PR-12: profile discovery endpoints used by the FE backtest picker.
 		// The same profilesBaseDir default is used so /profiles and

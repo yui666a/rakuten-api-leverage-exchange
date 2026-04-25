@@ -23,6 +23,14 @@ type RunInput struct {
 	PrimaryCandles []entity.Candle
 	HigherCandles  []entity.Candle
 
+	// FillPriceSource overrides the default percent-based slippage model.
+	// When nil, the runner picks one based on Config.SlippageModel:
+	//   - "" / "percent" → LegacyPercentSlippage from SpreadPercent / SlippagePercent
+	//   - "orderbook"    → constructed by the caller and supplied here (the
+	//                      runner does not own a repo handle).
+	// Mutually exclusive with Config.SlippageModel; pass exactly one.
+	FillPriceSource infra.FillPriceSource
+
 	// BBSqueezeLookback is the window (bars) the IndicatorHandler uses to
 	// detect a recent BB squeeze. cycle44: plumbed through from the
 	// profile's stance_rules.bb_squeeze_lookback so the legacy hardcoded
@@ -119,11 +127,30 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	}
 	riskMgr := usecase.NewRiskManager(riskCfg)
 
+	fillSource := input.FillPriceSource
+	if fillSource == nil {
+		switch input.Config.SlippageModel {
+		case "", "percent":
+			fillSource = infra.LegacyPercentSlippage{
+				SpreadPercent:   input.Config.SpreadPercent,
+				SlippagePercent: input.Config.SlippagePercent,
+			}
+		case "orderbook":
+			// Caller asked for orderbook replay but did not supply a
+			// FillPriceSource. The handler layer is responsible for loading
+			// the snapshots from the repo because the runner has no repo
+			// dependency by design.
+			return nil, fmt.Errorf("slippage model %q requires FillPriceSource on RunInput", input.Config.SlippageModel)
+		default:
+			return nil, fmt.Errorf("unknown slippage model: %q", input.Config.SlippageModel)
+		}
+	}
 	sim := infra.NewSimExecutor(infra.SimConfig{
 		InitialBalance:    input.Config.InitialBalance,
 		SpreadPercent:     input.Config.SpreadPercent,
 		DailyCarryingCost: input.Config.DailyCarryCost,
 		SlippagePercent:   input.Config.SlippagePercent,
+		FillPriceSource:   fillSource,
 	})
 	simAdapter := &simExecutorAdapter{sim: sim}
 
