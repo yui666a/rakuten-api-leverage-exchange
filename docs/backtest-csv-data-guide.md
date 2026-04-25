@@ -2,12 +2,34 @@
 
 バックテスト実行 (`POST /api/v1/backtest/run`) で使う CSV の作成手順。
 
+## 0. 自動更新 (推奨)
+
+通常は **`csv-updater` コンテナ**が `backend/data/candles_*.csv` を毎時 5 分に自動で増分更新する。
+ホストの `backend/data/` を bind mount しているので、コンテナ側の更新がそのままバックテストに反映される。
+
+```bash
+# 起動状況
+docker compose ps csv-updater
+
+# ログ
+docker compose logs -f csv-updater
+
+# 手動で即時更新
+docker compose exec csv-updater /app/backend/scripts/fetch_incremental.sh
+```
+
+cron 式は `backend/Dockerfile.csv-updater` 内 (`5 * * * *`)。対象シンボルと足は
+`backend/scripts/fetch_incremental.sh` の `SYMBOL_PAIRS` / `INTERVALS` を編集する。
+
+以降の手順 (1 〜 8) は **新しいシンボル/足を追加する初回**、または **任意の期間を一括取得し直したい**ときの参考手順。
+
 ## 1. 前提
 
 - 作業ディレクトリ: リポジトリルート
 - 出力先（ホスト）: `backend/data/`
 - API 実行時に参照するパス: `data/candles_XXX_YYY.csv`
   - 例: `data/candles_LTC_JPY_PT15M.csv`
+- `csv-updater` は **CSV が既に存在する (symbol, interval) ペアにのみ追記**する。新しい組み合わせを追加するときは下記のページング取得スクリプトで初回ファイルを作ってから cron に任せる。
 
 ## 2. まずシンボル ID を確認する
 
@@ -113,14 +135,9 @@ awk -F, 'NR==1{next} {gsub(/"/,"",$4); t=$4+0; if (NR>2 && t<prev) dec++; prev=t
 
 - `decreases=0` なら時刻列は昇順で問題なし。
 
-## 6. コンテナへ反映（API から参照させる）
+## 6. コンテナへ反映
 
-`compose.yaml` では backend は named volume (`backend-data`) を使うため、必要ならコピーする。
-
-```bash
-docker compose cp backend/data/candles_LTC_JPY_PT15M.csv backend:/app/backend/data/candles_LTC_JPY_PT15M.csv
-docker compose cp backend/data/candles_LTC_JPY_PT1H.csv  backend:/app/backend/data/candles_LTC_JPY_PT1H.csv
-```
+`compose.yaml` の backend は `./backend/data` を bind mount しているので、ホストでファイルを更新するだけで即コンテナに反映される。コピー操作は不要。
 
 確認:
 
