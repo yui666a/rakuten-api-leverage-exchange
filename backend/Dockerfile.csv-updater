@@ -1,0 +1,19 @@
+FROM alpine:3.20
+
+RUN apk add --no-cache bash curl jq tzdata coreutils gawk
+
+ENV TZ=Asia/Tokyo
+ENV CSV_OUT_DIR=/app/backend/data
+
+WORKDIR /app/backend
+
+COPY scripts/fetch_incremental.sh /app/backend/scripts/fetch_incremental.sh
+COPY scripts/csv-updater-entrypoint.sh /usr/local/bin/csv-updater-entrypoint.sh
+RUN chmod +x /app/backend/scripts/fetch_incremental.sh /usr/local/bin/csv-updater-entrypoint.sh
+
+# crond reads /etc/crontabs/root by default in alpine.
+# Run hourly at minute 5 (avoid edge of API rate windows on the dot).
+RUN printf '5 * * * * /app/backend/scripts/fetch_incremental.sh >> /proc/1/fd/1 2>&1\n' \
+  > /etc/crontabs/root
+
+ENTRYPOINT ["/usr/local/bin/csv-updater-entrypoint.sh"]

@@ -7,11 +7,12 @@ services:
       - ./backend/.env
     environment:
       SERVER_PORT: "8080"
-      DATABASE_PATH: /app/backend/data/trading.db
+      DATABASE_PATH: /app/backend/db/trading.db
     ports:
       - "38080:8080"
     volumes:
-      - backend-data:/app/backend/data
+      - ./backend/data:/app/backend/data
+      - backend-db:/app/backend/db
       - ./backend/profiles:/app/backend/profiles:ro
     restart: unless-stopped
     healthcheck:
@@ -37,5 +38,17 @@ services:
       - /app/frontend/node_modules
     restart: unless-stopped
 
+  csv-updater:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.csv-updater
+    volumes:
+      - ./backend/data:/app/backend/data
+    environment:
+      TZ: Asia/Tokyo
+      RUN_ON_START: "1"
+    restart: unless-stopped
+
 volumes:
-  backend-data:
+  backend-db:
+

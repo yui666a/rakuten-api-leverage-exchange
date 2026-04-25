@@ -20,6 +20,17 @@
 - Frontend: `localhost:33000` (コンテナ内 3000)
 - API ベース URL: `http://localhost:38080/api/v1`
 
+### サービス構成
+
+| サービス | 役割 | マウント |
+|---|---|---|
+| `backend` | Go API サーバ + EventDrivenPipeline | CSV: `./backend/data` (bind), DB: `backend-db` (named volume), `backend/profiles` (ro) |
+| `frontend` | Vite 開発サーバ | `./frontend` (bind) |
+| `csv-updater` | バックテスト用 CSV を毎時 1 回自動更新する cron コンテナ (alpine + crond) | `./backend/data` (bind) |
+
+- DB (`trading.db`) は **named volume** に隔離。Docker Desktop の VirtioFS で SQLite WAL が壊れる事象を回避するため、bind mount してはいけない。
+- CSV は **bind mount** なのでホスト側で直接読み書き可能。`csv-updater` がここに書き込む。
+
 ## Development
 
 - コード変更後は `docker compose up --build -d` で再ビルドして動作確認。

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { createChart, CandlestickSeries, LineSeries, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
+import { createChart, CandlestickSeries, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
+import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
 import { ADXChart } from './ADXChart'
 import { MACDChart } from './MACDChart'
 import { RSIChart } from './RSIChart'
@@ -438,6 +439,18 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
+          const seconds = time as number
+          const showDate =
+            tickMarkType === TickMarkType.Year ||
+            tickMarkType === TickMarkType.Month ||
+            tickMarkType === TickMarkType.DayOfMonth
+          return formatChartTickJst(seconds, showDate)
+        },
+      },
+      localization: {
+        locale: 'ja-JP',
+        timeFormatter: (time: Time) => formatChartTimeJst(time as number),
       },
     })
 
