@@ -15,6 +15,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
 // EventDrivenPipeline replaces the polling-based TradingPipeline with an
@@ -48,6 +49,7 @@ type EventDrivenPipeline struct {
 	stateSyncInterval time.Duration
 	stopLossPercent   float64
 	takeProfitPercent float64
+	sorConfig         sor.Config
 
 	// sleepFn is used by syncState for retry backoff (test-injectable).
 	sleepFn func(time.Duration)
@@ -61,6 +63,7 @@ type EventDrivenPipelineConfig struct {
 	MinConfidence     float64
 	StopLossPercent   float64
 	TakeProfitPercent float64
+	SOR               sor.Config
 }
 
 func NewEventDrivenPipeline(
@@ -80,6 +83,7 @@ func NewEventDrivenPipeline(
 		stateSyncInterval: cfg.StateSyncInterval,
 		stopLossPercent:   cfg.StopLossPercent,
 		takeProfitPercent: cfg.TakeProfitPercent,
+		sorConfig:         cfg.SOR,
 		orderClient:       orderClient,
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
@@ -262,8 +266,17 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	// Create LiveSource for tick-to-candle conversion.
 	liveSource := live.NewLiveSource(snap.symbolID, "PT15M")
 
-	// Create RealExecutor for live order execution.
-	executor := live.NewRealExecutor(p.orderClient, snap.symbolID, 0)
+	// Create RealExecutor for live order execution. The SOR is configured
+	// via env vars at startup (see loadSORConfig in main.go); when the
+	// strategy is "market" the router degrades to the legacy single-MARKET
+	// path so this branch stays bit-identical for callers who don't opt in.
+	executorOpts := []live.RealExecutorOption{
+		live.WithSOR(sor.New(p.sorConfig)),
+	}
+	if p.marketDataSvc != nil {
+		executorOpts = append(executorOpts, live.WithTouchSource(p.marketDataSvc))
+	}
+	executor := live.NewRealExecutor(p.orderClient, snap.symbolID, 0, executorOpts...)
 
 	// Sync positions from API into the executor at startup.
 	if err := executor.SyncPositions(ctx); err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
@@ -126,6 +127,7 @@ func main() {
 			MinConfidence:     cfg.Trading.MinConfidence,
 			StopLossPercent:   cfg.Risk.StopLossPercent,
 			TakeProfitPercent: cfg.Risk.TakeProfitPercent,
+			SOR:               loadSORConfig(),
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -256,6 +258,40 @@ const (
 	wsInitialBackoff     = 1 * time.Second
 	wsMaxBackoff         = 60 * time.Second
 )
+
+// loadSORConfig reads SOR_* env vars and returns a sor.Config. Unset /
+// unparseable values fall back to sor.New defaults.
+//
+// Env vars (all optional):
+//   - SOR_STRATEGY            "market" (default) | "post_only_escalate"
+//   - SOR_LIMIT_OFFSET_TICKS  integer ticks inside the touch (default 1)
+//   - SOR_TICK_SIZE           float JPY (default 0.1 — LTC/JPY tick)
+//   - SOR_ESCALATE_AFTER_MS   integer ms (default 30000)
+//   - SOR_MIN_INTERVAL_MS     integer ms (default 250 — > venue 200ms limit)
+func loadSORConfig() sor.Config {
+	cfg := sor.Config{Strategy: sor.StrategyMarket}
+	if v := strings.TrimSpace(os.Getenv("SOR_STRATEGY")); v != "" {
+		switch strings.ToLower(v) {
+		case string(sor.StrategyMarket):
+			cfg.Strategy = sor.StrategyMarket
+		case string(sor.StrategyPostOnlyEscalate):
+			cfg.Strategy = sor.StrategyPostOnlyEscalate
+		}
+	}
+	if v, err := strconv.Atoi(os.Getenv("SOR_LIMIT_OFFSET_TICKS")); err == nil && v >= 0 {
+		cfg.LimitOffsetTicks = v
+	}
+	if v, err := strconv.ParseFloat(os.Getenv("SOR_TICK_SIZE"), 64); err == nil && v > 0 {
+		cfg.TickSize = v
+	}
+	if v, err := strconv.ParseInt(os.Getenv("SOR_ESCALATE_AFTER_MS"), 10, 64); err == nil && v > 0 {
+		cfg.EscalateAfterMs = v
+	}
+	if v, err := strconv.ParseInt(os.Getenv("SOR_MIN_INTERVAL_MS"), 10, 64); err == nil && v > 0 {
+		cfg.MinIntervalMs = v
+	}
+	return cfg
+}
 
 // loadPersistenceConfig builds a PersistenceConfig from environment variables,
 // falling back to DefaultPersistenceConfig() for anything unset or unparseable.

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
 // mockOrderClient implements repository.OrderClient for testing.
@@ -318,5 +320,177 @@ func TestRealExecutor_OpenReversesOpposite(t *testing.T) {
 	}
 	if positions[0].Side != entity.OrderSideSell {
 		t.Fatalf("expected SELL, got %s", positions[0].Side)
+	}
+}
+
+// fakeTouch is a minimal TouchSource for SOR-related tests.
+type fakeTouch struct {
+	bestBid, bestAsk float64
+	timestamp        int64
+	found            bool
+}
+
+func (f *fakeTouch) LatestBefore(_ context.Context, _ int64, _ int64) (entity.Orderbook, bool, error) {
+	if !f.found {
+		return entity.Orderbook{}, false, nil
+	}
+	return entity.Orderbook{Timestamp: f.timestamp, BestBid: f.bestBid, BestAsk: f.bestAsk}, true, nil
+}
+
+// sorMockClient extends mockOrderClient with cancel + getOrders hooks so we
+// can drive the post-only escalation path without cross-coupling existing
+// market-only tests.
+type sorMockClient struct {
+	mockOrderClient
+	getOrdersFn   func(ctx context.Context, symbolID int64) ([]entity.Order, error)
+	cancelOrderFn func(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error)
+}
+
+func (m *sorMockClient) GetOrders(ctx context.Context, symbolID int64) ([]entity.Order, error) {
+	if m.getOrdersFn != nil {
+		return m.getOrdersFn(ctx, symbolID)
+	}
+	return nil, nil
+}
+
+func (m *sorMockClient) CancelOrder(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error) {
+	if m.cancelOrderFn != nil {
+		return m.cancelOrderFn(ctx, symbolID, orderID)
+	}
+	return nil, nil
+}
+
+func TestRealExecutor_PostOnlyEscalate_LimitFillsBeforeDeadline(t *testing.T) {
+	seen := []entity.OrderRequest{}
+	mock := &sorMockClient{}
+	mock.createOrderFn = func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+		seen = append(seen, req)
+		// Return a LIMIT order that immediately fills (RemainingAmount=0
+		// after one poll).
+		return []entity.Order{{ID: 500, Price: 8999.9, RemainingAmount: 0.01}}, nil
+	}
+	mock.getOrdersFn = func(ctx context.Context, symbolID int64) ([]entity.Order, error) {
+		// Order has filled — return empty so RealExecutor treats it as filled.
+		return nil, nil
+	}
+
+	touch := &fakeTouch{bestBid: 9000, bestAsk: 9011.3, timestamp: 1500, found: true}
+
+	router := sor.New(sor.Config{
+		Strategy:         sor.StrategyPostOnlyEscalate,
+		LimitOffsetTicks: 1,
+		TickSize:         0.1,
+		EscalateAfterMs:  1000,
+	})
+	exec := NewRealExecutor(mock, 7, 0,
+		WithSOR(router),
+		WithTouchSource(touch),
+		WithPollInterval(50*time.Millisecond),
+	)
+
+	ev, err := exec.Open(7, entity.OrderSideBuy, 9000, 0.01, "post_only_test", 2000)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if ev.OrderID != 500 {
+		t.Fatalf("expected order 500, got %d", ev.OrderID)
+	}
+	// The first venue call must be a post-only LIMIT.
+	if got := len(seen); got < 1 {
+		t.Fatalf("expected at least 1 venue call, got %d", got)
+	}
+	first := seen[0].OrderData
+	if first.OrderType != entity.OrderTypeLimit {
+		t.Fatalf("expected LIMIT first, got %s", first.OrderType)
+	}
+	if first.PostOnly == nil || !*first.PostOnly {
+		t.Fatalf("expected postOnly=true")
+	}
+	if first.Price == nil || *first.Price != 8999.9 {
+		t.Fatalf("expected price 8999.9, got %v", first.Price)
+	}
+}
+
+func TestRealExecutor_PostOnlyEscalate_FallsBackOnRejection(t *testing.T) {
+	mock := &sorMockClient{}
+	calls := 0
+	mock.createOrderFn = func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+		calls++
+		if calls == 1 {
+			// Venue rejects post-only LIMIT (would have crossed).
+			return nil, fmt.Errorf("post-only would have crossed")
+		}
+		// Fallback MARKET succeeds.
+		return []entity.Order{{ID: 700, Price: 9011.3}}, nil
+	}
+
+	touch := &fakeTouch{bestBid: 9000, bestAsk: 9011.3, timestamp: 1500, found: true}
+	router := sor.New(sor.Config{
+		Strategy:         sor.StrategyPostOnlyEscalate,
+		LimitOffsetTicks: 1,
+		TickSize:         0.1,
+		EscalateAfterMs:  500,
+	})
+	exec := NewRealExecutor(mock, 7, 0,
+		WithSOR(router),
+		WithTouchSource(touch),
+		WithPollInterval(50*time.Millisecond),
+	)
+
+	ev, err := exec.Open(7, entity.OrderSideBuy, 9000, 0.01, "rejection_test", 2000)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if ev.OrderID != 700 {
+		t.Fatalf("expected fallback order 700, got %d", ev.OrderID)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 venue calls (LIMIT rejection + MARKET fallback), got %d", calls)
+	}
+}
+
+func TestRealExecutor_PostOnlyEscalate_DeadlineEscalatesToMarket(t *testing.T) {
+	mock := &sorMockClient{}
+	calls := 0
+	mock.createOrderFn = func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+		calls++
+		if calls == 1 {
+			return []entity.Order{{ID: 800, Price: 8999.9, RemainingAmount: 0.01}}, nil
+		}
+		// MARKET fallback after deadline.
+		return []entity.Order{{ID: 801, Price: 9011.3}}, nil
+	}
+	mock.getOrdersFn = func(ctx context.Context, symbolID int64) ([]entity.Order, error) {
+		// Order remains resting — never fills.
+		return []entity.Order{{ID: 800, Price: 8999.9, RemainingAmount: 0.01}}, nil
+	}
+	cancelCalled := false
+	mock.cancelOrderFn = func(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error) {
+		cancelCalled = true
+		return nil, nil
+	}
+
+	touch := &fakeTouch{bestBid: 9000, bestAsk: 9011.3, timestamp: 1500, found: true}
+	router := sor.New(sor.Config{
+		Strategy:         sor.StrategyPostOnlyEscalate,
+		LimitOffsetTicks: 1,
+		TickSize:         0.1,
+		EscalateAfterMs:  100, // very short so the test is fast
+	})
+	exec := NewRealExecutor(mock, 7, 0,
+		WithSOR(router),
+		WithTouchSource(touch),
+		WithPollInterval(20*time.Millisecond),
+	)
+
+	ev, err := exec.Open(7, entity.OrderSideBuy, 9000, 0.01, "deadline_test", 2000)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if ev.OrderID != 801 {
+		t.Fatalf("expected MARKET fallback order 801, got %d", ev.OrderID)
+	}
+	if !cancelCalled {
+		t.Fatal("expected CancelOrder to be called when deadline elapses")
 	}
 }
