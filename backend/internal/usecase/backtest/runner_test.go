@@ -436,3 +436,68 @@ func TestBacktestRunner_OrderbookReplayMissingSourceErrors(t *testing.T) {
 		t.Fatal("expected error when slippageModel=orderbook but no FillPriceSource")
 	}
 }
+
+// TestBacktestRunner_BookGateBlocksThinTradesEntirely confirms the runner
+// wires the pre-trade gate into RiskHandler. With a snapshot whose ask side
+// is far thinner than the requested lot, every signal must be rejected and
+// the run produces zero trades.
+func TestBacktestRunner_BookGateBlocksThinTradesEntirely(t *testing.T) {
+	primary := make([]entity.Candle, 0, 60)
+	baseTime := int64(1_770_000_000_000)
+	price := 100.0
+	for i := 0; i < 60; i++ {
+		price += math.Sin(float64(i)/5.0) * 1.5
+		ts := baseTime + int64(i)*15*60*1000
+		primary = append(primary, entity.Candle{
+			Open: price - 0.5, High: price + 1.0, Low: price - 1.0, Close: price, Time: ts,
+		})
+	}
+	// Each bar gets a 1-tick-deep snapshot — way below the 0.01 trade size.
+	snaps := make([]entity.Orderbook, 0, len(primary))
+	for _, c := range primary {
+		snaps = append(snaps, entity.Orderbook{
+			SymbolID:  7,
+			Timestamp: c.Time,
+			Asks:      []entity.OrderbookEntry{{Price: c.Close * 1.001, Amount: 0.0001}},
+			Bids:      []entity.OrderbookEntry{{Price: c.Close * 0.999, Amount: 0.0001}},
+			BestAsk:   c.Close * 1.001,
+			BestBid:   c.Close * 0.999,
+			MidPrice:  c.Close,
+		})
+	}
+	replay := newOrderbookReplayForTest(snaps)
+
+	cfg := entity.BacktestConfig{
+		Symbol:          "BTC_JPY",
+		SymbolID:        7,
+		PrimaryInterval: "PT15M",
+		FromTimestamp:   primary[0].Time,
+		ToTimestamp:     primary[len(primary)-1].Time,
+		InitialBalance:  100000,
+		SlippageModel:   "orderbook",
+	}
+	risk := entity.RiskConfig{
+		MaxPositionAmount: 1_000_000_000,
+		MaxDailyLoss:      1_000_000_000,
+		StopLossPercent:   5,
+		TakeProfitPercent: 10,
+		InitialCapital:    100000,
+		MaxSlippageBps:    50,
+		MaxBookSidePct:    30,
+	}
+	runner := NewBacktestRunner()
+	result, err := runner.Run(context.Background(), RunInput{
+		Config:          cfg,
+		RiskConfig:      risk,
+		TradeAmount:     0.01,
+		PrimaryCandles:  primary,
+		FillPriceSource: replay,
+		BookSource:      replay,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if result.Summary.TotalTrades != 0 {
+		t.Fatalf("expected book gate to block all trades, got %d", result.Summary.TotalTrades)
+	}
+}

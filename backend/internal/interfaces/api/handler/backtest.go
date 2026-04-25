@@ -17,6 +17,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
@@ -138,6 +139,12 @@ type runBacktestRequest struct {
 	MaxDailyLoss          float64 `json:"maxDailyLoss"`
 	MaxConsecutiveLosses  int     `json:"maxConsecutiveLosses"`
 	CooldownMinutes       int     `json:"cooldownMinutes"`
+	// Pre-trade orderbook depth gate (D). Both default to 0 (disabled) so
+	// existing requests run unchanged. Only meaningful with
+	// slippageModel="orderbook" because the percent path has no book to
+	// inspect — the runner silently drops the gate when BookSource is nil.
+	MaxSlippageBps float64 `json:"maxSlippageBps,omitempty"`
+	MaxBookSidePct float64 `json:"maxBookSidePct,omitempty"`
 
 	// PDCA extensions (spec §8.2). All optional; when ProfileName is set,
 	// the profile's values become the base and non-zero individual fields
@@ -292,13 +299,15 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	}
 
 	var fillSource infrabt.FillPriceSource
+	var bookSource booklimit.BookSource
 	if req.SlippageModel == "orderbook" {
-		var err error
-		fillSource, err = h.buildOrderbookFillSource(c.Request.Context(), cfg)
+		replay, err := h.buildOrderbookReplay(c.Request.Context(), cfg)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		fillSource = replay
+		bookSource = replay
 	}
 
 	result, err := runner.Run(context.Background(), bt.RunInput{
@@ -309,6 +318,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		BBSqueezeLookback: bbLookback,
 		PositionSizing:    positionSizing,
 		FillPriceSource:   fillSource,
+		BookSource:        bookSource,
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:     req.MaxPositionAmount,
 			MaxDailyLoss:          req.MaxDailyLoss,
@@ -319,6 +329,8 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 			InitialCapital:        req.InitialBalance,
 			MaxConsecutiveLosses:  req.MaxConsecutiveLosses,
 			CooldownMinutes:       req.CooldownMinutes,
+			MaxSlippageBps:        req.MaxSlippageBps,
+			MaxBookSidePct:        req.MaxBookSidePct,
 		},
 	})
 	if err != nil {
@@ -348,14 +360,16 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
-// buildOrderbookFillSource validates that enough L2 snapshots exist for the
-// requested run window and returns an OrderbookReplay-backed FillPriceSource.
+// buildOrderbookReplay validates that enough L2 snapshots exist for the
+// requested run window and returns the OrderbookReplay used both as the
+// simulator's FillPriceSource and as the pre-trade gate's BookSource.
+//
 // Returns a user-facing error (caller maps to HTTP 400) when:
 //   - the handler was constructed without a MarketDataService
 //   - the run window is open-ended (we need both endpoints to bound the load)
 //   - fewer than orderbookReplayMinCoverageRatio of the 5 s buckets in the
 //     window have a snapshot
-func (h *BacktestHandler) buildOrderbookFillSource(ctx context.Context, cfg entity.BacktestConfig) (infrabt.FillPriceSource, error) {
+func (h *BacktestHandler) buildOrderbookReplay(ctx context.Context, cfg entity.BacktestConfig) (*infrabt.OrderbookReplay, error) {
 	if h.marketDataSvc == nil {
 		return nil, errors.New("orderbook replay unavailable: backend was started without market data persistence")
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/live"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
@@ -293,6 +294,18 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	riskHandler := &backtest.RiskHandler{
 		RiskManager: p.riskMgr,
 		TradeAmount: snap.tradeAmount,
+	}
+	// Pre-trade orderbook depth gate. Live mode keeps the gate forgiving on
+	// missing/stale snapshots (AllowOnMissingBook=true) so a transient WS
+	// gap does not block trading; the simulator path uses the strict mode.
+	if cfg := p.riskMgr.GetStatus().Config; cfg.MaxSlippageBps > 0 || cfg.MaxBookSidePct > 0 {
+		riskHandler.BookGate = booklimit.New(p.marketDataSvc, booklimit.Config{
+			MaxSlippageBps:     cfg.MaxSlippageBps,
+			MaxBookSidePct:     cfg.MaxBookSidePct,
+			TopN:               booklimit.DefaultTopN,
+			StaleAfterMillis:   60_000,
+			AllowOnMissingBook: true,
+		})
 	}
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 

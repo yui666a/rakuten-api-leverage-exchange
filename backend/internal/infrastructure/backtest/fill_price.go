@@ -112,6 +112,15 @@ func NewOrderbookReplay(snapshots []entity.Orderbook, staleAfterMillis int64) *O
 // for the pre-flight coverage check.
 func (o *OrderbookReplay) SnapshotCount() int { return len(o.snapshots) }
 
+// LatestBefore implements booklimit.BookSource: it returns the snapshot whose
+// timestamp is the most recent at or before ts and within the stale window.
+// Same lookup primitive used by FillPrice — exposed so the pre-trade gate can
+// share one OrderbookReplay instance with the simulator.
+func (o *OrderbookReplay) LatestBefore(_ context.Context, _ int64, ts int64) (entity.Orderbook, bool, error) {
+	snap, ok := o.lookup(ts)
+	return snap, ok, nil
+}
+
 // FillPrice picks the most recent snapshot at or before ts and walks the
 // appropriate side until the requested amount is filled. ThinBookError is
 // returned when (a) no snapshot is in range, or (b) the side is too thin.

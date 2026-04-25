@@ -11,6 +11,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
@@ -30,6 +31,13 @@ type RunInput struct {
 	//                      runner does not own a repo handle).
 	// Mutually exclusive with Config.SlippageModel; pass exactly one.
 	FillPriceSource infra.FillPriceSource
+
+	// BookSource feeds the pre-trade orderbook depth gate. nil disables the
+	// gate entirely; the runner then ignores RiskConfig.MaxSlippageBps and
+	// RiskConfig.MaxBookSidePct because they would have nothing to consult.
+	// In practice the same OrderbookReplay used as FillPriceSource is also
+	// passed here so backtests share one data source for fills and gating.
+	BookSource booklimit.BookSource
 
 	// BBSqueezeLookback is the window (bars) the IndicatorHandler uses to
 	// detect a recent BB squeeze. cycle44: plumbed through from the
@@ -185,6 +193,21 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		riskHandler.Sizer = positionsize.New(ps, defaults)
 		riskHandler.Equity = EquityFunc(func() float64 { return sim.Balance() })
 		riskHandler.Peak = NewPeakTracker(input.Config.InitialBalance)
+	}
+	// Pre-trade book depth gate. The runner only attaches it when both a
+	// BookSource and at least one configured threshold are present —
+	// otherwise the legacy backtest path stays bit-identical.
+	if input.BookSource != nil && (riskCfg.MaxSlippageBps > 0 || riskCfg.MaxBookSidePct > 0) {
+		riskHandler.BookGate = booklimit.New(input.BookSource, booklimit.Config{
+			MaxSlippageBps: riskCfg.MaxSlippageBps,
+			MaxBookSidePct: riskCfg.MaxBookSidePct,
+			TopN:           booklimit.DefaultTopN,
+			// Backtest enforces the staleness check (60 s window matches the
+			// orderbook-replay simulator) and rejects missing snapshots so
+			// gaps in the persisted history do not silently waive the gate.
+			StaleAfterMillis:   60_000,
+			AllowOnMissingBook: false,
+		})
 	}
 	executionHandler := &ExecutionHandler{
 		Executor:    simAdapter,

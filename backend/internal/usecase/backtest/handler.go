@@ -14,6 +14,7 @@ import (
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/indicator"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
@@ -326,6 +327,12 @@ type RiskHandler struct {
 	// MinConfidence mirrors pipeline.minConfidence so the sizer's confidence
 	// scaling matches the live path's cut-off semantics.
 	MinConfidence float64
+	// BookGate is an optional pre-trade gate that inspects the current
+	// orderbook depth before approving a signal. nil disables the gate.
+	BookGate *booklimit.Gate
+	// BookGateRejects counts how many signals the gate vetoed across
+	// the run, broken down by reason. Used for backtest reports.
+	BookGateRejects map[string]int
 }
 
 func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.Event, error) {
@@ -381,6 +388,20 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 	check := h.RiskManager.CheckOrderAt(ctx, time.UnixMilli(signalEvent.Timestamp), proposal)
 	if !check.Approved {
 		return nil, nil
+	}
+
+	// Pre-trade orderbook depth gate. Runs after RiskManager so the gate
+	// only sees signals that have already cleared position / daily-loss /
+	// cooldown checks. A nil BookGate short-circuits to allow.
+	if h.BookGate != nil {
+		decision := h.BookGate.Check(ctx, signalEvent.Signal.SymbolID, side, amount, signalEvent.Timestamp)
+		if !decision.Allow {
+			if h.BookGateRejects == nil {
+				h.BookGateRejects = make(map[string]int)
+			}
+			h.BookGateRejects[decision.Reason]++
+			return nil, nil
+		}
 	}
 
 	return []entity.Event{

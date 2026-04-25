@@ -51,6 +51,10 @@ type RiskConfig struct {
 	InitialCapital        float64
 	MaxConsecutiveLosses  int
 	CooldownMinutes       int
+	// Pre-trade orderbook depth gate. Both default to 0 (disabled) so the
+	// gate stays opt-in until the user has confidence in the live cache.
+	MaxSlippageBps float64
+	MaxBookSidePct float64
 }
 
 type RakutenConfig struct {
@@ -77,6 +81,8 @@ func Load() *Config {
 			InitialCapital:        getEnvFloat("RISK_INITIAL_CAPITAL", 10000),
 			MaxConsecutiveLosses:  getEnvInt("RISK_MAX_CONSECUTIVE_LOSSES", 3),
 			CooldownMinutes:       getEnvInt("RISK_COOLDOWN_MINUTES", 30),
+			MaxSlippageBps:        getEnvFloat("RISK_MAX_SLIPPAGE_BPS", 0),
+			MaxBookSidePct:        getEnvFloat("RISK_MAX_BOOK_SIDE_PCT", 0),
 		},
 		Rakuten: RakutenConfig{
 			BaseURL:   getEnv("RAKUTEN_API_BASE_URL", "https://exchange.rakuten-wallet.co.jp"),
