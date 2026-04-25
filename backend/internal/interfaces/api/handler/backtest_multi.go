@@ -35,6 +35,16 @@ type runMultiBacktestRequest struct {
 	MaxPositionAmount     float64 `json:"maxPositionAmount"`
 	MaxDailyLoss          float64 `json:"maxDailyLoss"`
 
+	// Execution-quality knobs propagated to every period (PR-Q3 follow-up).
+	// Empty / zero values fall back to legacy behaviour (percent slippage,
+	// no fees, no book gate). Mirrors runBacktestRequest.
+	SlippageModel        string  `json:"slippageModel,omitempty"`
+	MakerFillProbability float64 `json:"makerFillProbability,omitempty"`
+	MakerFeeRate         float64 `json:"makerFeeRate,omitempty"`
+	TakerFeeRate         float64 `json:"takerFeeRate,omitempty"`
+	MaxSlippageBps       float64 `json:"maxSlippageBps,omitempty"`
+	MaxBookSidePct       float64 `json:"maxBookSidePct,omitempty"`
+
 	Periods []entity.PeriodSpec `json:"periods" binding:"required"`
 
 	ProfileName    string  `json:"profileName,omitempty"`
@@ -166,16 +176,20 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			}
 
 			cfg := entity.BacktestConfig{
-				Symbol:           primary.Symbol,
-				SymbolID:         primary.SymbolID,
-				PrimaryInterval:  primary.Interval,
-				HigherTFInterval: "PT1H",
-				FromTimestamp:    fromTs,
-				ToTimestamp:      toTs,
-				InitialBalance:   shared.InitialBalance,
-				SpreadPercent:    shared.Spread,
-				DailyCarryCost:   shared.CarryingCost,
-				SlippagePercent:  shared.Slippage,
+				Symbol:               primary.Symbol,
+				SymbolID:             primary.SymbolID,
+				PrimaryInterval:      primary.Interval,
+				HigherTFInterval:     "PT1H",
+				FromTimestamp:        fromTs,
+				ToTimestamp:          toTs,
+				InitialBalance:       shared.InitialBalance,
+				SpreadPercent:        shared.Spread,
+				DailyCarryCost:       shared.CarryingCost,
+				SlippagePercent:      shared.Slippage,
+				SlippageModel:        req.SlippageModel,
+				MakerFillProbability: req.MakerFillProbability,
+				MakerFeeRate:         req.MakerFeeRate,
+				TakerFeeRate:         req.TakerFeeRate,
 			}
 			if len(higherCandles) == 0 {
 				cfg.HigherTFInterval = ""
@@ -201,6 +215,10 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				bbLookback = resolved.StanceRules.BBSqueezeLookback
 				positionSizing = resolved.Risk.PositionSizing
 			}
+			fillSrc, bookSrc, buildErr := h.buildExecutionSourcesForCfg(c.Request.Context(), cfg)
+			if buildErr != nil {
+				return nil, bt.RunInput{}, buildErr
+			}
 			input := bt.RunInput{
 				Config:            cfg,
 				TradeAmount:       shared.TradeAmount,
@@ -208,6 +226,8 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: bbLookback,
 				PositionSizing:    positionSizing,
+				FillPriceSource:   fillSrc,
+				BookSource:        bookSrc,
 				RiskConfig: entity.RiskConfig{
 					MaxPositionAmount:     shared.MaxPositionAmount,
 					MaxDailyLoss:          shared.MaxDailyLoss,
@@ -216,6 +236,8 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 					TrailingATRMultiplier: shared.TrailingATRMultiplier,
 					TakeProfitPercent:     shared.TakeProfitPercent,
 					InitialCapital:        shared.InitialBalance,
+					MaxSlippageBps:        req.MaxSlippageBps,
+					MaxBookSidePct:        req.MaxBookSidePct,
 				},
 			}
 			return runner, input, nil
