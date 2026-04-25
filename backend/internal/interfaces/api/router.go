@@ -48,6 +48,11 @@ type Dependencies struct {
 	// ExecutionQualityReporter (optional). When set, GET /api/v1/execution-quality
 	// is exposed; when nil the endpoint returns 503.
 	ExecutionQualityReporter *quality.Reporter
+
+	// ExecutionQualityRepo (optional). When set, the endpoint serves the
+	// most recent persisted snapshot (cheap) and only falls back to the
+	// reporter on cache miss / `?fresh=true`.
+	ExecutionQualityRepo repository.ExecutionQualityRepository
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -121,6 +126,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			defaultSymbol = func() int64 { return pipeline.SymbolID() }
 		}
 		eqHandler := handler.NewExecutionQualityHandler(deps.ExecutionQualityReporter, defaultSymbol)
+		if deps.ExecutionQualityRepo != nil {
+			eqHandler = eqHandler.WithSnapshotRepo(deps.ExecutionQualityRepo)
+		}
 		v1.GET("/execution-quality", eqHandler.Get)
 	}
 

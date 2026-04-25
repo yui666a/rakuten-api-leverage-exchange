@@ -219,6 +219,17 @@ func main() {
 			return s.ManuallyStopped || s.TradingHalted, s.HaltReason
 		}),
 	)
+	executionQualityRepo := database.NewExecutionQualityRepo(db)
+
+	// Snapshot worker. Polls the reporter every 60 s and stores the result
+	// so /execution-quality can serve cached values without hitting the
+	// venue. Retention sweep removes rows older than 7 days.
+	go startExecutionQualitySnapshotWorker(
+		context.Background(),
+		executionQualityReporter,
+		executionQualityRepo,
+		pipeline,
+	)
 
 	router := api.NewRouter(api.Dependencies{
 		RiskManager:         riskMgr,
@@ -238,6 +249,7 @@ func main() {
 		OnSymbolSwitch:        onSymbolSwitch,
 		DailyPnLCalculator:    dailyPnLCalc,
 		ExecutionQualityReporter: executionQualityReporter,
+		ExecutionQualityRepo:     executionQualityRepo,
 	})
 
 	sigCh := make(chan os.Signal, 1)
@@ -699,5 +711,77 @@ func runBacktestRetentionCleanup(ctx context.Context, repo repository.BacktestRe
 	}
 	if deleted > 0 {
 		slog.Info("backtest retention cleanup completed", "deleted", deleted, "retentionDays", retentionDays)
+	}
+}
+
+// startExecutionQualitySnapshotWorker periodically captures the live
+// execution-quality report and persists it so the API can serve cached
+// values. Also sweeps rows older than 7 days once a day.
+//
+// Runs forever; the process lifecycle (signal handling in main) bounds it.
+func startExecutionQualitySnapshotWorker(
+	ctx context.Context,
+	reporter *quality.Reporter,
+	repo *database.ExecutionQualityRepo,
+	pipeline *EventDrivenPipeline,
+) {
+	if reporter == nil || repo == nil || pipeline == nil {
+		return
+	}
+	const (
+		captureInterval = 60 * time.Second
+		retentionDays   = 7
+	)
+
+	captureTicker := time.NewTicker(captureInterval)
+	defer captureTicker.Stop()
+	retentionTicker := time.NewTicker(24 * time.Hour)
+	defer retentionTicker.Stop()
+
+	capture := func() {
+		symbolID := pipeline.SymbolID()
+		if symbolID <= 0 {
+			return
+		}
+		report, err := reporter.Build(ctx, symbolID, 86400)
+		if err != nil {
+			slog.Warn("execution-quality snapshot failed", "error", err)
+			return
+		}
+		if err := repo.Save(ctx, symbolID, time.Now().UnixMilli(), report); err != nil {
+			slog.Warn("execution-quality snapshot save failed", "error", err)
+		}
+	}
+	sweep := func() {
+		cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).UnixMilli()
+		deleted, err := repo.PurgeOlderThan(ctx, cutoff)
+		if err != nil {
+			slog.Warn("execution-quality retention sweep failed", "error", err)
+			return
+		}
+		if deleted > 0 {
+			slog.Info("execution-quality retention sweep", "deleted", deleted, "retentionDays", retentionDays)
+		}
+	}
+
+	// Warm up: short delay then capture once so the cache is populated
+	// before the first user request.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(15 * time.Second):
+	}
+	capture()
+	sweep()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-captureTicker.C:
+			capture()
+		case <-retentionTicker.C:
+			sweep()
+		}
 	}
 }
