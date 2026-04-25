@@ -23,6 +23,7 @@ type RiskManager struct {
 	config            entity.RiskConfig
 	mu                sync.RWMutex
 	balance           float64
+	peakBalance       float64 // running peak for drawdown computation
 	dailyLoss         float64
 	positions         []entity.Position
 	manualStop        bool
@@ -30,15 +31,97 @@ type RiskManager struct {
 	consecutiveLosses int
 	cooldownUntil     time.Time
 	currentATR        float64 // latest ATR value for dynamic stop-loss
+
+	// Browser-notification plumbing. realtimeHub is optional: when nil all
+	// publish helpers are no-ops, so unit tests that ignore the hub keep
+	// working unchanged.
+	realtimeHub *RealtimeHub
+	// Edge-trigger latches so we publish a warning once per crossing instead
+	// of every single Update call.
+	ddWarnFired         bool
+	ddCriticalFired     bool
+	dailyLossWarnFired  bool
+	consecutiveLossFlag bool
 }
 
 func NewRiskManager(config entity.RiskConfig) *RiskManager {
 	return &RiskManager{
 		config:         config,
 		balance:        config.InitialCapital,
+		peakBalance:    config.InitialCapital,
 		highWaterMarks: make(map[int64]float64),
 	}
 }
+
+// Risk-event taxonomy. The string values land in the JSON payload sent to the
+// frontend so they double as the Notification kind for the UI to switch on.
+type RiskEventKind string
+
+const (
+	RiskEventDDWarning        RiskEventKind = "dd_warning"
+	RiskEventDDCritical       RiskEventKind = "dd_critical"
+	RiskEventConsecutiveLoss  RiskEventKind = "consecutive_losses"
+	RiskEventDailyLossWarning RiskEventKind = "daily_loss_warning"
+	RiskEventCooldownStarted  RiskEventKind = "cooldown_started"
+)
+
+// RiskEventSeverity influences the icon / sound the frontend picks. Kept as
+// a separate field rather than inferred from Kind so UI rules can adapt
+// without a backend change.
+type RiskEventSeverity string
+
+const (
+	RiskSeverityInfo     RiskEventSeverity = "info"
+	RiskSeverityWarning  RiskEventSeverity = "warning"
+	RiskSeverityCritical RiskEventSeverity = "critical"
+)
+
+// RiskEventPayload is the JSON shape pushed on the "risk_event" channel.
+type RiskEventPayload struct {
+	Kind       RiskEventKind     `json:"kind"`
+	Severity   RiskEventSeverity `json:"severity"`
+	Message    string            `json:"message"`
+	Balance    float64           `json:"balance,omitempty"`
+	Peak       float64           `json:"peak,omitempty"`
+	DDPct      float64           `json:"ddPct,omitempty"`
+	DailyLoss  float64           `json:"dailyLoss,omitempty"`
+	MaxDaily   float64           `json:"maxDaily,omitempty"`
+	StreakLen  int               `json:"streakLen,omitempty"`
+	CooldownTo int64             `json:"cooldownTo,omitempty"`
+	Timestamp  int64             `json:"timestamp"`
+}
+
+// SetRealtimeHub wires browser-notification publishing. nil clears the hub.
+func (rm *RiskManager) SetRealtimeHub(hub *RealtimeHub) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.realtimeHub = hub
+}
+
+// publishRisk best-effort sends a risk_event. Lock must NOT be held by the
+// caller because Publish iterates subscribers and may block on slow channels;
+// keep the publish off the hot RW path.
+func (rm *RiskManager) publishRisk(p RiskEventPayload) {
+	if rm.realtimeHub == nil {
+		return
+	}
+	if p.Timestamp == 0 {
+		p.Timestamp = time.Now().UnixMilli()
+	}
+	if err := rm.realtimeHub.PublishData("risk_event", 0, p); err != nil {
+		// Notifications are advisory; log at debug to avoid flooding under
+		// fan-out backpressure.
+	}
+}
+
+// Threshold defaults for risk-event triggers. Kept here so unit tests pin the
+// exact crossings.
+const (
+	ddWarningPct      = 15.0
+	ddCriticalPct     = 18.0
+	dailyLossWarnFrac = 0.5
+	consecutiveLossThreshold = 3
+)
 
 func (rm *RiskManager) CheckOrder(ctx context.Context, proposal entity.OrderProposal) entity.RiskCheckResult {
 	return rm.CheckOrderAt(ctx, time.Now(), proposal)
@@ -148,14 +231,30 @@ func (rm *RiskManager) CheckTakeProfit(symbolID int64, currentPrice float64) []e
 
 func (rm *RiskManager) RecordLoss(loss float64) {
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	rm.dailyLoss += loss
+	var emit *RiskEventPayload
+	if rm.config.MaxDailyLoss > 0 && !rm.dailyLossWarnFired &&
+		rm.dailyLoss >= rm.config.MaxDailyLoss*dailyLossWarnFrac {
+		rm.dailyLossWarnFired = true
+		emit = &RiskEventPayload{
+			Kind:      RiskEventDailyLossWarning,
+			Severity:  RiskSeverityWarning,
+			Message:   fmt.Sprintf("daily loss reached %.0f / max %.0f (%.0f%%)", rm.dailyLoss, rm.config.MaxDailyLoss, dailyLossWarnFrac*100),
+			DailyLoss: rm.dailyLoss,
+			MaxDaily:  rm.config.MaxDailyLoss,
+		}
+	}
+	rm.mu.Unlock()
+	if emit != nil {
+		rm.publishRisk(*emit)
+	}
 }
 
 func (rm *RiskManager) ResetDailyLoss() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.dailyLoss = 0
+	rm.dailyLossWarnFired = false
 }
 
 // RecordConsecutiveLoss increments the consecutive loss counter.
@@ -171,10 +270,31 @@ func (rm *RiskManager) RecordConsecutiveLossAt(now time.Time) {
 	}
 
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	rm.consecutiveLosses++
-	if rm.config.MaxConsecutiveLosses > 0 && rm.consecutiveLosses >= rm.config.MaxConsecutiveLosses {
+	streak := rm.consecutiveLosses
+	var emits []RiskEventPayload
+	if !rm.consecutiveLossFlag && streak >= consecutiveLossThreshold {
+		rm.consecutiveLossFlag = true
+		emits = append(emits, RiskEventPayload{
+			Kind:      RiskEventConsecutiveLoss,
+			Severity:  RiskSeverityWarning,
+			Message:   fmt.Sprintf("%d consecutive losses", streak),
+			StreakLen: streak,
+		})
+	}
+	if rm.config.MaxConsecutiveLosses > 0 && streak >= rm.config.MaxConsecutiveLosses {
 		rm.cooldownUntil = now.Add(time.Duration(rm.config.CooldownMinutes) * time.Minute)
+		emits = append(emits, RiskEventPayload{
+			Kind:       RiskEventCooldownStarted,
+			Severity:   RiskSeverityInfo,
+			Message:    fmt.Sprintf("cooldown started for %d min after %d losses", rm.config.CooldownMinutes, streak),
+			StreakLen:  streak,
+			CooldownTo: rm.cooldownUntil.UnixMilli(),
+		})
+	}
+	rm.mu.Unlock()
+	for _, p := range emits {
+		rm.publishRisk(p)
 	}
 }
 
@@ -184,6 +304,7 @@ func (rm *RiskManager) ResetConsecutiveLosses() {
 	defer rm.mu.Unlock()
 	rm.consecutiveLosses = 0
 	rm.cooldownUntil = time.Time{}
+	rm.consecutiveLossFlag = false
 }
 
 // UpdateHighWaterMark updates the best price for a position.
@@ -273,8 +394,46 @@ func (rm *RiskManager) UpdatePositions(positions []entity.Position) {
 
 func (rm *RiskManager) UpdateBalance(balance float64) {
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
 	rm.balance = balance
+	if balance > rm.peakBalance {
+		rm.peakBalance = balance
+	}
+	var emit *RiskEventPayload
+	if rm.peakBalance > 0 {
+		ddPct := (rm.peakBalance - balance) / rm.peakBalance * 100
+		if ddPct >= ddCriticalPct && !rm.ddCriticalFired {
+			rm.ddCriticalFired = true
+			rm.ddWarnFired = true // skip warning if we cross critical first
+			emit = &RiskEventPayload{
+				Kind:     RiskEventDDCritical,
+				Severity: RiskSeverityCritical,
+				Message:  fmt.Sprintf("MaxDD critical: %.1f%% (peak %.0f → %.0f)", ddPct, rm.peakBalance, balance),
+				Balance:  balance,
+				Peak:     rm.peakBalance,
+				DDPct:    ddPct,
+			}
+		} else if ddPct >= ddWarningPct && !rm.ddWarnFired {
+			rm.ddWarnFired = true
+			emit = &RiskEventPayload{
+				Kind:     RiskEventDDWarning,
+				Severity: RiskSeverityWarning,
+				Message:  fmt.Sprintf("MaxDD warning: %.1f%% (peak %.0f → %.0f)", ddPct, rm.peakBalance, balance),
+				Balance:  balance,
+				Peak:     rm.peakBalance,
+				DDPct:    ddPct,
+			}
+		}
+		// Recovery: clear latches when balance comes back near peak so the
+		// next deep DD can re-trigger.
+		if ddPct < ddWarningPct/2 {
+			rm.ddWarnFired = false
+			rm.ddCriticalFired = false
+		}
+	}
+	rm.mu.Unlock()
+	if emit != nil {
+		rm.publishRisk(*emit)
+	}
 }
 
 func (rm *RiskManager) UpdateConfig(config entity.RiskConfig) {
