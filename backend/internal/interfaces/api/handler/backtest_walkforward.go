@@ -30,6 +30,15 @@ type runWalkForwardRequest struct {
 	Slippage       float64 `json:"slippage"`
 	TradeAmount    float64 `json:"tradeAmount"`
 
+	// Execution-quality knobs. Applied uniformly to every WFO window. Zero
+	// values fall back to legacy behaviour. Mirrors runBacktestRequest.
+	SlippageModel        string  `json:"slippageModel,omitempty"`
+	MakerFillProbability float64 `json:"makerFillProbability,omitempty"`
+	MakerFeeRate         float64 `json:"makerFeeRate,omitempty"`
+	TakerFeeRate         float64 `json:"takerFeeRate,omitempty"`
+	MaxSlippageBps       float64 `json:"maxSlippageBps,omitempty"`
+	MaxBookSidePct       float64 `json:"maxBookSidePct,omitempty"`
+
 	From              string `json:"from"`              // "YYYY-MM-DD"
 	To                string `json:"to"`                // "YYYY-MM-DD"
 	InSampleMonths    int    `json:"inSampleMonths"`    // default 6
@@ -204,16 +213,20 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				return nil, fmt.Errorf("strategy: %w", err)
 			}
 			cfg := entity.BacktestConfig{
-				Symbol:           primary.Symbol,
-				SymbolID:         primary.SymbolID,
-				PrimaryInterval:  primary.Interval,
-				HigherTFInterval: "PT1H",
-				FromTimestamp:    wFrom.UnixMilli(),
-				ToTimestamp:      wTo.UnixMilli(),
-				InitialBalance:   shared.InitialBalance,
-				SpreadPercent:    shared.Spread,
-				DailyCarryCost:   shared.CarryingCost,
-				SlippagePercent:  shared.Slippage,
+				Symbol:               primary.Symbol,
+				SymbolID:             primary.SymbolID,
+				PrimaryInterval:      primary.Interval,
+				HigherTFInterval:     "PT1H",
+				FromTimestamp:        wFrom.UnixMilli(),
+				ToTimestamp:          wTo.UnixMilli(),
+				InitialBalance:       shared.InitialBalance,
+				SpreadPercent:        shared.Spread,
+				DailyCarryCost:       shared.CarryingCost,
+				SlippagePercent:      shared.Slippage,
+				SlippageModel:        req.SlippageModel,
+				MakerFillProbability: req.MakerFillProbability,
+				MakerFeeRate:         req.MakerFeeRate,
+				TakerFeeRate:         req.TakerFeeRate,
 			}
 			if len(higherCandles) == 0 {
 				cfg.HigherTFInterval = ""
@@ -233,6 +246,12 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				TrailingATRMultiplier: nonZeroFloat(profile.Risk.TrailingATRMultiplier, shared.TrailingATRMultiplier),
 				TakeProfitPercent:     nonZeroFloat(profile.Risk.TakeProfitPercent, shared.TakeProfitPercent),
 				InitialCapital:        shared.InitialBalance,
+				MaxSlippageBps:        req.MaxSlippageBps,
+				MaxBookSidePct:        req.MaxBookSidePct,
+			}
+			fillSrc, bookSrc, buildErr := h.buildExecutionSourcesForCfg(ctx, cfg)
+			if buildErr != nil {
+				return nil, fmt.Errorf("execution sources: %w", buildErr)
 			}
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
 			// cycle44: plumb the per-combination profile's bb_squeeze_lookback
@@ -245,6 +264,8 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: profile.StanceRules.BBSqueezeLookback,
 				PositionSizing:    profile.Risk.PositionSizing,
+				FillPriceSource:   fillSrc,
+				BookSource:        bookSrc,
 				RiskConfig:        risk,
 			})
 			if err != nil {

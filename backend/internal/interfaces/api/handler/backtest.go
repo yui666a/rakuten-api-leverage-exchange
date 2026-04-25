@@ -309,34 +309,10 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		positionSizing = resolved.Risk.PositionSizing
 	}
 
-	var fillSource infrabt.FillPriceSource
-	var bookSource booklimit.BookSource
-	switch req.SlippageModel {
-	case "orderbook":
-		replay, err := h.buildOrderbookReplay(c.Request.Context(), cfg)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		fillSource = replay
-		bookSource = replay
-	case "post_only_with_taker":
-		replay, err := h.buildOrderbookReplay(c.Request.Context(), cfg)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		prob := req.MakerFillProbability
-		if prob <= 0 {
-			prob = 0.5
-		}
-		fillSource = &infrabt.PostOnlyLimitFill{
-			MakerFillProbability: prob,
-			TakerSource:          replay,
-			BookSource:           replay,
-			SymbolID:             cfg.SymbolID,
-		}
-		bookSource = replay
+	fillSource, bookSource, err := h.buildExecutionSourcesForCfg(c.Request.Context(), cfg)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	result, err := runner.Run(context.Background(), bt.RunInput{
@@ -387,6 +363,44 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// buildExecutionSourcesForCfg returns the FillPriceSource and BookSource for
+// a given run config based on cfg.SlippageModel. Centralised so /backtest/run,
+// /backtest/run-multi, and /backtest/walk-forward all use the same builder
+// and stay consistent when new slippage models are added.
+//
+// Returns (nil, nil, nil) for "" / "percent" — the runner falls back to
+// LegacyPercentSlippage in that case. ThinBookError-style errors are
+// surfaced as plain errors so callers can map to HTTP 400.
+func (h *BacktestHandler) buildExecutionSourcesForCfg(ctx context.Context, cfg entity.BacktestConfig) (infrabt.FillPriceSource, booklimit.BookSource, error) {
+	switch cfg.SlippageModel {
+	case "", "percent":
+		return nil, nil, nil
+	case "orderbook":
+		replay, err := h.buildOrderbookReplay(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		return replay, replay, nil
+	case "post_only_with_taker":
+		replay, err := h.buildOrderbookReplay(ctx, cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		prob := cfg.MakerFillProbability
+		if prob <= 0 {
+			prob = 0.5
+		}
+		return &infrabt.PostOnlyLimitFill{
+			MakerFillProbability: prob,
+			TakerSource:          replay,
+			BookSource:           replay,
+			SymbolID:             cfg.SymbolID,
+		}, replay, nil
+	default:
+		return nil, nil, errors.New("unknown slippageModel: " + cfg.SlippageModel)
+	}
 }
 
 // buildOrderbookReplay validates that enough L2 snapshots exist for the
