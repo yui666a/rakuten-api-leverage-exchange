@@ -115,6 +115,90 @@ func NewRealExecutor(orderClient repository.OrderClient, symbolID int64, spreadP
 	return r
 }
 
+// OpenWithUrgency dispatches to the SOR strategy that best matches the
+// caller's urgency hint:
+//   - urgent  → StrategyMarket (forces immediate market lift)
+//   - passive → StrategyPostOnlyEscalate (favours the maker rebate)
+//   - normal / "" → honours the configured default router
+//
+// Strategies the router was not configured for (e.g. urgent on a Market-only
+// deployment) just round-trip back to the configured default.
+func (r *RealExecutor) OpenWithUrgency(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64, urgency entity.SignalUrgency) (entity.OrderEvent, error) {
+	switch urgency {
+	case entity.SignalUrgencyUrgent:
+		return r.openWithStrategy(symbolID, side, signalPrice, amount, reason, timestamp, sor.StrategyMarket)
+	case entity.SignalUrgencyPassive:
+		return r.openWithStrategy(symbolID, side, signalPrice, amount, reason, timestamp, sor.StrategyPostOnlyEscalate)
+	default:
+		return r.Open(symbolID, side, signalPrice, amount, reason, timestamp)
+	}
+}
+
+// openWithStrategy is the core open routine parameterised by SOR strategy.
+// The default router stays untouched so subsequent Open calls keep using
+// the configured defaults.
+func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64, strat sor.Strategy) (entity.OrderEvent, error) {
+	if amount <= 0 {
+		return entity.OrderEvent{}, fmt.Errorf("amount must be positive")
+	}
+	if signalPrice <= 0 {
+		return entity.OrderEvent{}, fmt.Errorf("signal price must be positive")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := len(r.positions) - 1; i >= 0; i-- {
+		pos := r.positions[i]
+		if pos.SymbolID == symbolID && pos.Side != side {
+			_, _, _ = r.closeLocked(pos.PositionID, signalPrice, "reverse_signal", timestamp)
+		}
+	}
+
+	tempRouter := sor.New(sor.Config{Strategy: strat})
+	in := sor.SelectInput{SymbolID: symbolID, Side: side, Amount: amount}
+	if r.touchSrc != nil {
+		ob, ok, err := r.touchSrc.LatestBefore(context.Background(), symbolID, timestamp)
+		if err == nil && ok {
+			in.BestBid = ob.BestBid
+			in.BestAsk = ob.BestAsk
+		}
+	}
+	plan := tempRouter.Plan(in)
+	orderID, fillPrice, err := r.runPlan(context.Background(), plan, signalPrice)
+	if err != nil {
+		return entity.OrderEvent{}, fmt.Errorf("failed to execute open plan (urgency-routed): %w", err)
+	}
+
+	slog.Info("live order opened with urgency",
+		"orderID", orderID, "symbolID", symbolID, "side", side,
+		"amount", amount, "reason", reason, "strategy", plan.Strategy,
+	)
+
+	posID := orderID
+	if posID == 0 {
+		posID = r.nextOrderID
+		r.nextOrderID++
+	}
+	r.positions = append(r.positions, eventengine.Position{
+		PositionID:     posID,
+		SymbolID:       symbolID,
+		Side:           side,
+		EntryPrice:     fillPrice,
+		Amount:         amount,
+		EntryTimestamp: timestamp,
+	})
+	return entity.OrderEvent{
+		OrderID:   orderID,
+		SymbolID:  symbolID,
+		Side:      string(side),
+		Action:    "open",
+		Price:     fillPrice,
+		Amount:    amount,
+		Reason:    reason,
+		Timestamp: timestamp,
+	}, nil
+}
+
 // Open creates a real order via the configured SOR plan.
 func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64) (entity.OrderEvent, error) {
 	if amount <= 0 {
