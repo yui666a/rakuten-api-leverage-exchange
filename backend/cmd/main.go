@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -51,7 +53,7 @@ func main() {
 	tradingConfigRepo := database.NewTradingConfigRepo(db)
 
 	// --- Usecase ---
-	marketDataSvc := usecase.NewMarketDataService(marketDataRepo)
+	marketDataSvc := usecase.NewMarketDataServiceWithConfig(marketDataRepo, loadPersistenceConfig())
 	realtimeHub := usecase.NewRealtimeHub()
 	marketDataSvc.SetRealtimeHub(realtimeHub)
 	indicatorCalc := usecase.NewIndicatorCalculator(marketDataRepo)
@@ -220,6 +222,7 @@ func main() {
 		"capital", cfg.Risk.InitialCapital,
 	)
 
+	marketDataSvc.StartPersistenceWorker(ctx)
 	go startMarketRelay(ctx, wsClient, marketDataSvc, realtimeHub, symbolID, symbolSwitchCh)
 	go startDailyLossReset(ctx, riskMgr)
 	go startBacktestRetentionCleanup(ctx, backtestResultRepo, cfg.Backtest.RetentionDays)
@@ -251,6 +254,44 @@ const (
 	wsInitialBackoff     = 1 * time.Second
 	wsMaxBackoff         = 60 * time.Second
 )
+
+// loadPersistenceConfig builds a PersistenceConfig from environment variables,
+// falling back to DefaultPersistenceConfig() for anything unset or unparseable.
+// Env vars (all optional):
+//   - PERSIST_TICK_DATA            "true"/"false"   (default true)
+//   - TICKER_PERSIST_INTERVAL_MS   integer ms       (default 1000)
+//   - ORDERBOOK_PERSIST_INTERVAL_MS integer ms       (default 5000)
+//   - ORDERBOOK_PERSIST_DEPTH      integer levels   (default 20)
+//   - TICK_RETENTION_DAYS          integer days     (default 90)
+//   - TICK_PERSIST_QUEUE_SIZE      integer          (default 1024)
+func loadPersistenceConfig() usecase.PersistenceConfig {
+	cfg := usecase.DefaultPersistenceConfig()
+
+	if v := strings.TrimSpace(os.Getenv("PERSIST_TICK_DATA")); v != "" {
+		switch strings.ToLower(v) {
+		case "1", "true", "yes", "on":
+			cfg.Enable = true
+		case "0", "false", "no", "off":
+			cfg.Enable = false
+		}
+	}
+	if v, err := strconv.Atoi(os.Getenv("TICKER_PERSIST_INTERVAL_MS")); err == nil && v >= 0 {
+		cfg.TickerInterval = time.Duration(v) * time.Millisecond
+	}
+	if v, err := strconv.Atoi(os.Getenv("ORDERBOOK_PERSIST_INTERVAL_MS")); err == nil && v >= 0 {
+		cfg.OrderbookInterval = time.Duration(v) * time.Millisecond
+	}
+	if v, err := strconv.Atoi(os.Getenv("ORDERBOOK_PERSIST_DEPTH")); err == nil && v >= 0 {
+		cfg.OrderbookDepth = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("TICK_RETENTION_DAYS")); err == nil && v >= 0 {
+		cfg.RetentionDays = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("TICK_PERSIST_QUEUE_SIZE")); err == nil && v > 0 {
+		cfg.QueueSize = v
+	}
+	return cfg
+}
 
 func startMarketRelay(
 	ctx context.Context,
@@ -417,7 +458,10 @@ func detectMessageType(raw []byte) string {
 	return "ticker"
 }
 
-func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase.MarketDataService, realtimeHub *usecase.RealtimeHub) {
+// handleMarketMessage routes a raw venue WS payload into MarketDataService.
+// The realtime hub is owned by the service itself (set via SetRealtimeHub) so
+// callers no longer need to pass it through here.
+func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase.MarketDataService, _ *usecase.RealtimeHub) {
 	if len(raw) == 0 {
 		return
 	}
@@ -453,9 +497,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 			Spread:    r.Spread.Float64(),
 			Timestamp: r.Timestamp,
 		}
-		if realtimeHub != nil {
-			_ = realtimeHub.PublishData("orderbook", orderbook.SymbolID, orderbook)
-		}
+		marketDataSvc.HandleOrderbook(ctx, orderbook)
 	case "trades":
 		var r rawMarketTradesResponse
 		if err := json.Unmarshal(raw, &r); err != nil {
@@ -477,9 +519,7 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 				TradedAt:    t.TradedAt,
 			}
 		}
-		if realtimeHub != nil {
-			_ = realtimeHub.PublishData("market_trades", trades.SymbolID, trades)
-		}
+		marketDataSvc.HandleTrades(ctx, trades)
 	case "ticker":
 		var r rawTicker
 		if err := json.Unmarshal(raw, &r); err != nil {

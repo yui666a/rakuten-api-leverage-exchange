@@ -243,3 +243,127 @@ func TestGetLatestTicker_NotFound(t *testing.T) {
 		t.Fatal("expected error for non-existent symbol")
 	}
 }
+
+func TestSaveAndGetOrderbook(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	ob := entity.Orderbook{
+		SymbolID:  7,
+		BestAsk:   9011.3,
+		BestBid:   8978.8,
+		MidPrice:  8995.0,
+		Spread:    32.5,
+		Timestamp: 1700000000000,
+		Asks: []entity.OrderbookEntry{
+			{Price: 9011.3, Amount: 1.0},
+			{Price: 9012.0, Amount: 2.5},
+		},
+		Bids: []entity.OrderbookEntry{
+			{Price: 8978.8, Amount: 0.1},
+			{Price: 8978.0, Amount: 1.2},
+		},
+	}
+	if err := repo.SaveOrderbook(ctx, ob, 20); err != nil {
+		t.Fatalf("save orderbook: %v", err)
+	}
+
+	rows, err := repo.GetOrderbookHistory(ctx, 7, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("get orderbook history: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(rows))
+	}
+	got := rows[0]
+	if got.BestAsk != 9011.3 || got.BestBid != 8978.8 {
+		t.Fatalf("best ask/bid mismatch: %+v", got)
+	}
+	if len(got.Asks) != 2 || got.Asks[0].Amount != 1.0 {
+		t.Fatalf("asks not round-tripped: %+v", got.Asks)
+	}
+	if len(got.Bids) != 2 || got.Bids[1].Price != 8978.0 {
+		t.Fatalf("bids not round-tripped: %+v", got.Bids)
+	}
+}
+
+func TestSaveOrderbook_DepthLimitTruncates(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	asks := make([]entity.OrderbookEntry, 50)
+	for i := range asks {
+		asks[i] = entity.OrderbookEntry{Price: float64(9000 + i), Amount: 1}
+	}
+	ob := entity.Orderbook{SymbolID: 7, Asks: asks, Bids: nil, Timestamp: 1700000000000}
+
+	if err := repo.SaveOrderbook(ctx, ob, 10); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	rows, err := repo.GetOrderbookHistory(ctx, 7, 0, 0, 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("get: err=%v rows=%d", err, len(rows))
+	}
+	if len(rows[0].Asks) != 10 {
+		t.Fatalf("expected 10 ask levels (depthLimit), got %d", len(rows[0].Asks))
+	}
+}
+
+func TestSaveTrades_DedupsByTradeID(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	batch1 := []entity.MarketTrade{
+		{ID: 1, OrderSide: "BUY", Price: 9000, Amount: 0.1, AssetAmount: 900, TradedAt: 1000},
+		{ID: 2, OrderSide: "SELL", Price: 9001, Amount: 0.2, AssetAmount: 1800, TradedAt: 1100},
+	}
+	batch2 := []entity.MarketTrade{
+		// ID=2 is a duplicate of batch1; INSERT OR IGNORE drops it.
+		{ID: 2, OrderSide: "SELL", Price: 9001, Amount: 0.2, AssetAmount: 1800, TradedAt: 1100},
+		{ID: 3, OrderSide: "BUY", Price: 9002, Amount: 0.1, AssetAmount: 900, TradedAt: 1200},
+	}
+	if err := repo.SaveTrades(ctx, 7, batch1); err != nil {
+		t.Fatalf("save batch1: %v", err)
+	}
+	if err := repo.SaveTrades(ctx, 7, batch2); err != nil {
+		t.Fatalf("save batch2: %v", err)
+	}
+
+	var count int
+	if err := repo.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM trades WHERE symbol_id = ?", int64(7)).Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 unique trades, got %d", count)
+	}
+}
+
+func TestPurgeOldMarketData(t *testing.T) {
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	_ = repo.SaveTicker(ctx, entity.Ticker{SymbolID: 7, Last: 100, Timestamp: 1000})
+	_ = repo.SaveTicker(ctx, entity.Ticker{SymbolID: 7, Last: 200, Timestamp: 5000})
+	_ = repo.SaveTrades(ctx, 7, []entity.MarketTrade{
+		{ID: 10, OrderSide: "BUY", Price: 1, Amount: 1, TradedAt: 1000},
+		{ID: 11, OrderSide: "BUY", Price: 1, Amount: 1, TradedAt: 5000},
+	})
+	_ = repo.SaveOrderbook(ctx, entity.Orderbook{SymbolID: 7, Timestamp: 1000}, 10)
+	_ = repo.SaveOrderbook(ctx, entity.Orderbook{SymbolID: 7, Timestamp: 5000}, 10)
+
+	deleted, err := repo.PurgeOldMarketData(ctx, 3000)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	// 1 ticker (ts=1000) + 1 trade (ts=1000) + 1 orderbook (ts=1000) = 3 rows
+	if deleted != 3 {
+		t.Fatalf("expected 3 deleted, got %d", deleted)
+	}
+
+	// Newer rows survive.
+	rows, _ := repo.GetOrderbookHistory(ctx, 7, 0, 0, 10)
+	if len(rows) != 1 || rows[0].Timestamp != 5000 {
+		t.Fatalf("expected only timestamp=5000 to survive, got %+v", rows)
+	}
+}

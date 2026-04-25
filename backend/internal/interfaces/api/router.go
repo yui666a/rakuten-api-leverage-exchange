@@ -110,8 +110,12 @@ func NewRouter(deps Dependencies) *gin.Engine {
 	}
 
 	if deps.RESTClient != nil {
-		orderbookHandler := handler.NewOrderbookHandler(deps.RESTClient)
+		orderbookHandler := handler.NewOrderbookHandler(deps.RESTClient, deps.MarketDataService)
 		v1.GET("/orderbook", orderbookHandler.GetOrderbook)
+		// History endpoint reads persisted snapshots; only useful when the
+		// MarketDataService is wired (composition root attaches it). The
+		// handler itself nil-guards and returns 503 when missing.
+		v1.GET("/orderbook/history", orderbookHandler.GetOrderbookHistory)
 
 		symbolHandler := handler.NewSymbolHandler(deps.RESTClient)
 		v1.GET("/symbols", symbolHandler.GetSymbols)

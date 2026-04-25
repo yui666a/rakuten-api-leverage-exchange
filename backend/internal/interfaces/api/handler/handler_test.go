@@ -1109,7 +1109,7 @@ func TestSymbolHandler_GetSymbols_NilClient(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOrderbookHandler_GetOrderbook_InvalidSymbolId(t *testing.T) {
-	h := NewOrderbookHandler(nil)
+	h := NewOrderbookHandler(nil, nil)
 
 	w := httptest.NewRecorder()
 	_, r := gin.CreateTestContext(w)

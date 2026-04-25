@@ -78,14 +78,34 @@ func RunMigrations(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS trades (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			symbol_id INTEGER NOT NULL,
+			trade_id INTEGER NOT NULL DEFAULT 0,
 			order_side TEXT NOT NULL,
 			price REAL NOT NULL,
 			amount REAL NOT NULL,
 			asset_amount REAL NOT NULL,
-			traded_at INTEGER NOT NULL
+			traded_at INTEGER NOT NULL,
+			UNIQUE(symbol_id, trade_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_trades_symbol_time
 			ON trades(symbol_id, traded_at DESC)`,
+
+		// orderbook_snapshots: L2 板スナップショットの永続化先。
+		// depth_json には ask/bid を {p,a} ペア配列の JSON で保存し、SQLite の
+		// json_extract で必要に応じて読み出せる。テーブルを正規化すると
+		// 1 スナップショットあたり 20+ 行になり、リプレイ時のスキャンが重くなるので
+		// 1 行 1 スナップショットを採用する。
+		`CREATE TABLE IF NOT EXISTS orderbook_snapshots (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol_id INTEGER NOT NULL,
+			best_ask REAL NOT NULL,
+			best_bid REAL NOT NULL,
+			mid_price REAL NOT NULL,
+			spread REAL NOT NULL,
+			depth_json TEXT NOT NULL,
+			timestamp INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_orderbook_snapshots_symbol_time
+			ON orderbook_snapshots(symbol_id, timestamp DESC)`,
 
 		`CREATE TABLE IF NOT EXISTS trade_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -192,6 +212,20 @@ func RunMigrations(db *sql.DB) error {
 		if _, err := db.Exec(m); err != nil {
 			return fmt.Errorf("migration failed: %w", err)
 		}
+	}
+
+	// trades は元々 (symbol_id, traded_at) 主体で設計されていたが、
+	// WS から流れてくる MarketTrade.id を保存して重複 INSERT を防ぐため
+	// trade_id カラムと一意インデックスを後付けで足す。
+	// 既存行 (永続化フックが繋がる前のレコードはそもそも空) は trade_id=0
+	// のまま残るため、UNIQUE INDEX は trade_id != 0 の部分インデックスにする。
+	if err := addColumnIfNotExists(db, "trades", "trade_id",
+		"trade_id INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("trades alter trade_id: %w", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_symbol_trade_id
+		ON trades(symbol_id, trade_id) WHERE trade_id <> 0`); err != nil {
+		return fmt.Errorf("create idx_trades_symbol_trade_id: %w", err)
 	}
 
 	// client_orders をライフサイクル監査ログに格上げするための ALTER 群。
