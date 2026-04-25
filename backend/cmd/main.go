@@ -80,6 +80,8 @@ func main() {
 		InitialCapital:        cfg.Risk.InitialCapital,
 		MaxConsecutiveLosses:  cfg.Risk.MaxConsecutiveLosses,
 		CooldownMinutes:       cfg.Risk.CooldownMinutes,
+		MaxSlippageBps:        cfg.Risk.MaxSlippageBps,
+		MaxBookSidePct:        cfg.Risk.MaxBookSidePct,
 	})
 	orderExecutor := usecase.NewOrderExecutor(restClient, riskMgr)
 	// Browser notifications subscribe to "trade_event" on the realtime hub —

@@ -73,6 +73,12 @@ type MarketDataService struct {
 	lastTickerSavedMs map[int64]int64
 	lastOrderbookMs   map[int64]int64
 
+	// latestOrderbookBySymbol caches the last orderbook seen on the WS feed
+	// per symbol so the live pre-trade gate can read it without hitting the
+	// DB. Populated unconditionally (independent of persistence throttling).
+	bookCacheMu       sync.RWMutex
+	latestOrderbooks  map[int64]entity.Orderbook
+
 	// writer channel + lifecycle
 	writerCh   chan persistTask
 	writerDone chan struct{}
@@ -92,6 +98,7 @@ func NewMarketDataServiceWithConfig(repo repository.MarketDataRepository, cfg Pe
 		cfg:               cfg,
 		lastTickerSavedMs: make(map[int64]int64),
 		lastOrderbookMs:   make(map[int64]int64),
+		latestOrderbooks:  make(map[int64]entity.Orderbook),
 	}
 }
 
@@ -301,6 +308,12 @@ func (s *MarketDataService) HandleTicker(ctx context.Context, ticker entity.Tick
 // HandleOrderbook persists an orderbook snapshot (subject to throttle) and
 // publishes a realtime event so the frontend panel updates immediately.
 func (s *MarketDataService) HandleOrderbook(ctx context.Context, ob entity.Orderbook) {
+	// Always update the in-memory cache so the pre-trade gate sees fresh
+	// data even when persistence is throttled or disabled.
+	s.bookCacheMu.Lock()
+	s.latestOrderbooks[ob.SymbolID] = ob
+	s.bookCacheMu.Unlock()
+
 	if s.cfg.Enable && s.shouldPersistOrderbook(ob.SymbolID, ob.Timestamp) {
 		o := ob
 		s.enqueue(persistTask{orderbook: &o})
@@ -354,4 +367,22 @@ func (s *MarketDataService) SaveCandles(ctx context.Context, symbolID int64, int
 // GetOrderbookHistory exposes the underlying repo query for replay tooling.
 func (s *MarketDataService) GetOrderbookHistory(ctx context.Context, symbolID int64, from, to int64, limit int) ([]entity.Orderbook, error) {
 	return s.repo.GetOrderbookHistory(ctx, symbolID, from, to, limit)
+}
+
+// LatestBefore implements booklimit.BookSource for the live pipeline. The
+// cache is populated by HandleOrderbook on every WS frame; we return the
+// snapshot only when its timestamp is at or before ts (the gate's clock is
+// monotonic, but this guards against test fixtures injecting future ts).
+// Returns (zero, false, nil) when no cache entry exists yet.
+func (s *MarketDataService) LatestBefore(_ context.Context, symbolID, ts int64) (entity.Orderbook, bool, error) {
+	s.bookCacheMu.RLock()
+	defer s.bookCacheMu.RUnlock()
+	ob, ok := s.latestOrderbooks[symbolID]
+	if !ok {
+		return entity.Orderbook{}, false, nil
+	}
+	if ob.Timestamp > ts {
+		return entity.Orderbook{}, false, nil
+	}
+	return ob, true, nil
 }

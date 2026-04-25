@@ -15,6 +15,13 @@ type RiskConfig struct {
 	InitialCapital        float64 `json:"initialCapital"`       // 軍資金（円）
 	MaxConsecutiveLosses  int     `json:"maxConsecutiveLosses"` // 連敗上限（0=無効）
 	CooldownMinutes       int     `json:"cooldownMinutes"`      // 冷却期間（分）
+
+	// MaxSlippageBps: 板リプレイ／実板の VWAP が mid からこの bps を超える
+	// と注文をブロックする (0=無効)。50 で 0.5%。
+	MaxSlippageBps float64 `json:"maxSlippageBps,omitempty"`
+	// MaxBookSidePct: 自ロットが板上位 5 段累積数量のこの % を超えると
+	// 注文をブロックする (0=無効)。30 = 30%。
+	MaxBookSidePct float64 `json:"maxBookSidePct,omitempty"`
 }
 
 // OrderProposal はRisk Managerに承認を求める注文提案。
