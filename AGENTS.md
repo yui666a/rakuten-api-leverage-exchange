@@ -53,7 +53,7 @@
 ## Architecture
 
 - Clean Architecture: domain → usecase → infrastructure → interfaces の依存方向を厳守。
-- Trading Pipeline: 60秒間隔で指標計算 → Stance 判定 → シグナル → リスクチェック → 注文。
+- Trading Pipeline: イベント駆動 (`backend/cmd/event_pipeline.go` の `EventDrivenPipeline`)。プライマリ足 (PT15M) が確定するごとに 指標計算 → Stance 判定 → シグナル → リスクチェック → 注文 を実行する（旧 `pipeline.go` の 60 秒 polling は legacy）。SL/TP/Trailing は tick 単位で常時監視、ポジション同期 30 秒、残高/state sync は `STATE_SYNC_INTERVAL_SEC` (既定 15 秒)。`PIPELINE_INTERVAL_SEC` は legacy 用の遺物で EventDrivenPipeline では未使用。
 - Stance: `TREND_FOLLOW` / `CONTRARIAN` / `BREAKOUT` / `HOLD`。ルールベース自動判定 or オーバーライド（オーバーライド可能なのは `TREND_FOLLOW` / `CONTRARIAN` / `HOLD` の3種）。
 - Indicators: SMA / EMA / RSI / MACD / Bollinger / ATR / Volume / ADX(+DI/-DI) / Stochastics (%K/%D/StochRSI) / Ichimoku (Tenkan/Kijun/SenkouA-B/Chikou)。
 - PDCA/Backtest: 単発 (`/backtest/run`) / 複数期間 (`/backtest/run-multi`) / Walk-Forward (`/backtest/walk-forward`) を API + CLI で提供、結果は SQLite に永続化。
