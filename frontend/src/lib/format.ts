@@ -15,3 +15,34 @@ export function formatAmount(value: number): string {
   const fixed = value.toFixed(AMOUNT_MAX_FRACTION_DIGITS)
   return fixed.replace(/\.?0+$/, '')
 }
+
+// lightweight-charts は UTCTimestamp を UTC 基準で描画する。
+// このプロダクトは JST 固定の市場 (楽天ウォレット) を扱うため、
+// 軸ラベル・クロスヘアの時刻を JST 表記に揃える。
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000
+
+function toJstParts(unixSeconds: number) {
+  const d = new Date(unixSeconds * 1000 + JST_OFFSET_MS)
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth() + 1,
+    day: d.getUTCDate(),
+    hour: d.getUTCHours(),
+    minute: d.getUTCMinutes(),
+  }
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+// 軸目盛 (短い表記)。1 日以上の足は日付を、それ未満は時刻を返す。
+export function formatChartTickJst(unixSeconds: number, withDate: boolean): string {
+  const { month, day, hour, minute } = toJstParts(unixSeconds)
+  if (withDate) return `${month}/${day}`
+  return `${pad2(hour)}:${pad2(minute)}`
+}
+
+// クロスヘア・ツールチップ用 (フル表記)。
+export function formatChartTimeJst(unixSeconds: number): string {
+  const { year, month, day, hour, minute } = toJstParts(unixSeconds)
+  return `${year}-${pad2(month)}-${pad2(day)} ${pad2(hour)}:${pad2(minute)} JST`
+}
