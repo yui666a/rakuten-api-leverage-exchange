@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, useSearch } from '@tanstack/react-router'
 import { SymbolSelector } from './SymbolSelector'
+import { NotificationToggle } from './NotificationToggle'
 
 type AppFrameProps = {
   title: string
@@ -29,7 +30,10 @@ export function AppFrame({ title, subtitle, children }: AppFrameProps) {
             <p className="mt-2 max-w-2xl text-sm text-slate-300">{subtitle}</p>
           </div>
           <div className="flex flex-col gap-3 lg:items-end">
-            <SymbolSelector />
+            <div className="flex items-center gap-2">
+              <SymbolSelector />
+              <NotificationToggle />
+            </div>
             <nav className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 lg:overflow-visible">
               {navItems.map((item) => (
                 <Link
