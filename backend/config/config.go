@@ -6,13 +6,14 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Rakuten  RakutenConfig
-	Database DatabaseConfig
-	Risk     RiskConfig
-	LLM      LLMConfig
-	Trading  TradingConfig
-	Backtest BacktestConfig
+	Server         ServerConfig
+	Rakuten        RakutenConfig
+	Database       DatabaseConfig
+	Risk           RiskConfig
+	LLM            LLMConfig
+	Trading        TradingConfig
+	Backtest       BacktestConfig
+	CircuitBreaker CircuitBreakerConfig
 }
 
 type TradingConfig struct {
@@ -42,6 +43,8 @@ type BacktestConfig struct {
 	RetentionDays int // keep backtest results for N days (default: 180)
 }
 
+// CircuitBreaker is exposed as a top-level Config field by Load() below.
+
 type RiskConfig struct {
 	MaxPositionAmount     float64
 	MaxDailyLoss          float64
@@ -55,6 +58,19 @@ type RiskConfig struct {
 	// gate stays opt-in until the user has confidence in the live cache.
 	MaxSlippageBps float64
 	MaxBookSidePct float64
+}
+
+// CircuitBreakerConfig mirrors usecase/circuitbreaker/Config but lives here
+// so the composition root can populate it from env vars without importing the
+// usecase layer into config/.
+type CircuitBreakerConfig struct {
+	AbnormalSpreadPct    float64
+	AbnormalSpreadHoldMs int64
+	PriceJumpPct         float64
+	PriceJumpWindowMs    int64
+	BookFeedStaleAfterMs int64
+	EmptyBookHoldMs      int64
+	StaleCheckIntervalMs int64
 }
 
 type RakutenConfig struct {
@@ -105,6 +121,18 @@ func Load() *Config {
 		},
 		Backtest: BacktestConfig{
 			RetentionDays: getEnvInt("BACKTEST_RETENTION_DAYS", 180),
+		},
+		CircuitBreaker: CircuitBreakerConfig{
+			// Default = OFF. Operators flip the env vars on once they're
+			// happy with the live book cache so a misconfigured threshold
+			// never silently halts a fresh deploy.
+			AbnormalSpreadPct:    getEnvFloat("CB_ABNORMAL_SPREAD_PCT", 0),
+			AbnormalSpreadHoldMs: int64(getEnvInt("CB_ABNORMAL_SPREAD_HOLD_MS", 5_000)),
+			PriceJumpPct:         getEnvFloat("CB_PRICE_JUMP_PCT", 0),
+			PriceJumpWindowMs:    int64(getEnvInt("CB_PRICE_JUMP_WINDOW_MS", 60_000)),
+			BookFeedStaleAfterMs: int64(getEnvInt("CB_BOOK_FEED_STALE_AFTER_MS", 0)),
+			EmptyBookHoldMs:      int64(getEnvInt("CB_EMPTY_BOOK_HOLD_MS", 0)),
+			StaleCheckIntervalMs: int64(getEnvInt("CB_STALE_CHECK_INTERVAL_MS", 5_000)),
 		},
 	}
 }
