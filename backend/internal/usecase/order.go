@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
@@ -37,14 +38,62 @@ type ExecutionResult struct {
 
 // OrderExecutor はシグナルに基づいて注文を実行する。
 type OrderExecutor struct {
-	client  repository.OrderClient
-	riskMgr *RiskManager
+	client      repository.OrderClient
+	riskMgr     *RiskManager
+	realtimeHub *RealtimeHub // optional. 約定成立時にトレードイベントを push する。
 }
 
 func NewOrderExecutor(client repository.OrderClient, riskMgr *RiskManager) *OrderExecutor {
 	return &OrderExecutor{
 		client:  client,
 		riskMgr: riskMgr,
+	}
+}
+
+// SetRealtimeHub wires a RealtimeHub so that successful executions publish a
+// "trade_event" payload to all subscribers (front-end will turn this into a
+// browser notification). nil clears the hub. The executor remains fully
+// functional without a hub — pushes are best-effort.
+func (e *OrderExecutor) SetRealtimeHub(hub *RealtimeHub) {
+	e.realtimeHub = hub
+}
+
+// TradeEventKind labels the lifecycle phase a trade_event represents so the
+// UI can pick a per-kind icon / sound without re-deriving from raw fields.
+type TradeEventKind string
+
+const (
+	// TradeEventOpen は新規エントリーが約定したことを示す。
+	TradeEventOpen TradeEventKind = "open"
+	// TradeEventClose はポジションのクローズが約定したことを示す。
+	TradeEventClose TradeEventKind = "close"
+)
+
+// TradeEventPayload is the JSON shape pushed on the "trade_event" channel.
+// Kept narrow so the front-end can reason about it without depending on the
+// internal Order entity.
+type TradeEventPayload struct {
+	Kind          TradeEventKind `json:"kind"`
+	SymbolID      int64          `json:"symbolId"`
+	Side          string         `json:"side"`
+	Amount        float64        `json:"amount"`
+	Price         float64        `json:"price"`
+	OrderID       int64          `json:"orderId"`
+	ClientOrderID string         `json:"clientOrderId,omitempty"`
+	Reason        string         `json:"reason,omitempty"`
+	PositionID    int64          `json:"positionId,omitempty"`
+	Timestamp     int64          `json:"timestamp"`
+}
+
+// publishTradeEvent best-effort sends a trade_event to the realtime hub. Any
+// publish failure is logged at debug level — losing a notification must never
+// fail the trade itself.
+func (e *OrderExecutor) publishTradeEvent(payload TradeEventPayload) {
+	if e.realtimeHub == nil {
+		return
+	}
+	if err := e.realtimeHub.PublishData("trade_event", payload.SymbolID, payload); err != nil {
+		slog.Debug("publish trade_event failed", "err", err)
 	}
 }
 
@@ -113,6 +162,18 @@ func (e *OrderExecutor) ExecuteSignal(ctx context.Context, clientOrderID string,
 		"clientOrderID", clientOrderID,
 	)
 
+	e.publishTradeEvent(TradeEventPayload{
+		Kind:          TradeEventOpen,
+		SymbolID:      signal.SymbolID,
+		Side:          string(side),
+		Amount:        amount,
+		Price:         price,
+		OrderID:       orders[0].ID,
+		ClientOrderID: clientOrderID,
+		Reason:        signal.Reason,
+		Timestamp:     time.Now().UnixMilli(),
+	})
+
 	return &ExecutionResult{
 		Executed: true,
 		OrderID:  orders[0].ID,
@@ -176,6 +237,18 @@ func (e *OrderExecutor) ClosePosition(ctx context.Context, clientOrderID string,
 		"side", closeSide,
 		"clientOrderID", clientOrderID,
 	)
+
+	e.publishTradeEvent(TradeEventPayload{
+		Kind:          TradeEventClose,
+		SymbolID:      pos.SymbolID,
+		Side:          string(closeSide),
+		Amount:        pos.RemainingAmount,
+		Price:         currentPrice,
+		OrderID:       orders[0].ID,
+		ClientOrderID: clientOrderID,
+		PositionID:    pos.ID,
+		Timestamp:     time.Now().UnixMilli(),
+	})
 
 	return &ExecutionResult{
 		Executed: true,
