@@ -46,7 +46,9 @@ services:
       - ./backend/data:/app/backend/data
     environment:
       TZ: Asia/Tokyo
-      RUN_ON_START: "1"
+      # 起動直後の即時 fetch は無効化 (Rakuten API rate limit を避けるため)。
+      # 必要なら: docker compose exec csv-updater /app/backend/scripts/fetch_incremental.sh
+      RUN_ON_START: "0"
     restart: unless-stopped
 
 volumes:
