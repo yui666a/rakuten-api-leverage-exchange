@@ -171,12 +171,50 @@ export type RealtimeOrderbook = {
   timestamp: number
 }
 
+export type TradeEventPayload = {
+  kind: 'open' | 'close'
+  symbolId: number
+  side: 'BUY' | 'SELL'
+  amount: number
+  price: number
+  orderId: number
+  clientOrderId?: string
+  reason?: string
+  positionId?: number
+  timestamp: number
+}
+
+export type RiskEventKind =
+  | 'dd_warning'
+  | 'dd_critical'
+  | 'consecutive_losses'
+  | 'cooldown_started'
+  | 'daily_loss_warning'
+
+export type RiskEventSeverity = 'info' | 'warning' | 'critical'
+
+export type RiskEventPayload = {
+  kind: RiskEventKind
+  severity: RiskEventSeverity
+  message: string
+  balance?: number
+  peak?: number
+  ddPct?: number
+  dailyLoss?: number
+  maxDaily?: number
+  streakLen?: number
+  cooldownTo?: number
+  timestamp: number
+}
+
 export type RealtimeEventMessage =
   | { type: 'ticker'; symbolId: number; data: LiveTicker }
   | { type: 'status'; symbolId?: number; data: StatusResponse }
   | { type: 'config'; symbolId?: number; data: RiskConfig }
   | { type: 'orderbook'; symbolId: number; data: RealtimeOrderbook }
   | { type: 'market_trades'; symbolId: number; data: RealtimeMarketTrades }
+  | { type: 'trade_event'; symbolId: number; data: TradeEventPayload }
+  | { type: 'risk_event'; symbolId?: number; data: RiskEventPayload }
 
 // --- Backtest types ---
 
