@@ -117,6 +117,18 @@ func RunMigrations(db *sql.DB) error {
 			ttl_sec INTEGER NOT NULL
 		)`,
 
+		// trading_config persists the user's last-selected symbol and trade
+		// amount across restarts. Without this, every container rebuild
+		// silently resets the pipeline to the config-default symbol while
+		// the frontend keeps showing whatever the user picked before, and
+		// the WS subscription never re-attaches to the right asset.
+		`CREATE TABLE IF NOT EXISTS trading_config (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			symbol_id INTEGER NOT NULL,
+			trade_amount REAL NOT NULL,
+			updated_at INTEGER NOT NULL DEFAULT 0
+		)`,
+
 		`CREATE TABLE IF NOT EXISTS client_orders (
 			client_order_id TEXT PRIMARY KEY,
 			executed INTEGER NOT NULL,
