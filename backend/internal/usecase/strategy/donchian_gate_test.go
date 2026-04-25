@@ -20,6 +20,12 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy(t *testing.T) {
 	// Keep other breakout gates permissive so only the Donchian gate can fire.
 	profile.SignalRules.Breakout.ADXMin = 0
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
+	// Isolate the donchian gate from other breakout gates that the production
+	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
+	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// block the signal regardless of donchian state.
+	profile.SignalRules.Breakout.CMFBuyMin = 0
+	profile.SignalRules.Breakout.CMFSellMax = 0
 
 	s, err := NewConfigurableStrategy(profile)
 	if err != nil {
@@ -58,6 +64,12 @@ func TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy(t *testing.T) {
 	profile.SignalRules.Breakout.DonchianPeriod = 20
 	profile.SignalRules.Breakout.ADXMin = 0
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
+	// Isolate the donchian gate from other breakout gates that the production
+	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
+	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// block the signal regardless of donchian state.
+	profile.SignalRules.Breakout.CMFBuyMin = 0
+	profile.SignalRules.Breakout.CMFSellMax = 0
 
 	s, err := NewConfigurableStrategy(profile)
 	if err != nil {
@@ -90,6 +102,12 @@ func TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail(t *testing
 	profile.SignalRules.Breakout.DonchianPeriod = 20
 	profile.SignalRules.Breakout.ADXMin = 0
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
+	// Isolate the donchian gate from other breakout gates that the production
+	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
+	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// block the signal regardless of donchian state.
+	profile.SignalRules.Breakout.CMFBuyMin = 0
+	profile.SignalRules.Breakout.CMFSellMax = 0
 
 	s, err := NewConfigurableStrategy(profile)
 	if err != nil {
@@ -121,6 +139,12 @@ func TestConfigurableStrategy_DonchianGateZeroIsDisabled(t *testing.T) {
 	profile.SignalRules.Breakout.DonchianPeriod = 0 // gate disabled
 	profile.SignalRules.Breakout.ADXMin = 0
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
+	// Isolate the donchian gate from other breakout gates that the production
+	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
+	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// block the signal regardless of donchian state.
+	profile.SignalRules.Breakout.CMFBuyMin = 0
+	profile.SignalRules.Breakout.CMFSellMax = 0
 
 	s, err := NewConfigurableStrategy(profile)
 	if err != nil {
@@ -151,6 +175,12 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutSell(t *testing.T) {
 	profile.SignalRules.Breakout.DonchianPeriod = 20
 	profile.SignalRules.Breakout.ADXMin = 0
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
+	// Isolate the donchian gate from other breakout gates that the production
+	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
+	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// block the signal regardless of donchian state.
+	profile.SignalRules.Breakout.CMFBuyMin = 0
+	profile.SignalRules.Breakout.CMFSellMax = 0
 
 	s, err := NewConfigurableStrategy(profile)
 	if err != nil {
