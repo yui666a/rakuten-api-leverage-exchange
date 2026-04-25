@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
@@ -17,6 +18,16 @@ var allowedIntervals = map[string]struct{}{
 	"PT1H":  {},
 	"P1D":   {},
 	"P1W":   {},
+}
+
+// intervalDurations は各 interval の 1 本ぶんの長さ。最新足までの遅延判定に使う。
+var intervalDurations = map[string]time.Duration{
+	"PT1M":  time.Minute,
+	"PT5M":  5 * time.Minute,
+	"PT15M": 15 * time.Minute,
+	"PT1H":  time.Hour,
+	"P1D":   24 * time.Hour,
+	"P1W":   7 * 24 * time.Hour,
 }
 
 type CandleHandler struct {
@@ -63,10 +74,20 @@ func (h *CandleHandler) GetCandles(c *gin.Context) {
 	}
 
 	// DB のデータが不足していれば楽天APIからオンデマンド取得して補充する。
-	// - before なし: DB が空なら最新データを取得
+	// - before なし: DB が空、または最新足が古い (interval × 2 以上前) ならフェッチ
 	// - before あり: DB が limit 未満なら dateTo=before で過去データを取得
+	staleThreshold := 2 * intervalDurations[interval]
+	stale := false
+	if before == 0 && len(candles) > 0 && staleThreshold > 0 {
+		// candles は GetCandles の段階では DESC（先頭が最新）で返る。
+		latestMs := candles[0].Time
+		nowMs := time.Now().UnixMilli()
+		if nowMs-latestMs > staleThreshold.Milliseconds() {
+			stale = true
+		}
+	}
 	needFetch := h.restClient != nil &&
-		(len(candles) == 0 || (before > 0 && len(candles) < limit))
+		(len(candles) == 0 || stale || (before > 0 && len(candles) < limit))
 	if needFetch {
 		var dateFrom, dateTo *int64
 		if before > 0 {
