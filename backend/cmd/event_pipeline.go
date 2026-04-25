@@ -16,6 +16,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
@@ -53,6 +54,8 @@ type EventDrivenPipeline struct {
 	sorConfig            sor.Config
 	circuitBreakerConfig circuitbreaker.Config
 	staleCheckIntervalMs int64
+	reconcileConfig      reconcile.Config
+	clientOrderRepo      repository.ClientOrderRepository
 
 	// sleepFn is used by syncState for retry backoff (test-injectable).
 	sleepFn func(time.Duration)
@@ -69,6 +72,7 @@ type EventDrivenPipelineConfig struct {
 	SOR                  sor.Config
 	CircuitBreaker       circuitbreaker.Config
 	StaleCheckIntervalMs int64
+	Reconcile            reconcile.Config
 }
 
 func NewEventDrivenPipeline(
@@ -80,6 +84,7 @@ func NewEventDrivenPipeline(
 	riskMgr *usecase.RiskManager,
 	tradeHistoryRepo repository.TradeHistoryRepository,
 	riskStateRepo repository.RiskStateRepository,
+	clientOrderRepo repository.ClientOrderRepository,
 ) *EventDrivenPipeline {
 	return &EventDrivenPipeline{
 		symbolID:          cfg.SymbolID,
@@ -91,6 +96,7 @@ func NewEventDrivenPipeline(
 		sorConfig:            cfg.SOR,
 		circuitBreakerConfig: cfg.CircuitBreaker,
 		staleCheckIntervalMs: cfg.StaleCheckIntervalMs,
+		reconcileConfig:      cfg.Reconcile,
 		orderClient:          orderClient,
 		symbolFetcher:     symbolFetcher,
 		marketDataSvc:     marketDataSvc,
@@ -98,6 +104,7 @@ func NewEventDrivenPipeline(
 		riskMgr:           riskMgr,
 		tradeHistoryRepo:  tradeHistoryRepo,
 		riskStateRepo:     riskStateRepo,
+		clientOrderRepo:   clientOrderRepo,
 	}
 }
 
@@ -359,6 +366,9 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		defer cbWatcher.Reset() // re-arm on next pipeline lifecycle
 	}
 
+	// Reconciler: opt-in. Runs on its own goroutine bound to ctx.
+	p.startReconciler(ctx, snap)
+
 	slog.Info("event-pipeline: event loop running", "symbolID", snap.symbolID)
 
 	for {
@@ -574,4 +584,79 @@ func (p *EventDrivenPipeline) realtimeHubFromMarketData() *usecase.RealtimeHub {
 		return nil
 	}
 	return p.marketDataSvc.RealtimeHub()
+}
+
+// reconcilePublisher adapts realtime hub PublishData to reconcile.Publisher.
+type reconcilePublisher struct{ hub *usecase.RealtimeHub }
+
+func (p *reconcilePublisher) PublishDrift(kind, severity, message string, ts int64) {
+	if p == nil || p.hub == nil {
+		return
+	}
+	sev := usecase.RiskSeverityWarning
+	switch severity {
+	case "critical":
+		sev = usecase.RiskSeverityCritical
+	case "info":
+		sev = usecase.RiskSeverityInfo
+	}
+	payload := usecase.RiskEventPayload{
+		Kind:      usecase.RiskEventKind("reconciliation_drift"),
+		Severity:  sev,
+		Message:   "reconcile " + kind + ": " + message,
+		Timestamp: ts,
+	}
+	if err := p.hub.PublishData("risk_event", 0, payload); err != nil {
+		slog.Warn("event-pipeline: reconcile publish failed", "error", err)
+	}
+}
+
+// startReconciler runs the reconciler on its own goroutine. Lifecycle is
+// tied to ctx; the loop exits cleanly when the pipeline is stopped.
+//
+// Symbol switches update the reconciler's symbol via SetSymbolID through
+// the live snapshot — we do not need a separate notification channel
+// because the reconciler is read-only.
+func (p *EventDrivenPipeline) startReconciler(ctx context.Context, snap eventSnapshot) *reconcile.Reconciler {
+	if !p.reconcileConfig.Enable {
+		return nil
+	}
+	pub := &reconcilePublisher{hub: nil}
+	if p.marketDataSvc != nil {
+		pub.hub = p.marketDataSvc.RealtimeHub()
+	}
+	r := reconcile.New(p.reconcileConfig, p.orderClient, p.riskMgr, p.riskMgr, p.clientOrderRepo, pub, snap.symbolID)
+	interval := time.Duration(p.reconcileConfig.IntervalSec) * time.Second
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		// First pass after a short warmup so syncState has populated the
+		// in-memory state at least once.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(15 * time.Second):
+		}
+		r.Run(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Always reconcile against the live symbol — SwitchSymbol
+				// updates p.symbolID but the reconciler is built once.
+				r.SetSymbolID(p.SymbolID())
+				r.Run(ctx)
+			}
+		}
+	}()
+	slog.Info("event-pipeline: reconciler armed",
+		"intervalSec", p.reconcileConfig.IntervalSec,
+		"posHaltPct", p.reconcileConfig.PositionHaltPct,
+		"balHaltPct", p.reconcileConfig.BalanceHaltPct,
+	)
+	return r
 }

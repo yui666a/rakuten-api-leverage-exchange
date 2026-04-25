@@ -510,6 +510,24 @@ func (rm *RiskManager) HaltReason() string {
 	return rm.haltReason
 }
 
+// LocalPositions returns a defensive copy of the in-memory position list.
+// Used by the reconciler to compare against venue-side state without
+// holding the risk-manager lock for the full check.
+func (rm *RiskManager) LocalPositions() []entity.Position {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	out := make([]entity.Position, len(rm.positions))
+	copy(out, rm.positions)
+	return out
+}
+
+// LocalBalance returns the bot's last-known JPY balance.
+func (rm *RiskManager) LocalBalance() float64 {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	return rm.balance
+}
+
 func (rm *RiskManager) GetStatus() RiskStatus {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()

@@ -22,6 +22,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
@@ -138,6 +139,15 @@ func main() {
 				EmptyBookHoldMs:      cfg.CircuitBreaker.EmptyBookHoldMs,
 			},
 			StaleCheckIntervalMs: cfg.CircuitBreaker.StaleCheckIntervalMs,
+			Reconcile: reconcile.Config{
+				Enable:          cfg.Reconcile.Enable,
+				IntervalSec:     cfg.Reconcile.IntervalSec,
+				PositionWarnPct: cfg.Reconcile.PositionWarnPct,
+				PositionHaltPct: cfg.Reconcile.PositionHaltPct,
+				BalanceWarnPct:  cfg.Reconcile.BalanceWarnPct,
+				BalanceHaltPct:  cfg.Reconcile.BalanceHaltPct,
+				OrderTTL:        time.Duration(cfg.Reconcile.OrderTTLSec) * time.Second,
+			},
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -146,6 +156,7 @@ func main() {
 		riskMgr,
 		tradeHistoryRepo,
 		riskStateRepo,
+		clientOrderRepo,
 	)
 
 	// 初期シンボルの baseStepAmount / minOrderAmount をロード
