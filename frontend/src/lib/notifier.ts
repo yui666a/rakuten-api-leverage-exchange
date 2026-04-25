@@ -75,15 +75,45 @@ export function canShowNotification(): boolean {
   )
 }
 
+import { postToServiceWorker } from './sw-register'
+
+// showNotification picks the right surface based on tab visibility:
+//  - Page is visible: use the in-page Notification constructor (synchronous
+//    return so callers can read the Notification handle if needed).
+//  - Page is hidden / minimised: route through the Service Worker so the
+//    notification fires even when the tab isn't running JS. This is what
+//    keeps notifications coming after the user switches to another window.
+// SW path is best-effort — if the SW failed to register (older browsers),
+// we silently fall back to the foreground constructor.
 export function showNotification(opts: ShowNotificationOptions): Notification | null {
   if (!canShowNotification()) return null
+
+  const isHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  if (isHidden) {
+    void postToServiceWorker({
+      type: 'show-notification',
+      payload: {
+        title: opts.title,
+        body: opts.body,
+        icon: opts.icon,
+        tag: opts.tag,
+      },
+    }).then((delivered) => {
+      // If the SW couldn't take the message, fall back so the user still
+      // sees something while the page is hidden but the SW is asleep.
+      if (!delivered) tryForegroundNotification(opts)
+    })
+    return null
+  }
+  return tryForegroundNotification(opts)
+}
+
+function tryForegroundNotification(opts: ShowNotificationOptions): Notification | null {
   try {
     return new Notification(opts.title, {
       body: opts.body,
       icon: opts.icon,
       tag: opts.tag,
-      // Always silent at the OS level — we play our own beep separately so
-      // the user can mute audio without losing the visual notification.
       silent: true,
     })
   } catch {

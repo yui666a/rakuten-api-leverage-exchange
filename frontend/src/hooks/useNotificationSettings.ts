@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { ensureServiceWorker } from '../lib/sw-register'
 
 // Notification settings live in localStorage so the user's preference survives
 // page reloads and isn't tied to React state alone. The hook is intentionally
@@ -90,11 +91,23 @@ export function useNotificationSettings() {
         if (current === 'default') {
           await requestPermission()
         }
+        // Register the service worker the moment the user opts in so the
+        // hidden-tab path is ready before the first event fires. Failure is
+        // not fatal — the foreground path still works.
+        void ensureServiceWorker()
       }
       setSettings((prev) => ({ ...prev, enabled: next }))
     },
     [requestPermission],
   )
+
+  // Re-register on every page load when the user is already opted in, so a
+  // browser update or cache eviction that dropped the SW heals itself.
+  useEffect(() => {
+    if (settings.enabled) {
+      void ensureServiceWorker()
+    }
+  }, [settings.enabled])
 
   const setSoundEnabled = useCallback((next: boolean) => {
     setSettings((prev) => ({ ...prev, soundEnabled: next }))
