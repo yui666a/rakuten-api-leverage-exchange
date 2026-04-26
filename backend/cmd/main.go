@@ -280,6 +280,7 @@ func main() {
 		DailyPnLCalculator:    dailyPnLCalc,
 		ExecutionQualityReporter: executionQualityReporter,
 		ExecutionQualityRepo:     executionQualityRepo,
+		DecisionLogRepo:          decisionLogRepo,
 	})
 
 	sigCh := make(chan os.Signal, 1)
