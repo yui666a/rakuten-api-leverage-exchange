@@ -84,11 +84,27 @@ func WithStrategy(s port.Strategy) RunnerOption {
 	}
 }
 
+// WithDecisionRecorder attaches an EventBus subscriber that persists every
+// pipeline decision (BUY/SELL/HOLD + indicators) into a decision-log
+// repository. Pass a recorder constructed via decisionlog.NewRecorder with
+// a BacktestRepoAdapter bound to the run id. nil is ignored so legacy
+// callers keep the historical bit-identical behaviour.
+func WithDecisionRecorder(rec eventengine.EventHandler) RunnerOption {
+	return func(r *BacktestRunner) {
+		if rec != nil {
+			r.decisionRecorder = rec
+		}
+	}
+}
+
 type BacktestRunner struct {
 	reporter *SummaryReporter
 	// strategy is optional. When nil, Run builds the legacy DefaultStrategy.
 	// When non-nil (typically a ConfigurableStrategy), Run uses it directly.
 	strategy port.Strategy
+	// decisionRecorder is optional. When non-nil, registered at priority 99
+	// on every relevant event type so a DecisionRecorder can observe the run.
+	decisionRecorder eventengine.EventHandler
 }
 
 func NewBacktestRunner(opts ...RunnerOption) *BacktestRunner {
@@ -250,6 +266,14 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
+
+	if r.decisionRecorder != nil {
+		bus.Register(entity.EventTypeIndicator, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeSignal, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeApproved, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeRejected, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeOrder, 99, r.decisionRecorder)
+	}
 
 	primaryCandles := filterCandlesByRange(input.PrimaryCandles, input.Config.FromTimestamp, input.Config.ToTimestamp)
 	higherCandles := filterCandlesByRange(input.HigherCandles, input.Config.FromTimestamp, input.Config.ToTimestamp)
