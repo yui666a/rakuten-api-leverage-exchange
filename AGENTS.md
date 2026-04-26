@@ -81,4 +81,5 @@
 | `docs/design/` | 設計書・実装計画 | 各機能の設計意図を確認するとき |
 | `docs/pdca/README.md` | PDCA 戦略最適化の運用ガイド + サイクル記録 | プロファイル駆動のバックテストを回すとき |
 | `docs/pdca/agent-guide.md` | エージェント向け総合ガイド（機能概要・使い方・ヒント・アンチパターン） | PDCA 機能を初めて触るとき・他エージェントを引き継ぐとき |
+| `docs/decision-log-health-check.md` | `decision_log` / `backtest_decision_log` が正常に書かれているか SQL で確認する手順 | recorder デプロイ後の検証時、シグナル鳴らない時の切り分け |
 | `backend/.env.example` | 環境変数テンプレート | 設定項目を確認するとき |
