@@ -40,3 +40,10 @@ type OrderClient interface {
 type SymbolFetcher interface {
 	GetSymbols(ctx context.Context) ([]entity.Symbol, error)
 }
+
+// CandlestickFetcher は完成済みローソク足の取得インターフェース。
+// EventDrivenPipeline 起動時に PT1M を引いて CandleBuilder の partial bar を
+// 復元するために使う。dateFrom / dateTo は unix ms。nil で venue デフォルト。
+type CandlestickFetcher interface {
+	GetCandlestick(ctx context.Context, symbolID int64, candlestickType string, dateFrom, dateTo *int64) (*entity.CandlestickResponse, error)
+}

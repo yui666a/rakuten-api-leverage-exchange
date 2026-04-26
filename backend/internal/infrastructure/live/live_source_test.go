@@ -286,3 +286,90 @@ func TestParseInterval(t *testing.T) {
 		}
 	}
 }
+
+func TestLiveSource_SeedFromMinuteCandles_FoldsCurrentPeriodOnly(t *testing.T) {
+	src := NewLiveSource(7, "PT15M")
+	// "now" sits inside the 10:15-10:30 window.
+	now := time.Date(2026, 4, 27, 10, 23, 0, 0, time.UTC)
+	periodStart := time.Date(2026, 4, 27, 10, 15, 0, 0, time.UTC)
+
+	minutes := []entity.Candle{
+		// Earlier period (10:00-10:15) — must be ignored.
+		{Open: 100, High: 110, Low: 95, Close: 105, Volume: 1, Time: time.Date(2026, 4, 27, 10, 14, 0, 0, time.UTC).UnixMilli()},
+		// Current period — three minute bars at 10:15, 10:16, 10:17.
+		{Open: 200, High: 210, Low: 195, Close: 205, Volume: 2, Time: time.Date(2026, 4, 27, 10, 15, 0, 0, time.UTC).UnixMilli()},
+		{Open: 205, High: 220, Low: 200, Close: 215, Volume: 3, Time: time.Date(2026, 4, 27, 10, 16, 0, 0, time.UTC).UnixMilli()},
+		{Open: 215, High: 218, Low: 190, Close: 192, Volume: 4, Time: time.Date(2026, 4, 27, 10, 17, 0, 0, time.UTC).UnixMilli()},
+	}
+
+	folded := src.SeedFromMinuteCandles(now, minutes)
+	if folded != 3 {
+		t.Fatalf("folded count = %d, want 3", folded)
+	}
+
+	// Drive an in-period tick so the seeded candle becomes observable via
+	// the same path live ticks travel through.
+	tick := entity.Ticker{
+		SymbolID:  7,
+		Last:      193,
+		Volume:    5,
+		Timestamp: time.Date(2026, 4, 27, 10, 24, 0, 0, time.UTC).UnixMilli(),
+	}
+	events := src.HandleTick(tick)
+	if len(events) != 1 {
+		t.Fatalf("in-period tick should not emit a CandleEvent, got %d events", len(events))
+	}
+
+	// Cross the boundary (10:30) — the seeded + updated bar should now emit.
+	closeTick := entity.Ticker{
+		SymbolID:  7,
+		Last:      230,
+		Volume:    1,
+		Timestamp: time.Date(2026, 4, 27, 10, 30, 1, 0, time.UTC).UnixMilli(),
+	}
+	events = src.HandleTick(closeTick)
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (Tick + Candle), got %d", len(events))
+	}
+	candleEv, ok := events[1].(entity.CandleEvent)
+	if !ok {
+		t.Fatalf("second event = %T, want CandleEvent", events[1])
+	}
+	c := candleEv.Candle
+	if c.Time != periodStart.UnixMilli() {
+		t.Errorf("candle.Time = %d, want %d (period start)", c.Time, periodStart.UnixMilli())
+	}
+	if c.Open != 200 {
+		t.Errorf("Open = %f, want 200 (first seeded minute open)", c.Open)
+	}
+	if c.High != 220 {
+		t.Errorf("High = %f, want 220 (max across seeded minutes)", c.High)
+	}
+	if c.Low != 190 {
+		t.Errorf("Low = %f, want 190 (min across seeded minutes including the third)", c.Low)
+	}
+	// Close = last live tick that landed inside the bar (193), since the
+	// boundary-crossing tick at 230 starts the *next* bar.
+	if c.Close != 193 {
+		t.Errorf("Close = %f, want 193 (last in-period live tick)", c.Close)
+	}
+}
+
+func TestLiveSource_SeedFromMinuteCandles_NoCandlesIsNoOp(t *testing.T) {
+	src := NewLiveSource(7, "PT15M")
+	now := time.Date(2026, 4, 27, 10, 23, 0, 0, time.UTC)
+	folded := src.SeedFromMinuteCandles(now, nil)
+	if folded != 0 {
+		t.Errorf("nil minute slice should fold 0, got %d", folded)
+	}
+	// Builder must still behave normally on the next live tick (i.e.
+	// initialise from the tick's price as before).
+	events := src.HandleTick(entity.Ticker{
+		SymbolID:  7,
+		Last:      999,
+		Timestamp: now.UnixMilli(),
+	})
+	if len(events) != 1 {
+		t.Errorf("expected just TickEvent (no seed -> no candle), got %d", len(events))
+	}
+}

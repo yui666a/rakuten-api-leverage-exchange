@@ -64,6 +64,12 @@ type EventDrivenPipeline struct {
 	// recorder; the rest of the pipeline is unaffected.
 	decisionLogRepo repository.DecisionLogRepository
 
+	// candlestickFetcher is used at event-loop start to seed the LiveSource
+	// CandleBuilder with the in-progress PT15M bar reconstructed from PT1M
+	// candles. Optional — when nil the first emitted bar after a restart
+	// only contains post-restart ticks (legacy behaviour).
+	candlestickFetcher repository.CandlestickFetcher
+
 	// indicatorPeriods / bbSqueezeLookback are the live counterparts of the
 	// per-run RunInput fields the backtest already consumes. They are read
 	// once at startup from the configured StrategyProfile (typically
@@ -107,6 +113,12 @@ type EventDrivenPipelineConfig struct {
 	// SL/TP/Trailing closes) persists into decision_log. nil disables it
 	// without otherwise affecting the pipeline.
 	DecisionLogRepo repository.DecisionLogRepository
+
+	// CandlestickFetcher is used to seed the LiveSource CandleBuilder with
+	// the in-progress PT15M bar (reconstructed from PT1M) at startup so the
+	// first emitted bar after a restart has correct OHLC. nil keeps the
+	// legacy behaviour where the first bar only reflects post-restart ticks.
+	CandlestickFetcher repository.CandlestickFetcher
 }
 
 func NewEventDrivenPipeline(
@@ -139,9 +151,10 @@ func NewEventDrivenPipeline(
 		tradeHistoryRepo:  tradeHistoryRepo,
 		riskStateRepo:     riskStateRepo,
 		clientOrderRepo:   clientOrderRepo,
-		indicatorPeriods:  cfg.IndicatorPeriods,
-		bbSqueezeLookback: cfg.BBSqueezeLookback,
-		decisionLogRepo:   cfg.DecisionLogRepo,
+		indicatorPeriods:   cfg.IndicatorPeriods,
+		bbSqueezeLookback:  cfg.BBSqueezeLookback,
+		decisionLogRepo:    cfg.DecisionLogRepo,
+		candlestickFetcher: cfg.CandlestickFetcher,
 	}
 }
 
@@ -263,6 +276,40 @@ func (p *EventDrivenPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, 
 	}
 }
 
+// seedCandleBuilderFromMinutes pulls PT1M candles covering the current
+// PT15M window and folds them into the LiveSource's CandleBuilder so the
+// first emit after a restart contains the *whole* bar's OHLC, not just
+// post-restart ticks. Best-effort: any error path leaves the builder in
+// its legacy state (next live tick will initialise it from the tick).
+func (p *EventDrivenPipeline) seedCandleBuilderFromMinutes(ctx context.Context, symbolID int64, liveSource *live.LiveSource) {
+	if p.candlestickFetcher == nil {
+		return
+	}
+	now := time.Now().UTC()
+	periodStart := now.Truncate(15 * time.Minute)
+	// Pull a 16-minute window starting at the period boundary so we never
+	// miss the first PT1M bar even if the venue is a few seconds behind.
+	from := periodStart.UnixMilli()
+	to := now.Add(time.Minute).UnixMilli()
+	resp, err := p.candlestickFetcher.GetCandlestick(ctx, symbolID, "PT1M", &from, &to)
+	if err != nil {
+		slog.Warn("event-pipeline: PT1M bootstrap fetch failed; first bar will only see post-restart ticks",
+			"symbolID", symbolID, "error", err)
+		return
+	}
+	if resp == nil || len(resp.Candlesticks) == 0 {
+		return
+	}
+	folded := liveSource.SeedFromMinuteCandles(now, resp.Candlesticks)
+	if folded > 0 {
+		slog.Info("event-pipeline: seeded CandleBuilder from PT1M",
+			"symbolID", symbolID,
+			"foldedMinutes", folded,
+			"periodStart", periodStart.Format(time.RFC3339),
+		)
+	}
+}
+
 // loadSymbolMeta fetches baseStepAmount / minOrderAmount from the API.
 // Must be called with mu held.
 func (p *EventDrivenPipeline) loadSymbolMeta(ctx context.Context, symbolID int64) {
@@ -331,6 +378,12 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 
 	// Create LiveSource for tick-to-candle conversion.
 	liveSource := live.NewLiveSource(snap.symbolID, "PT15M")
+
+	// Bootstrap the in-progress 15-min bar from PT1M candles so the first
+	// emit after a restart has correct OHLC instead of just post-restart
+	// ticks. Best-effort: failures are logged and we fall back to the
+	// legacy "first bar only sees post-restart ticks" behaviour.
+	p.seedCandleBuilderFromMinutes(ctx, snap.symbolID, liveSource)
 
 	// Create RealExecutor for live order execution. The SOR is configured
 	// via env vars at startup (see loadSORConfig in main.go); when the
