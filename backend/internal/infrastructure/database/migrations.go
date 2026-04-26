@@ -426,5 +426,84 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	// Decision log tables. One row per pipeline decision (BAR_CLOSE) plus
+	// extra rows for tick-driven SL/TP/trailing closes. The indicators
+	// snapshot is stored as TEXT so the recorder can write the marshalled
+	// IndicatorSet verbatim without coupling the schema to the indicator
+	// struct shape.
+	decisionLogTables := []string{
+		`CREATE TABLE IF NOT EXISTS decision_log (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			bar_close_at       INTEGER NOT NULL,
+			sequence_in_bar    INTEGER NOT NULL DEFAULT 0,
+			trigger_kind       TEXT    NOT NULL,
+			symbol_id          INTEGER NOT NULL,
+			currency_pair      TEXT    NOT NULL,
+			primary_interval   TEXT    NOT NULL,
+			stance             TEXT    NOT NULL,
+			last_price         REAL    NOT NULL,
+			signal_action      TEXT    NOT NULL,
+			signal_confidence  REAL    NOT NULL DEFAULT 0,
+			signal_reason      TEXT    NOT NULL DEFAULT '',
+			risk_outcome       TEXT    NOT NULL,
+			risk_reason        TEXT    NOT NULL DEFAULT '',
+			book_gate_outcome  TEXT    NOT NULL DEFAULT 'SKIPPED',
+			book_gate_reason   TEXT    NOT NULL DEFAULT '',
+			order_outcome      TEXT    NOT NULL,
+			order_id           INTEGER NOT NULL DEFAULT 0,
+			executed_amount    REAL    NOT NULL DEFAULT 0,
+			executed_price     REAL    NOT NULL DEFAULT 0,
+			order_error        TEXT    NOT NULL DEFAULT '',
+			closed_position_id INTEGER NOT NULL DEFAULT 0,
+			opened_position_id INTEGER NOT NULL DEFAULT 0,
+			indicators_json           TEXT NOT NULL DEFAULT '{}',
+			higher_tf_indicators_json TEXT NOT NULL DEFAULT '{}',
+			created_at         INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_decision_log_symbol_time
+			ON decision_log(symbol_id, bar_close_at DESC, sequence_in_bar)`,
+		`CREATE INDEX IF NOT EXISTS idx_decision_log_created
+			ON decision_log(created_at)`,
+
+		`CREATE TABLE IF NOT EXISTS backtest_decision_log (
+			id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+			backtest_run_id    TEXT    NOT NULL,
+			bar_close_at       INTEGER NOT NULL,
+			sequence_in_bar    INTEGER NOT NULL DEFAULT 0,
+			trigger_kind       TEXT    NOT NULL,
+			symbol_id          INTEGER NOT NULL,
+			currency_pair      TEXT    NOT NULL,
+			primary_interval   TEXT    NOT NULL,
+			stance             TEXT    NOT NULL,
+			last_price         REAL    NOT NULL,
+			signal_action      TEXT    NOT NULL,
+			signal_confidence  REAL    NOT NULL DEFAULT 0,
+			signal_reason      TEXT    NOT NULL DEFAULT '',
+			risk_outcome       TEXT    NOT NULL,
+			risk_reason        TEXT    NOT NULL DEFAULT '',
+			book_gate_outcome  TEXT    NOT NULL DEFAULT 'SKIPPED',
+			book_gate_reason   TEXT    NOT NULL DEFAULT '',
+			order_outcome      TEXT    NOT NULL,
+			order_id           INTEGER NOT NULL DEFAULT 0,
+			executed_amount    REAL    NOT NULL DEFAULT 0,
+			executed_price     REAL    NOT NULL DEFAULT 0,
+			order_error        TEXT    NOT NULL DEFAULT '',
+			closed_position_id INTEGER NOT NULL DEFAULT 0,
+			opened_position_id INTEGER NOT NULL DEFAULT 0,
+			indicators_json           TEXT NOT NULL DEFAULT '{}',
+			higher_tf_indicators_json TEXT NOT NULL DEFAULT '{}',
+			created_at         INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_decision_log_run
+			ON backtest_decision_log(backtest_run_id, bar_close_at, sequence_in_bar)`,
+		`CREATE INDEX IF NOT EXISTS idx_backtest_decision_log_created
+			ON backtest_decision_log(created_at)`,
+	}
+	for _, stmt := range decisionLogTables {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create decision_log: %w", err)
+		}
+	}
+
 	return nil
 }

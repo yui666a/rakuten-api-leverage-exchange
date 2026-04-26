@@ -288,3 +288,51 @@ func TestRunMigrations_PDCABacktestResultsColumnsAndIndexes(t *testing.T) {
 		}
 	}
 }
+
+func TestRunMigrations_DecisionLogTablesAndIndexes(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	defer db.Close()
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	// Idempotency.
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("re-run migration failed: %v", err)
+	}
+
+	for _, table := range []string{"decision_log", "backtest_decision_log"} {
+		var count int
+		err := db.QueryRow(
+			`SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?`, table,
+		).Scan(&count)
+		if err != nil {
+			t.Fatalf("query table %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Errorf("table %s should exist", table)
+		}
+	}
+
+	for _, idx := range []string{
+		"idx_decision_log_symbol_time",
+		"idx_decision_log_created",
+		"idx_backtest_decision_log_run",
+		"idx_backtest_decision_log_created",
+	} {
+		var count int
+		err := db.QueryRow(
+			`SELECT count(*) FROM sqlite_master WHERE type='index' AND name=?`, idx,
+		).Scan(&count)
+		if err != nil {
+			t.Fatalf("query index %s: %v", idx, err)
+		}
+		if count != 1 {
+			t.Errorf("index %s should exist", idx)
+		}
+	}
+}
