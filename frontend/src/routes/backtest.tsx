@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AppFrame } from '../components/AppFrame'
 import {
@@ -993,6 +993,13 @@ function DetailPanel({ result }: { result: BacktestResult }) {
         <h2 className="text-xl font-semibold text-white">
           {config.symbol} / {periodFrom} - {periodTo}
         </h2>
+        <Link
+          to="/backtest-decisions"
+          search={{ id: result.id }}
+          className="ml-auto rounded-full border border-cyan-300/30 bg-cyan-500/10 px-3 py-1 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20"
+        >
+          判断ログを見る →
+        </Link>
       </div>
 
       {/* Config info */}
