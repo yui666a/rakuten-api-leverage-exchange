@@ -106,14 +106,16 @@ func (s *SimExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, a
 	s.nextPosID++
 
 	order := entity.OrderEvent{
-		OrderID:   s.nextOrderID,
-		SymbolID:  symbolID,
-		Side:      string(side),
-		Action:    "open",
-		Price:     fill,
-		Amount:    amount,
-		Reason:    reason,
-		Timestamp: timestamp,
+		OrderID:          s.nextOrderID,
+		SymbolID:         symbolID,
+		Side:             string(side),
+		Action:           "open",
+		Price:            fill,
+		Amount:           amount,
+		Reason:           reason,
+		Timestamp:        timestamp,
+		Trigger:          entity.DecisionTriggerBarClose,
+		OpenedPositionID: position.PositionID,
 	}
 	s.nextOrderID++
 	return order, nil
@@ -160,14 +162,18 @@ func (s *SimExecutor) Close(positionID int64, signalPrice float64, reason string
 
 	sideText := string(pos.Side)
 	order := entity.OrderEvent{
-		OrderID:   s.nextOrderID,
-		SymbolID:  pos.SymbolID,
-		Side:      sideText,
-		Action:    "close",
-		Price:     exitFill,
-		Amount:    pos.Amount,
-		Reason:    reason,
-		Timestamp: timestamp,
+		OrderID:          s.nextOrderID,
+		SymbolID:         pos.SymbolID,
+		Side:             sideText,
+		Action:           "close",
+		Price:            exitFill,
+		Amount:           pos.Amount,
+		Reason:           reason,
+		Timestamp:        timestamp,
+		ClosedPositionID: pos.PositionID,
+		// Trigger is left empty here; the caller (TickRiskHandler or
+		// strategy-driven close) sets it to TICK_SLTP / TICK_TRAILING /
+		// BAR_CLOSE before forwarding the OrderEvent to the bus.
 	}
 	s.nextOrderID++
 

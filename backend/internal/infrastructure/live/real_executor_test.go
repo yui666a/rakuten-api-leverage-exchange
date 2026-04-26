@@ -187,6 +187,15 @@ func TestRealExecutor_OpenAndPositions(t *testing.T) {
 	if positions[0].Amount != 0.01 {
 		t.Fatalf("expected amount=0.01, got %f", positions[0].Amount)
 	}
+	if orderEv.Trigger != entity.DecisionTriggerBarClose {
+		t.Errorf("Trigger = %q, want BAR_CLOSE", orderEv.Trigger)
+	}
+	if orderEv.OpenedPositionID != 100 {
+		t.Errorf("OpenedPositionID = %d, want 100", orderEv.OpenedPositionID)
+	}
+	if orderEv.ClosedPositionID != 0 {
+		t.Errorf("ClosedPositionID = %d, want 0 on Open", orderEv.ClosedPositionID)
+	}
 }
 
 func TestRealExecutor_OpenAndClose(t *testing.T) {
@@ -229,6 +238,17 @@ func TestRealExecutor_OpenAndClose(t *testing.T) {
 	}
 	if trade.PnL == 0 {
 		t.Fatal("expected non-zero PnL")
+	}
+	if orderEv.ClosedPositionID == 0 {
+		t.Errorf("ClosedPositionID must be set on Close, got 0")
+	}
+	if orderEv.OpenedPositionID != 0 {
+		t.Errorf("OpenedPositionID must remain 0 on Close, got %d", orderEv.OpenedPositionID)
+	}
+	// Trigger is intentionally left empty by the executor; the caller
+	// (TickRiskHandler etc.) sets it before forwarding the event.
+	if orderEv.Trigger != "" {
+		t.Errorf("Trigger must be empty (caller fills it), got %q", orderEv.Trigger)
 	}
 
 	// Position should be removed.
