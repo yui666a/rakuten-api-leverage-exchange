@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "description": "Promoted on 2026-04-24 as v7 — v6 core strategy (sl14 + bb_squeeze_lookback=3 + cmf_buy_min=0.10) PLUS risk_pct dynamic position sizing at risk_per_trade_pct=0.50. Source candidate: experiment_2026-04-24_sizing_r050. LTC/JPY 4-period verification (3m/6m/1y/2y from 2026-04-16, initialBalance=100k): 3m +4.30%/DD 5.09%, 6m +7.69%/DD 4.95%, 1y +25.85%/DD 11.66%, 2y +26.34%/DD 15.58%. geomMean +15.60% (vs v6 fixed +7.32%, 2.13x improvement), worst MaxDD 15.58% (clears 20% constraint with 4.4pp headroom), all 4 windows positive. Sizer config: LTC venue lot (min_lot=0.1, lot_step=0.1), max_position cap 20% of equity. No DD scale-down (r=0.5 stays inside the 20% budget without it; r>=0.75 required DD scale but still blew out on 2y). See docs/pdca/2026-04-24_promotion_v7.md. Known limitation inherited from v6: 2022 bear regime still blows up. BTC/JPY remains unsupported by this tuning (cycle40).",
+  "description": "Promoted on 2026-04-26 as v8 — supersedes v7 (LTC/JPY × PT15M @ initialBalance=100k). Re-tuned for the user's confirmed ¥60,000 budget ceiling (ETH became infeasible at that equity scale because min_lot 0.1 ≈ ¥37k drowns the risk_pct sizer). Source candidate: experiment_ltc_60k_winner_no_break (cycle71g, 2026-04-26). Differs from v7 in three places: signal_rules.breakout.enabled=false (cycle71g — breakout had negative expected value on LTC PT15M long-windows), position_sizing.risk_per_trade_pct=0.75 (vs 0.50 for v7; ¥60k equity scale lets r=0.75 fit the 20% MaxDD constraint), and position_sizing.drawdown_scale_down (TierA=13%/0.65x, TierB=19%/0.40x — needed because r=0.75 alone would breach 2y DD 22.51%). 4-period verification (3m/6m/1y/2y from 2026-04-16, initialBalance=60,000 JPY): 3m +5.09%/DD 6.26%, 6m +5.09%/DD 7.37%, 1y +45.16%/DD 17.52%, 2y +38.82%/DD 18.78%. All 4 windows positive, all 4 windows MaxDD ≤ 20%. Geometric mean Return ≈ +22% (vs v7@¥60k baseline +13.6%, +8.4pp improvement). Sizer config: min_lot=0.1, lot_step=0.1 (LTC venue), risk_pct=0.75 with DD scale-down. See docs/pdca/2026-04-26_cycle70-71_60k_promotion.md. Known limitations: ¥60k equity-scale specific (r=0.75 + DD scale tuned for this size; not portable to ¥10k or ¥1M without re-tuning); breakout disabled gives up cross-asset (BTC/ETH) generality. The legacy v7 lives on as production_eth.json baseline reference.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -34,7 +34,7 @@
       "macd_histogram_limit": 10
     },
     "breakout": {
-      "enabled": true,
+      "enabled": false,
       "volume_ratio_min": 1.5,
       "require_macd_confirm": true,
       "cmf_buy_min": 0.1
@@ -49,10 +49,16 @@
     "trailing_atr_multiplier": 2.5,
     "position_sizing": {
       "mode": "risk_pct",
-      "risk_per_trade_pct": 0.50,
+      "risk_per_trade_pct": 0.75,
       "max_position_pct_of_equity": 20,
       "min_lot": 0.1,
-      "lot_step": 0.1
+      "lot_step": 0.1,
+      "drawdown_scale_down": {
+        "tier_a_pct": 13,
+        "tier_a_scale": 0.65,
+        "tier_b_pct": 19,
+        "tier_b_scale": 0.4
+      }
     }
   },
   "htf_filter": {
