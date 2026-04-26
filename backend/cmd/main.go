@@ -827,7 +827,15 @@ func startExecutionQualitySnapshotWorker(
 		if symbolID <= 0 {
 			return
 		}
-		report, err := reporter.Build(ctx, symbolID, 86400)
+		var report entity.ExecutionQualityReport
+		err := retryOn20010(ctx, time.Sleep, func() error {
+			r, e := reporter.Build(ctx, symbolID, 86400)
+			if e != nil {
+				return e
+			}
+			report = r
+			return nil
+		})
 		if err != nil {
 			slog.Warn("execution-quality snapshot failed", "error", err)
 			return
