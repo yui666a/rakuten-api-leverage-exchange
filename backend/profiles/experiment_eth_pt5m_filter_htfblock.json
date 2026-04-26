@@ -1,0 +1,78 @@
+{
+  "name": "experiment_eth_pt5m_filter_htfblock",
+  "description": "cycle64 a: htf_filter.block_counter_trend=true. LTC では壊滅したが ETH では未検証。 2024-04~10 negative-edge regime を HTF不一致で no-trade にできるか。",
+  "indicators": {
+    "sma_short": 60,
+    "sma_long": 150,
+    "ema_fast": 36,
+    "ema_slow": 78,
+    "rsi_period": 42,
+    "macd_fast": 36,
+    "macd_slow": 78,
+    "macd_signal": 27,
+    "bb_period": 60,
+    "bb_multiplier": 2.0,
+    "atr_period": 42,
+    "volume_sma_period": 60,
+    "adx_period": 42,
+    "stoch_k_period": 42,
+    "stoch_smooth_k": 9,
+    "stoch_smooth_d": 9,
+    "stoch_rsi_rsi_period": 42,
+    "stoch_rsi_stoch_period": 42,
+    "donchian_period": 60,
+    "obv_slope_period": 60,
+    "cmf_period": 60,
+    "ichimoku_tenkan": 27,
+    "ichimoku_kijun": 78,
+    "ichimoku_senkou_b": 156
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 3,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5,
+    "position_sizing": {
+      "mode": "risk_pct",
+      "risk_per_trade_pct": 0.5,
+      "max_position_pct_of_equity": 20,
+      "min_lot": 0.1,
+      "lot_step": 0.1
+    }
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": true,
+    "alignment_boost": 0.1
+  }
+}

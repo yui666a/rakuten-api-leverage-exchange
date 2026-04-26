@@ -1,0 +1,84 @@
+{
+  "name": "production_eth",
+  "description": "Promoted on 2026-04-26 as ETH/JPY × PT5M production profile (eth_production v1). Source candidate: experiment_eth_pt5m_2x_dd_soft (cycle66). Indicator periods scaled 2x off LTC PT15M production v7. Position sizing risk_pct=0.50 + DD scale-down (TierA=12%/0.75x, TierB=18%/0.50x). 4-period verification (3m/6m/1y/2y from 2026-04-16, initialBalance=1M JPY): 3m +12.23%/DD 5.66%, 6m +12.23%/DD 5.66%, 1y +11.56%/DD 15.18%, 2y +44.13%/DD 15.29%. Geometric mean +18%, worst MaxDD 15.29% (clears 20% constraint with 4.71pp headroom), all 4 windows positive. Beats LTC v7 (gM +15.60%, worst DD 15.58%) on every metric. Sizer config: min_lot=0.1, lot_step=0.1 (ETH venue minimum, identical to LTC venue minimum). See docs/pdca/2026-04-26_cycle61-66.md and docs/pdca/2026-04-26_promotion_eth_v1.md. Known constraint: initialBalance must be >= 400k JPY (recommended 1M JPY) so risk_pct sizing stays above ETH min_lot 0.1 floor.",
+  "indicators": {
+    "sma_short": 40,
+    "sma_long": 100,
+    "ema_fast": 24,
+    "ema_slow": 52,
+    "rsi_period": 28,
+    "macd_fast": 24,
+    "macd_slow": 52,
+    "macd_signal": 18,
+    "bb_period": 40,
+    "bb_multiplier": 2.0,
+    "atr_period": 28,
+    "volume_sma_period": 40,
+    "adx_period": 28,
+    "stoch_k_period": 28,
+    "stoch_smooth_k": 6,
+    "stoch_smooth_d": 6,
+    "stoch_rsi_rsi_period": 28,
+    "stoch_rsi_stoch_period": 28,
+    "donchian_period": 40,
+    "obv_slope_period": 40,
+    "cmf_period": 40,
+    "ichimoku_tenkan": 18,
+    "ichimoku_kijun": 52,
+    "ichimoku_senkou_b": 104
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 3,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5,
+    "position_sizing": {
+      "mode": "risk_pct",
+      "risk_per_trade_pct": 0.5,
+      "max_position_pct_of_equity": 20,
+      "min_lot": 0.1,
+      "lot_step": 0.1,
+      "drawdown_scale_down": {
+        "tier_a_pct": 12,
+        "tier_a_scale": 0.75,
+        "tier_b_pct": 18,
+        "tier_b_scale": 0.5
+      }
+    }
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
