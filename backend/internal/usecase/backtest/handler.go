@@ -688,6 +688,8 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 					}
 					return nil, err
 				}
+				orderEvent.Trigger = entity.DecisionTriggerTickSLTP
+				orderEvent.ClosedPositionID = pos.PositionID
 				emitted = append(emitted, orderEvent)
 				delete(h.highWaterMarks, pos.PositionID)
 				continue
@@ -725,6 +727,8 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 					}
 					return nil, err
 				}
+				orderEvent.Trigger = entity.DecisionTriggerTickTrailing
+				orderEvent.ClosedPositionID = pos.PositionID
 				emitted = append(emitted, orderEvent)
 				delete(h.highWaterMarks, pos.PositionID)
 			}
@@ -739,6 +743,8 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 					}
 					return nil, err
 				}
+				orderEvent.Trigger = entity.DecisionTriggerTickTrailing
+				orderEvent.ClosedPositionID = pos.PositionID
 				emitted = append(emitted, orderEvent)
 				delete(h.highWaterMarks, pos.PositionID)
 			}

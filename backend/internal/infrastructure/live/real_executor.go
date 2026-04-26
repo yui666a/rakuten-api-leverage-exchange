@@ -188,14 +188,16 @@ func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, s
 		EntryTimestamp: timestamp,
 	})
 	return entity.OrderEvent{
-		OrderID:   orderID,
-		SymbolID:  symbolID,
-		Side:      string(side),
-		Action:    "open",
-		Price:     fillPrice,
-		Amount:    amount,
-		Reason:    reason,
-		Timestamp: timestamp,
+		OrderID:          orderID,
+		SymbolID:         symbolID,
+		Side:             string(side),
+		Action:           "open",
+		Price:            fillPrice,
+		Amount:           amount,
+		Reason:           reason,
+		Timestamp:        timestamp,
+		Trigger:          entity.DecisionTriggerBarClose,
+		OpenedPositionID: posID,
 	}, nil
 }
 
@@ -250,14 +252,16 @@ func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, 
 	})
 
 	return entity.OrderEvent{
-		OrderID:   orderID,
-		SymbolID:  symbolID,
-		Side:      string(side),
-		Action:    "open",
-		Price:     fillPrice,
-		Amount:    amount,
-		Reason:    reason,
-		Timestamp: timestamp,
+		OrderID:          orderID,
+		SymbolID:         symbolID,
+		Side:             string(side),
+		Action:           "open",
+		Price:            fillPrice,
+		Amount:           amount,
+		Reason:           reason,
+		Timestamp:        timestamp,
+		Trigger:          entity.DecisionTriggerBarClose,
+		OpenedPositionID: posID,
 	}, nil
 }
 
@@ -358,14 +362,19 @@ func (r *RealExecutor) closeLocked(positionID int64, signalPrice float64, reason
 	}
 
 	return entity.OrderEvent{
-		OrderID:   orderID,
-		SymbolID:  pos.SymbolID,
-		Side:      string(pos.Side),
-		Action:    "close",
-		Price:     exitPrice,
-		Amount:    pos.Amount,
-		Reason:    reason,
-		Timestamp: timestamp,
+		OrderID:          orderID,
+		SymbolID:         pos.SymbolID,
+		Side:             string(pos.Side),
+		Action:           "close",
+		Price:            exitPrice,
+		Amount:           pos.Amount,
+		Reason:           reason,
+		Timestamp:        timestamp,
+		ClosedPositionID: pos.PositionID,
+		// Trigger is left empty here. The caller (TickRiskHandler for SL/TP/
+		// trailing closes; ExecutionHandler-driven reverse for bar-close
+		// closes) sets Trigger to TICK_SLTP / TICK_TRAILING / BAR_CLOSE
+		// before forwarding the event onto the bus.
 	}, trade, nil
 }
 
