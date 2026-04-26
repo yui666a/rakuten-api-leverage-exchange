@@ -18,6 +18,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	bt "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
 )
 
@@ -57,6 +58,12 @@ type BacktestHandler struct {
 	// marketDataSvc supplies persisted L2 snapshots for slippageModel="orderbook".
 	// When nil, that model returns 400 ("orderbook replay unavailable").
 	marketDataSvc *usecase.MarketDataService
+
+	// decisionLogRepo (optional). When non-nil, every backtest run attaches
+	// a DecisionRecorder so each cycle's BUY/SELL/HOLD + indicator
+	// snapshot lands in backtest_decision_log scoped to the run id. The
+	// list/delete endpoints become available too.
+	decisionLogRepo repository.BacktestDecisionLogRepository
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -99,6 +106,15 @@ func WithWalkForwardRepo(repo repository.WalkForwardResultRepository) BacktestHa
 func WithMarketDataService(svc *usecase.MarketDataService) BacktestHandlerOption {
 	return func(h *BacktestHandler) {
 		h.marketDataSvc = svc
+	}
+}
+
+// WithDecisionLogRepo wires the BacktestDecisionLogRepository so every
+// backtest run persists per-cycle decisions and the list / delete
+// endpoints become available. nil keeps backtest runs decision-log-free.
+func WithDecisionLogRepo(repo repository.BacktestDecisionLogRepository) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.decisionLogRepo = repo
 	}
 }
 
@@ -289,6 +305,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	// mutate h.runner (it is shared across requests) so profile
 	// selection is per-request.
 	runner := h.runner
+	var runOpts []bt.RunnerOption
 	if profile != nil {
 		strat, err := strategyuc.BuildStrategyFromProfile(strategyprofile.NewLoader(baseDir), profile)
 		if err != nil {
@@ -298,7 +315,30 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid profile: " + err.Error()})
 			return
 		}
-		runner = bt.NewBacktestRunner(bt.WithStrategy(strat))
+		runOpts = append(runOpts, bt.WithStrategy(strat))
+	}
+
+	// Pre-allocate the run id so we can scope a DecisionRecorder to it
+	// before the bus dispatches its first event. The runner honours
+	// RunInput.ResultID and falls back to NewULID when empty.
+	var preallocatedRunID string
+	if h.decisionLogRepo != nil {
+		id, err := bt.NewULID()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "generate run id: " + err.Error()})
+			return
+		}
+		preallocatedRunID = id
+		adapter := decisionlog.NewBacktestRepoAdapter(h.decisionLogRepo, id)
+		recorder := decisionlog.NewRecorder(adapter, decisionlog.RecorderConfig{
+			SymbolID:        cfg.SymbolID,
+			CurrencyPair:    cfg.Symbol,
+			PrimaryInterval: cfg.PrimaryInterval,
+		})
+		runOpts = append(runOpts, bt.WithDecisionRecorder(recorder))
+	}
+	if len(runOpts) > 0 {
+		runner = bt.NewBacktestRunner(runOpts...)
 	}
 
 	// cycle44: plumb the profile's bb_squeeze_lookback into the run so
@@ -331,6 +371,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		PositionSizing:    positionSizing,
 		FillPriceSource:   fillSource,
 		BookSource:        bookSource,
+		ResultID:          preallocatedRunID,
 		RiskConfig: entity.RiskConfig{
 			MaxPositionAmount:     req.MaxPositionAmount,
 			MaxDailyLoss:          req.MaxDailyLoss,
@@ -370,6 +411,61 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// ListDecisions returns the per-cycle decision log for a single backtest
+// run. Newest-first; cursor paging via id < cursor. Returns 503 when the
+// handler was constructed without a BacktestDecisionLogRepository.
+func (h *BacktestHandler) ListDecisions(c *gin.Context) {
+	if h.decisionLogRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "decision log repository not configured"})
+		return
+	}
+	runID := c.Param("id")
+	limit := 500
+	if s := c.Query("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			if v > 5000 {
+				v = 5000
+			}
+			limit = v
+		}
+	}
+	var cursor int64
+	if s := c.Query("cursor"); s != "" {
+		if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+			cursor = v
+		}
+	}
+	rows, next, err := h.decisionLogRepo.ListByRun(c.Request.Context(), runID, limit, cursor)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]gin.H, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, decisionRecordToJSON(r))
+	}
+	c.JSON(http.StatusOK, gin.H{"decisions": out, "nextCursor": next, "hasMore": next != 0})
+}
+
+// DeleteDecisions purges every backtest_decision_log row scoped to the
+// given run id. Idempotent: deleting nothing for an unknown run is fine
+// and returns 200 with deleted=0. The 3-day retention sweep handles
+// untouched rows; this endpoint exists so callers can reclaim space
+// immediately when they know they're done with a run.
+func (h *BacktestHandler) DeleteDecisions(c *gin.Context) {
+	if h.decisionLogRepo == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "decision log repository not configured"})
+		return
+	}
+	runID := c.Param("id")
+	deleted, err := h.decisionLogRepo.DeleteByRun(c.Request.Context(), runID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
 // buildExecutionSourcesForCfg returns the FillPriceSource and BookSource for

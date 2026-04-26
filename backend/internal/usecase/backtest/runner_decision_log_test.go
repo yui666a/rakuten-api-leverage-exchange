@@ -77,6 +77,33 @@ func TestRunner_WithDecisionRecorder_ForwardsBusEvents(t *testing.T) {
 	}
 }
 
+func TestRunner_PreAllocatedResultID_IsHonoured(t *testing.T) {
+	primary := []entity.Candle{
+		{Open: 100, High: 101, Low: 99, Close: 100, Time: 1_770_000_000_000},
+	}
+	runner := NewBacktestRunner()
+	res, err := runner.Run(context.Background(), RunInput{
+		Config: entity.BacktestConfig{
+			Symbol:          "BTC_JPY",
+			SymbolID:        7,
+			PrimaryInterval: "PT15M",
+			FromTimestamp:   primary[0].Time,
+			ToTimestamp:     primary[0].Time,
+			InitialBalance:  100000,
+		},
+		RiskConfig:     entity.RiskConfig{InitialCapital: 100000, StopLossPercent: 5},
+		TradeAmount:    0.01,
+		PrimaryCandles: primary,
+		ResultID:       "preallocated-123",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.ID != "preallocated-123" {
+		t.Errorf("result.ID = %q, want preallocated value", res.ID)
+	}
+}
+
 func TestRunner_WithDecisionRecorder_NilDoesNotPanic(t *testing.T) {
 	primary := []entity.Candle{
 		{Open: 100, High: 101, Low: 99, Close: 100, Time: 1_770_000_000_000},
