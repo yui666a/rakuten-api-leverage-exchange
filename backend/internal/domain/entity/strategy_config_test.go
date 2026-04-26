@@ -212,13 +212,16 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
   "indicators": {
     "sma_short": 10,
     "sma_long": 30,
+    "ema_fast": 0,
+    "ema_slow": 0,
     "rsi_period": 14,
     "macd_fast": 12,
     "macd_slow": 26,
     "macd_signal": 9,
     "bb_period": 20,
     "bb_multiplier": 2.0,
-    "atr_period": 14
+    "atr_period": 14,
+    "volume_sma_period": 0
   },
   "stance_rules": {
     "rsi_oversold": 20,

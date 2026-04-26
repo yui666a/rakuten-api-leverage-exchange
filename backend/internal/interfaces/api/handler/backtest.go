@@ -307,10 +307,12 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	// "only override if > 0" guard.
 	var bbLookback int
 	var positionSizing *entity.PositionSizingConfig
+	var indicatorPeriods entity.IndicatorConfig
 	if profile != nil {
 		resolved := resolveRiskProfile(baseDir, profile)
 		bbLookback = resolved.StanceRules.BBSqueezeLookback
 		positionSizing = resolved.Risk.PositionSizing
+		indicatorPeriods = resolved.Indicators
 	}
 
 	fillSource, bookSource, err := h.buildExecutionSourcesForCfg(c.Request.Context(), cfg)
@@ -325,6 +327,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		PrimaryCandles:    primary.Candles,
 		HigherCandles:     higherCandles,
 		BBSqueezeLookback: bbLookback,
+		IndicatorPeriods:  indicatorPeriods,
 		PositionSizing:    positionSizing,
 		FillPriceSource:   fillSource,
 		BookSource:        bookSource,
