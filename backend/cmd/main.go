@@ -18,6 +18,7 @@ import (
 	backtestinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/interfaces/api"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
@@ -113,6 +114,20 @@ func main() {
 		slog.Info("trading config restored from db", "symbolID", symbolID, "tradeAmount", tradeAmount)
 	}
 
+	// Load the live strategy profile so the IndicatorCalculator (used by API
+	// /indicators handlers + bootstrap) and the EventDrivenPipeline both see
+	// the same lookback periods the strategy was tuned for. Failure falls
+	// back to legacy defaults so a missing / malformed profile does not
+	// prevent the live pipeline from starting — but we log the error so
+	// operators see what happened.
+	liveProfile := loadLiveProfile()
+	if liveProfile != nil {
+		indicatorCalc.SetIndicatorPeriods(liveProfile.Indicators)
+		if liveProfile.StanceRules.BBSqueezeLookback > 0 {
+			indicatorCalc.SetBBSqueezeLookback(liveProfile.StanceRules.BBSqueezeLookback)
+		}
+	}
+
 	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "PT15M", 500); err != nil {
 		slog.Warn("initial candle bootstrap failed", "error", err)
 	}
@@ -149,6 +164,8 @@ func main() {
 				BalanceHaltPct:  cfg.Reconcile.BalanceHaltPct,
 				OrderTTL:        time.Duration(cfg.Reconcile.OrderTTLSec) * time.Second,
 			},
+			IndicatorPeriods:  liveProfileIndicators(liveProfile),
+			BBSqueezeLookback: liveProfileBBSqueezeLookback(liveProfile),
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -378,6 +395,53 @@ func loadPersistenceConfig() usecase.PersistenceConfig {
 		cfg.QueueSize = v
 	}
 	return cfg
+}
+
+// loadLiveProfile reads the live strategy profile from
+// $LIVE_PROFILE (default: "production") under $PROFILES_BASE_DIR
+// (default: "profiles"). Returns nil on any failure — the caller treats
+// nil as "use legacy hardcoded defaults" so a malformed JSON or missing
+// file does not block the live pipeline from starting; the error is
+// logged loudly so operators see it.
+//
+// The profile is loaded once at startup. Hot-swapping requires a process
+// restart, mirroring how the backtest path resolves a profile per run.
+func loadLiveProfile() *entity.StrategyProfile {
+	name := os.Getenv("LIVE_PROFILE")
+	if name == "" {
+		name = "production"
+	}
+	baseDir := os.Getenv("PROFILES_BASE_DIR")
+	if baseDir == "" {
+		baseDir = "profiles"
+	}
+	loader := strategyprofile.NewLoader(baseDir)
+	profile, err := loader.Load(name)
+	if err != nil {
+		slog.Warn("live strategy profile load failed; falling back to legacy defaults", "name", name, "baseDir", baseDir, "error", err)
+		return nil
+	}
+	slog.Info("live strategy profile loaded", "name", profile.Name, "baseDir", baseDir)
+	return profile
+}
+
+// liveProfileIndicators returns the IndicatorConfig from a loaded profile,
+// or the zero value (which WithDefaults turns into legacy values) when no
+// profile is available.
+func liveProfileIndicators(p *entity.StrategyProfile) entity.IndicatorConfig {
+	if p == nil {
+		return entity.IndicatorConfig{}
+	}
+	return p.Indicators
+}
+
+// liveProfileBBSqueezeLookback returns profile.StanceRules.BBSqueezeLookback
+// or 0 (legacy fallback) when no profile is available.
+func liveProfileBBSqueezeLookback(p *entity.StrategyProfile) int {
+	if p == nil {
+		return 0
+	}
+	return p.StanceRules.BBSqueezeLookback
 }
 
 func startMarketRelay(

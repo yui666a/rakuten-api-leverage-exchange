@@ -57,6 +57,14 @@ type EventDrivenPipeline struct {
 	reconcileConfig      reconcile.Config
 	clientOrderRepo      repository.ClientOrderRepository
 
+	// indicatorPeriods / bbSqueezeLookback are the live counterparts of the
+	// per-run RunInput fields the backtest already consumes. They are read
+	// once at startup from the configured StrategyProfile (typically
+	// production.json) so the live IndicatorHandler computes indicators on
+	// the same lookbacks the strategy was tuned for.
+	indicatorPeriods  entity.IndicatorConfig
+	bbSqueezeLookback int
+
 	// sleepFn is used by syncState for retry backoff (test-injectable).
 	sleepFn func(time.Duration)
 }
@@ -73,6 +81,19 @@ type EventDrivenPipelineConfig struct {
 	CircuitBreaker       circuitbreaker.Config
 	StaleCheckIntervalMs int64
 	Reconcile            reconcile.Config
+
+	// IndicatorPeriods drives the live IndicatorHandler's lookback periods
+	// for SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA / ADX / Stochastics /
+	// StochRSI / Donchian / OBVSlope / CMF / Ichimoku. Zero-valued fields
+	// fall back to the legacy LTC PT15M defaults via WithDefaults so a
+	// missing profile keeps the pre-PR-D behaviour bit-identical.
+	IndicatorPeriods entity.IndicatorConfig
+
+	// BBSqueezeLookback mirrors profile.StanceRules.BBSqueezeLookback so
+	// the live handler's RecentSqueeze gate respects the profile (cycle44
+	// fix for the backtest path; this PR brings the same plumbing to live).
+	// 0 keeps the legacy default of 5.
+	BBSqueezeLookback int
 }
 
 func NewEventDrivenPipeline(
@@ -105,6 +126,8 @@ func NewEventDrivenPipeline(
 		tradeHistoryRepo:  tradeHistoryRepo,
 		riskStateRepo:     riskStateRepo,
 		clientOrderRepo:   clientOrderRepo,
+		indicatorPeriods:  cfg.IndicatorPeriods,
+		bbSqueezeLookback: cfg.BBSqueezeLookback,
 	}
 }
 
@@ -314,6 +337,14 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
 	indicatorHandler := backtest.NewIndicatorHandler("PT15M", "PT1H", 500)
+	// PR-D: profile-driven indicator periods + BB squeeze lookback. The
+	// backtest path has been on this since PR-B/C; live now uses the same
+	// knob set so the strategy sees identical indicator values whether it
+	// is being backtested or run for real.
+	indicatorHandler.SetIndicatorPeriods(p.indicatorPeriods)
+	if p.bbSqueezeLookback > 0 {
+		indicatorHandler.SetBBSqueezeLookback(p.bbSqueezeLookback)
+	}
 	if p.marketDataSvc != nil {
 		// PR-J: feed Microprice / OFI from the live in-memory book cache.
 		indicatorHandler.SetBookSource(p.marketDataSvc, 10_000, 60_000, 5)
