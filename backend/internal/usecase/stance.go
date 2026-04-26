@@ -184,7 +184,7 @@ func (r *RuleBasedStanceResolver) ResolveAt(ctx context.Context, indicators enti
 
 func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, lastPrice float64, now time.Time) StanceResult {
 	// 1. インジケータ不足チェック
-	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
+	if indicators.SMAShort == nil || indicators.SMALong == nil || indicators.RSI == nil {
 		return StanceResult{
 			Stance:    entity.MarketStanceHold,
 			Reasoning: "insufficient indicator data",
@@ -193,9 +193,9 @@ func (r *RuleBasedStanceResolver) applyRules(indicators entity.IndicatorSet, las
 		}
 	}
 
-	sma20 := *indicators.SMA20
-	sma50 := *indicators.SMA50
-	rsi := *indicators.RSI14
+	sma20 := *indicators.SMAShort
+	sma50 := *indicators.SMALong
+	rsi := *indicators.RSI
 
 	// 2. RSI極端値 → CONTRARIAN（最優先）
 	if rsi < r.options.RSIOversold {

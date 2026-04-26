@@ -33,13 +33,13 @@ func ptrBool(v bool) *bool        { return &v }
 func TestStrategyHandler_GetStrategy_WithLiveSnapshot_TrendFollow(t *testing.T) {
 	resolver := usecase.NewRuleBasedStanceResolver(nil)
 
-	// An uptrending snapshot: SMA20 > SMA50 by more than the convergence
+	// An uptrending snapshot: SMAShort > SMALong by more than the convergence
 	// threshold (0.002) so the rule-based resolver commits to TREND_FOLLOW
 	// instead of HOLD.
 	indicators := entity.IndicatorSet{
-		SMA20:         ptrFloat(120),
-		SMA50:         ptrFloat(100),
-		RSI14:         ptrFloat(55),
+		SMAShort:         ptrFloat(120),
+		SMALong:         ptrFloat(100),
+		RSI:         ptrFloat(55),
 		BBBandwidth:   ptrFloat(0.05),
 		VolumeRatio:   ptrFloat(1.0),
 		RecentSqueeze: ptrBool(false),

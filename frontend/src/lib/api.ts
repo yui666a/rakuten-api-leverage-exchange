@@ -42,11 +42,11 @@ export type StrategyResponse = {
 
 export type IndicatorSet = {
   symbolId: number
-  sma20: number | null
-  sma50: number | null
-  ema12: number | null
-  ema26: number | null
-  rsi14: number | null
+  smaShort: number | null
+  smaLong: number | null
+  emaFast: number | null
+  emaSlow: number | null
+  rsi: number | null
   macdLine: number | null
   signalLine: number | null
   histogram: number | null

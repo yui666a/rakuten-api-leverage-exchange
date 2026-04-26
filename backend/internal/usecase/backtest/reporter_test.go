@@ -165,7 +165,7 @@ func TestSummaryReporter_BuildSummary_IncludesBreakdowns(t *testing.T) {
 	}
 	trades := []entity.BacktestTradeRecord{
 		{TradeID: 1, EntryTime: 1000, ExitTime: 1600, PnL: 100,
-			ReasonEntry: "trend follow: EMA12 > EMA26",
+			ReasonEntry: "trend follow: EMAFast > EMASlow",
 			ReasonExit:  "take_profit"},
 		{TradeID: 2, EntryTime: 2000, ExitTime: 2600, PnL: -50,
 			ReasonEntry: "contrarian: RSI overbought",
@@ -174,7 +174,7 @@ func TestSummaryReporter_BuildSummary_IncludesBreakdowns(t *testing.T) {
 			ReasonEntry: "breakout: price above BB upper",
 			ReasonExit:  "reverse_signal"},
 		{TradeID: 4, EntryTime: 4000, ExitTime: 4600, PnL: 20,
-			ReasonEntry: "trend follow: SMA20 > SMA50",
+			ReasonEntry: "trend follow: SMAShort > SMALong",
 			ReasonExit:  "take_profit"},
 	}
 	equityPoints := []EquityPoint{

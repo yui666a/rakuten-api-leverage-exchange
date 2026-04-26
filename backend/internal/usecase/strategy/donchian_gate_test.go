@@ -10,7 +10,7 @@ import (
 
 // TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy is the PR-11 wiring
 // confirmation test. With DonchianPeriod > 0 and lastPrice at or below
-// Donchian20Upper, a breakout BUY must be blocked with a reason citing
+// DonchianUpper, a breakout BUY must be blocked with a reason citing
 // Donchian. Guards against the silent-no-op trap (cycle08 pattern) where a
 // profile field compiles cleanly but never influences a signal decision.
 func TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy(t *testing.T) {
@@ -22,7 +22,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy(t *testing.T) {
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
 	// Isolate the donchian gate from other breakout gates that the production
 	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
-	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// helpers don't populate CMF, so any active CMF gate would otherwise
 	// block the signal regardless of donchian state.
 	profile.SignalRules.Breakout.CMFBuyMin = 0
 	profile.SignalRules.Breakout.CMFSellMax = 0
@@ -39,7 +39,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy(t *testing.T) {
 	ind := makeBreakoutBuyReadyIndicators()
 	lastPrice := 120.0
 	don := 125.0 // strictly above lastPrice, so gate blocks
-	ind.Donchian20Upper = &don
+	ind.DonchianUpper = &don
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, lastPrice, time.Now())
 	if err != nil {
@@ -57,7 +57,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutBuy(t *testing.T) {
 }
 
 // TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy: when lastPrice is
-// strictly above Donchian20Upper, the gate passes and the breakout BUY fires.
+// strictly above DonchianUpper, the gate passes and the breakout BUY fires.
 func TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy(t *testing.T) {
 	profile := productionProfile(t)
 	profile.SignalRules.Breakout.Enabled = true
@@ -66,7 +66,7 @@ func TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy(t *testing.T) {
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
 	// Isolate the donchian gate from other breakout gates that the production
 	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
-	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// helpers don't populate CMF, so any active CMF gate would otherwise
 	// block the signal regardless of donchian state.
 	profile.SignalRules.Breakout.CMFBuyMin = 0
 	profile.SignalRules.Breakout.CMFSellMax = 0
@@ -79,7 +79,7 @@ func TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy(t *testing.T) {
 	ind := makeBreakoutBuyReadyIndicators()
 	lastPrice := 125.0
 	don := 120.0 // lastPrice strictly above Donchian upper
-	ind.Donchian20Upper = &don
+	ind.DonchianUpper = &don
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, lastPrice, time.Now())
 	if err != nil {
@@ -95,7 +95,7 @@ func TestConfigurableStrategy_DonchianGateAllowsBreakoutBuy(t *testing.T) {
 
 // TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail is the
 // nil-indicator edge: a profile that activates the gate must NOT emit a BUY
-// when Donchian20Upper is nil (warmup). Matches the ADX / Stoch convention.
+// when DonchianUpper is nil (warmup). Matches the ADX / Stoch convention.
 func TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail(t *testing.T) {
 	profile := productionProfile(t)
 	profile.SignalRules.Breakout.Enabled = true
@@ -104,7 +104,7 @@ func TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail(t *testing
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
 	// Isolate the donchian gate from other breakout gates that the production
 	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
-	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// helpers don't populate CMF, so any active CMF gate would otherwise
 	// block the signal regardless of donchian state.
 	profile.SignalRules.Breakout.CMFBuyMin = 0
 	profile.SignalRules.Breakout.CMFSellMax = 0
@@ -115,7 +115,7 @@ func TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail(t *testing
 	}
 
 	ind := makeBreakoutBuyReadyIndicators()
-	ind.Donchian20Upper = nil // warmup
+	ind.DonchianUpper = nil // warmup
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 125.0, time.Now())
 	if err != nil {
@@ -131,7 +131,7 @@ func TestConfigurableStrategy_DonchianGateMissingDonchianCountsAsFail(t *testing
 
 // TestConfigurableStrategy_DonchianGateZeroIsDisabled: the default 0-value on
 // DonchianPeriod must not touch the signal path. A breakout BUY scenario with
-// Donchian20Upper set high enough to block (if the gate were on) must still
+// DonchianUpper set high enough to block (if the gate were on) must still
 // emit BUY when the gate is 0.
 func TestConfigurableStrategy_DonchianGateZeroIsDisabled(t *testing.T) {
 	profile := productionProfile(t)
@@ -141,7 +141,7 @@ func TestConfigurableStrategy_DonchianGateZeroIsDisabled(t *testing.T) {
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
 	// Isolate the donchian gate from other breakout gates that the production
 	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
-	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// helpers don't populate CMF, so any active CMF gate would otherwise
 	// block the signal regardless of donchian state.
 	profile.SignalRules.Breakout.CMFBuyMin = 0
 	profile.SignalRules.Breakout.CMFSellMax = 0
@@ -152,10 +152,10 @@ func TestConfigurableStrategy_DonchianGateZeroIsDisabled(t *testing.T) {
 	}
 
 	ind := makeBreakoutBuyReadyIndicators()
-	// Even though Donchian20Upper > lastPrice (would block if the gate were
+	// Even though DonchianUpper > lastPrice (would block if the gate were
 	// active), the gate is disabled so BUY must still fire.
 	don := 999.0
-	ind.Donchian20Upper = &don
+	ind.DonchianUpper = &don
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 125.0, time.Now())
 	if err != nil {
@@ -167,7 +167,7 @@ func TestConfigurableStrategy_DonchianGateZeroIsDisabled(t *testing.T) {
 }
 
 // TestConfigurableStrategy_DonchianGateBlocksBreakoutSell mirrors the BUY
-// gate for the SELL direction. lastPrice at or above Donchian20Lower must
+// gate for the SELL direction. lastPrice at or above DonchianLower must
 // block a breakout SELL when the gate is active.
 func TestConfigurableStrategy_DonchianGateBlocksBreakoutSell(t *testing.T) {
 	profile := productionProfile(t)
@@ -177,7 +177,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutSell(t *testing.T) {
 	profile.SignalRules.Breakout.RequireMACDConfirm = false
 	// Isolate the donchian gate from other breakout gates that the production
 	// profile may activate (PR-9 added cmf_buy_min=0.1). makeBreakoutBuyReady
-	// helpers don't populate CMF20, so any active CMF gate would otherwise
+	// helpers don't populate CMF, so any active CMF gate would otherwise
 	// block the signal regardless of donchian state.
 	profile.SignalRules.Breakout.CMFBuyMin = 0
 	profile.SignalRules.Breakout.CMFSellMax = 0
@@ -190,7 +190,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutSell(t *testing.T) {
 	ind := makeBreakoutSellReadyIndicators()
 	lastPrice := 80.0
 	don := 80.0 // equal — gate uses strict `<`
-	ind.Donchian20Lower = &don
+	ind.DonchianLower = &don
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, lastPrice, time.Now())
 	if err != nil {
@@ -213,7 +213,7 @@ func TestConfigurableStrategy_DonchianGateBlocksBreakoutSell(t *testing.T) {
 // decisions can intervene in tests that set DonchianPeriod > 0.
 //
 // BB upper is 118 so the caller's lastPrice=120 is strictly above; callers
-// vary Donchian20Upper to probe the gate.
+// vary DonchianUpper to probe the gate.
 func makeBreakoutBuyReadyIndicators() entity.IndicatorSet {
 	sma20 := 110.0
 	sma50 := 105.0
@@ -228,11 +228,11 @@ func makeBreakoutBuyReadyIndicators() entity.IndicatorSet {
 	squeeze := true
 	return entity.IndicatorSet{
 		SymbolID:      10,
-		SMA20:         &sma20,
-		SMA50:         &sma50,
-		EMA12:         &ema12,
-		EMA26:         &ema26,
-		RSI14:         &rsi,
+		SMAShort:         &sma20,
+		SMALong:         &sma50,
+		EMAFast:         &ema12,
+		EMASlow:         &ema26,
+		RSI:         &rsi,
 		Histogram:     &hist,
 		BBUpper:       &bbUpper,
 		BBLower:       &bbLower,
@@ -259,11 +259,11 @@ func makeBreakoutSellReadyIndicators() entity.IndicatorSet {
 	squeeze := true
 	return entity.IndicatorSet{
 		SymbolID:      10,
-		SMA20:         &sma20,
-		SMA50:         &sma50,
-		EMA12:         &ema12,
-		EMA26:         &ema26,
-		RSI14:         &rsi,
+		SMAShort:         &sma20,
+		SMALong:         &sma50,
+		EMAFast:         &ema12,
+		EMASlow:         &ema26,
+		RSI:         &rsi,
 		Histogram:     &hist,
 		BBUpper:       &bbUpper,
 		BBLower:       &bbLower,

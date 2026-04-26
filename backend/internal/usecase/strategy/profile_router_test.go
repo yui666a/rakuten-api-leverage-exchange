@@ -46,23 +46,23 @@ func (s *recordingStrategy) callCount() int {
 func fp(v float64) *float64 { return &v }
 
 // trendingIndicators builds an IndicatorSet that the regime detector
-// will classify as bull-trend (ADX strong + SMA20>SMA50).
+// will classify as bull-trend (ADX strong + SMAShort>SMALong).
 func trendingIndicators() entity.IndicatorSet {
 	return entity.IndicatorSet{
-		ADX14: fp(35),
-		ATR14: fp(1.0),
-		SMA20: fp(110),
-		SMA50: fp(100),
+		ADX: fp(35),
+		ATR: fp(1.0),
+		SMAShort: fp(110),
+		SMALong: fp(100),
 	}
 }
 
 // bearIndicators builds an IndicatorSet that classifies as bear-trend.
 func bearIndicators() entity.IndicatorSet {
 	return entity.IndicatorSet{
-		ADX14: fp(35),
-		ATR14: fp(1.0),
-		SMA20: fp(95),
-		SMA50: fp(100),
+		ADX: fp(35),
+		ATR: fp(1.0),
+		SMAShort: fp(95),
+		SMALong: fp(100),
 	}
 }
 
@@ -70,10 +70,10 @@ func bearIndicators() entity.IndicatorSet {
 // (low ADX + low ATR%).
 func rangeIndicators() entity.IndicatorSet {
 	return entity.IndicatorSet{
-		ADX14: fp(12),
-		ATR14: fp(0.8),
-		SMA20: fp(100),
-		SMA50: fp(100),
+		ADX: fp(12),
+		ATR: fp(0.8),
+		SMAShort: fp(100),
+		SMALong: fp(100),
 	}
 }
 
@@ -81,10 +81,10 @@ func rangeIndicators() entity.IndicatorSet {
 // volatile (low ADX + high ATR%).
 func volatileIndicators() entity.IndicatorSet {
 	return entity.IndicatorSet{
-		ADX14: fp(15),
-		ATR14: fp(4.0),
-		SMA20: fp(100),
-		SMA50: fp(100),
+		ADX: fp(15),
+		ATR: fp(4.0),
+		SMAShort: fp(100),
+		SMALong: fp(100),
 	}
 }
 
@@ -594,14 +594,14 @@ func TestBuildStrategyFromProfile_ThreadsDetectorConfig(t *testing.T) {
 		}
 	}
 
-	// ADX 25 strongly trending bear (HTF SMA20<SMA50) — this should
+	// ADX 25 strongly trending bear (HTF SMAShort<SMALong) — this should
 	// be a "bear-trend" with the default ADX floor of 20, but a
 	// "range" with a floor of 50.
 	in := entity.IndicatorSet{
-		ADX14: fp(25),
-		ATR14: fp(1.0),
-		SMA20: fp(95),
-		SMA50: fp(100),
+		ADX: fp(25),
+		ATR: fp(1.0),
+		SMAShort: fp(95),
+		SMALong: fp(100),
 	}
 
 	loose, err := BuildStrategyFromProfile(loader, mkRouter(20))

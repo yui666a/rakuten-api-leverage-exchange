@@ -47,10 +47,10 @@ func TestDetector_RealLTCStream_RegimeHistogram(t *testing.T) {
 			atrVal := indicator.ATR(highs[:i+1], lows[:i+1], closes[:i+1], 14)
 			set := entity.IndicatorSet{}
 			if !isNaN(adxVal) {
-				set.ADX14 = &adxVal
+				set.ADX = &adxVal
 			}
 			if !isNaN(atrVal) {
-				set.ATR14 = &atrVal
+				set.ATR = &atrVal
 			}
 			lastPrice := closes[i]
 			c := d.Classify(set, nil, lastPrice)

@@ -54,7 +54,7 @@ type StrategyEngineOptions struct {
 	HTFEnabled           bool    // if false, skip the HTF filter entirely; default true
 	HTFBlockCounterTrend bool    // if true, block signals against higher-TF trend; default true
 	HTFAlignmentBoost    float64 // confidence boost when HTF aligns; default 0.1
-	// PR-8: selects the HTF trend-detection method ("ema" = legacy SMA20/50,
+	// PR-8: selects the HTF trend-detection method ("ema" = legacy SMAShort/50,
 	// "ichimoku" = price vs. cloud). Empty string defaults to "ema".
 	HTFMode string
 
@@ -86,14 +86,14 @@ type StrategyEngineOptions struct {
 
 	// PR-11: Donchian confirmation on breakout signals. When
 	// BreakoutDonchianPeriod > 0, the breakout stance additionally requires
-	// lastPrice > Donchian20Upper (BUY) or lastPrice < Donchian20Lower
+	// lastPrice > DonchianUpper (BUY) or lastPrice < DonchianLower
 	// (SELL). Typical value: 20 (matches the IndicatorSet's default
 	// Donchian20 fields). 0 keeps the legacy BB-only breakout.
 	//
 	// Note: the live pipeline currently computes Donchian with period=20
 	// only; setting BreakoutDonchianPeriod to any other positive value
 	// still activates the gate but will compare against the same
-	// Donchian20Upper/Lower pair. Exposing per-bar arbitrary periods is
+	// DonchianUpper/Lower pair. Exposing per-bar arbitrary periods is
 	// out of scope for PR-11 — the gate is the cheap win; period tuning
 	// can be a follow-up once WFO tells us Donchian20 helps at all.
 	BreakoutDonchianPeriod int
@@ -101,11 +101,11 @@ type StrategyEngineOptions struct {
 	// PR-9: volume-based gates.
 	//
 	//   TrendFollowRequireOBVAlignment: when true, trend-follow BUY
-	//     requires OBVSlope20 > 0 and SELL requires OBVSlope20 < 0.
-	//     Missing OBVSlope20 fails the gate, matching the
+	//     requires OBVSlope > 0 and SELL requires OBVSlope < 0.
+	//     Missing OBVSlope fails the gate, matching the
 	//     ADX/Stoch/Donchian convention. Default false = disabled.
 	//
-	//   BreakoutCMFBuyMin / BreakoutCMFSellMax: CMF20 thresholds that
+	//   BreakoutCMFBuyMin / BreakoutCMFSellMax: CMF thresholds that
 	//     gate breakout BUY / SELL signals respectively. CMF is bounded
 	//     in [-1, 1]; a typical active pair is (0.1, -0.1). Both default
 	//     to 0 which disables each direction's gate independently.
@@ -307,7 +307,7 @@ const (
 
 // htfTrendDirection returns the higher-timeframe trend classification using
 // the configured HTF mode. "ema" (default) mirrors the legacy
-// SMA20>SMA50/SMA20<SMA50 behaviour; "ichimoku" uses the cloud position.
+// SMAShort>SMALong/SMAShort<SMALong behaviour; "ichimoku" uses the cloud position.
 // htfTrendUnknown is returned when the required inputs are unavailable so
 // the caller can short-circuit without taking action.
 func htfTrendDirection(mode string, higherTF *entity.IndicatorSet, lastPrice float64) htfTrend {
@@ -335,10 +335,10 @@ func htfTrendDirection(mode string, higherTF *entity.IndicatorSet, lastPrice flo
 		}
 	default:
 		// "" and "ema" both use the legacy SMA cross.
-		if higherTF == nil || higherTF.SMA20 == nil || higherTF.SMA50 == nil {
+		if higherTF == nil || higherTF.SMAShort == nil || higherTF.SMALong == nil {
 			return htfTrendUnknown
 		}
-		if *higherTF.SMA20 > *higherTF.SMA50 {
+		if *higherTF.SMAShort > *higherTF.SMALong {
 			return htfTrendUp
 		}
 		return htfTrendDown
@@ -359,7 +359,7 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 	nowUnix := now.Unix()
 
 	// 指標チェックを先に行い、不要な処理を防ぐ
-	if indicators.SMA20 == nil || indicators.SMA50 == nil || indicators.RSI14 == nil {
+	if indicators.SMAShort == nil || indicators.SMALong == nil || indicators.RSI == nil {
 		return &entity.Signal{
 			SymbolID:  indicators.SymbolID,
 			Action:    entity.SignalActionHold,
@@ -370,9 +370,9 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 
 	result := e.resolveAt(ctx, indicators, lastPrice, now)
 
-	sma20 := *indicators.SMA20
-	sma50 := *indicators.SMA50
-	rsi := *indicators.RSI14
+	sma20 := *indicators.SMAShort
+	sma50 := *indicators.SMALong
+	rsi := *indicators.RSI
 
 	// PR-6: ADX gates run BEFORE the per-stance evaluators so the block
 	// reason surfaces cleanly ("trend follow: ADX below threshold")
@@ -398,23 +398,23 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 			}, nil
 		}
 		if min := e.options.TrendFollowADXMin; min > 0 {
-			if indicators.ADX14 == nil || *indicators.ADX14 < min {
+			if indicators.ADX == nil || *indicators.ADX < min {
 				return adxBlock("trend follow: ADX below threshold"), nil
 			}
 		}
-		tfSig := e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMA12, indicators.EMA26, indicators.Histogram, nowUnix)
+		tfSig := e.evaluateTrendFollow(indicators.SymbolID, sma20, sma50, rsi, indicators.EMAFast, indicators.EMASlow, indicators.Histogram, nowUnix)
 		// PR-9: OBV slope alignment. Applies only when a direction was
 		// actually emitted — HOLD passes through unchanged. BUY requires
-		// OBVSlope20 > 0 (net buying volume); SELL requires OBVSlope20
-		// < 0. Missing OBVSlope20 fails the gate.
+		// OBVSlope > 0 (net buying volume); SELL requires OBVSlope
+		// < 0. Missing OBVSlope fails the gate.
 		if e.options.TrendFollowRequireOBVAlignment && tfSig != nil {
 			switch tfSig.Action {
 			case entity.SignalActionBuy:
-				if indicators.OBVSlope20 == nil || *indicators.OBVSlope20 <= 0 {
+				if indicators.OBVSlope == nil || *indicators.OBVSlope <= 0 {
 					return adxBlock("trend follow: OBV slope not positive"), nil
 				}
 			case entity.SignalActionSell:
-				if indicators.OBVSlope20 == nil || *indicators.OBVSlope20 >= 0 {
+				if indicators.OBVSlope == nil || *indicators.OBVSlope >= 0 {
 					return adxBlock("trend follow: OBV slope not negative"), nil
 				}
 			}
@@ -432,7 +432,7 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 		if max := e.options.ContrarianADXMax; max > 0 {
 			// When ADX is unknown we assume a strong trend (worst case
 			// for contrarian) and block.
-			if indicators.ADX14 == nil || *indicators.ADX14 > max {
+			if indicators.ADX == nil || *indicators.ADX > max {
 				return adxBlock("contrarian: ADX above threshold"), nil
 			}
 		}
@@ -441,12 +441,12 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 		// BUY requires %K <= StochEntryMax (truly oversold); SELL requires
 		// %K >= StochExitMin (truly overbought). Missing %K fails the gate.
 		if sig.Action == entity.SignalActionBuy && e.options.ContrarianStochEntryMax > 0 {
-			if indicators.StochK14_3 == nil || *indicators.StochK14_3 > e.options.ContrarianStochEntryMax {
+			if indicators.StochK == nil || *indicators.StochK > e.options.ContrarianStochEntryMax {
 				return adxBlock("contrarian: Stoch %K not oversold enough"), nil
 			}
 		}
 		if sig.Action == entity.SignalActionSell && e.options.ContrarianStochExitMin > 0 {
-			if indicators.StochK14_3 == nil || *indicators.StochK14_3 < e.options.ContrarianStochExitMin {
+			if indicators.StochK == nil || *indicators.StochK < e.options.ContrarianStochExitMin {
 				return adxBlock("contrarian: Stoch %K not overbought enough"), nil
 			}
 		}
@@ -461,40 +461,40 @@ func (e *StrategyEngine) EvaluateAt(ctx context.Context, indicators entity.Indic
 			}, nil
 		}
 		if min := e.options.BreakoutADXMin; min > 0 {
-			if indicators.ADX14 == nil || *indicators.ADX14 < min {
+			if indicators.ADX == nil || *indicators.ADX < min {
 				return adxBlock("breakout: ADX below threshold"), nil
 			}
 		}
 		sig := e.evaluateBreakout(indicators.SymbolID, lastPrice, indicators.BBUpper, indicators.BBLower, indicators.BBMiddle, indicators.VolumeRatio, indicators.Histogram, nowUnix)
 		// PR-11: Donchian confirmation. Applies only when a direction was
 		// actually emitted — HOLD passes through unchanged. BUY requires
-		// lastPrice > Donchian20Upper; SELL requires lastPrice <
-		// Donchian20Lower. Missing Donchian (warmup) fails the gate,
+		// lastPrice > DonchianUpper; SELL requires lastPrice <
+		// DonchianLower. Missing Donchian (warmup) fails the gate,
 		// matching the ADX / Stochastics convention.
 		if e.options.BreakoutDonchianPeriod > 0 && sig != nil {
 			switch sig.Action {
 			case entity.SignalActionBuy:
-				if indicators.Donchian20Upper == nil || lastPrice <= *indicators.Donchian20Upper {
+				if indicators.DonchianUpper == nil || lastPrice <= *indicators.DonchianUpper {
 					return adxBlock("breakout: price below Donchian upper"), nil
 				}
 			case entity.SignalActionSell:
-				if indicators.Donchian20Lower == nil || lastPrice >= *indicators.Donchian20Lower {
+				if indicators.DonchianLower == nil || lastPrice >= *indicators.DonchianLower {
 					return adxBlock("breakout: price above Donchian lower"), nil
 				}
 			}
 		}
-		// PR-9: CMF confirmation. BUY requires CMF20 >= BreakoutCMFBuyMin
-		// (net buying pressure); SELL requires CMF20 <= BreakoutCMFSellMax
+		// PR-9: CMF confirmation. BUY requires CMF >= BreakoutCMFBuyMin
+		// (net buying pressure); SELL requires CMF <= BreakoutCMFSellMax
 		// (net selling pressure). Each direction is independent: a
-		// profile may set only one side. Missing CMF20 fails the gate.
+		// profile may set only one side. Missing CMF fails the gate.
 		if sig != nil {
 			if sig.Action == entity.SignalActionBuy && e.options.BreakoutCMFBuyMin > 0 {
-				if indicators.CMF20 == nil || *indicators.CMF20 < e.options.BreakoutCMFBuyMin {
+				if indicators.CMF == nil || *indicators.CMF < e.options.BreakoutCMFBuyMin {
 					return adxBlock("breakout: CMF below buy threshold"), nil
 				}
 			}
 			if sig.Action == entity.SignalActionSell && e.options.BreakoutCMFSellMax < 0 {
-				if indicators.CMF20 == nil || *indicators.CMF20 > e.options.BreakoutCMFSellMax {
+				if indicators.CMF == nil || *indicators.CMF > e.options.BreakoutCMFSellMax {
 					return adxBlock("breakout: CMF above sell threshold"), nil
 				}
 			}
@@ -516,9 +516,9 @@ func (e *StrategyEngine) resolveAt(ctx context.Context, indicators entity.Indica
 
 func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi float64, ema12, ema26, histogram *float64, nowUnix int64) *entity.Signal {
 
-	// Primary signal: EMA12/26 crossover (faster than SMA cross), controlled
+	// Primary signal: EMAFast/26 crossover (faster than SMA cross), controlled
 	// by the RequireEMACross option. When disabled, we skip EMA entirely and
-	// only look at SMA20/50. When enabled but EMA is unavailable, we fall
+	// only look at SMAShort/50. When enabled but EMA is unavailable, we fall
 	// back to SMA — matches the original behaviour.
 	var fastAboveSlow bool
 	var fastBelowSlow bool
@@ -555,9 +555,9 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				Timestamp: nowUnix,
 			}
 		}
-		reason := "trend follow: EMA12 > EMA26, SMA aligned, RSI not overbought"
+		reason := "trend follow: EMAFast > EMASlow, SMA aligned, RSI not overbought"
 		if !useEMA {
-			reason = "trend follow: SMA20 > SMA50, RSI not overbought"
+			reason = "trend follow: SMAShort > SMALong, RSI not overbought"
 		}
 		if histogram != nil {
 			reason += ", MACD confirmed"
@@ -580,9 +580,9 @@ func (e *StrategyEngine) evaluateTrendFollow(symbolID int64, sma20, sma50, rsi f
 				Timestamp: nowUnix,
 			}
 		}
-		reason := "trend follow: EMA12 < EMA26, SMA aligned, RSI not oversold"
+		reason := "trend follow: EMAFast < EMASlow, SMA aligned, RSI not oversold"
 		if !useEMA {
-			reason = "trend follow: SMA20 < SMA50, RSI not oversold"
+			reason = "trend follow: SMAShort < SMALong, RSI not oversold"
 		}
 		if histogram != nil {
 			reason += ", MACD confirmed"

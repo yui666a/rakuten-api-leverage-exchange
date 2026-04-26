@@ -12,7 +12,7 @@ func TestIndicatorCalculator_Calculate(t *testing.T) {
 	repo := newMockRepo()
 	ctx := context.Background()
 
-	// Generate 50 candles (needed for SMA50)
+	// Generate 50 candles (needed for SMALong)
 	candles := make([]entity.Candle, 50)
 	for i := range candles {
 		candles[i] = entity.Candle{
@@ -33,20 +33,20 @@ func TestIndicatorCalculator_Calculate(t *testing.T) {
 		t.Fatalf("expected symbolID 7, got %d", result.SymbolID)
 	}
 
-	if result.SMA20 == nil {
-		t.Fatal("SMA20 should not be nil with 50 data points")
+	if result.SMAShort == nil {
+		t.Fatal("SMAShort should not be nil with 50 data points")
 	}
 
-	if result.SMA50 == nil {
-		t.Fatal("SMA50 should not be nil with 50 data points")
+	if result.SMALong == nil {
+		t.Fatal("SMALong should not be nil with 50 data points")
 	}
 
-	if result.RSI14 == nil {
-		t.Fatal("RSI14 should not be nil with 50 data points")
+	if result.RSI == nil {
+		t.Fatal("RSI should not be nil with 50 data points")
 	}
 
-	if *result.RSI14 < 0 || *result.RSI14 > 100 {
-		t.Fatalf("RSI should be 0-100, got %f", *result.RSI14)
+	if *result.RSI < 0 || *result.RSI > 100 {
+		t.Fatalf("RSI should be 0-100, got %f", *result.RSI)
 	}
 }
 
@@ -71,9 +71,9 @@ func TestIndicatorCalculator_InsufficientData(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// SMA20 requires 20 data points, so should be nil
-	if result.SMA20 != nil {
-		t.Fatalf("SMA20 should be nil with only 5 data points, got %f", *result.SMA20)
+	// SMAShort requires 20 data points, so should be nil
+	if result.SMAShort != nil {
+		t.Fatalf("SMAShort should be nil with only 5 data points, got %f", *result.SMAShort)
 	}
 }
 

@@ -71,8 +71,8 @@ type TrendFollowConfig struct {
 	// PR-6: trend_follow fires only when ADX >= ADXMin (0 = gate disabled).
 	ADXMin float64 `json:"adx_min"`
 	// PR-9: OBV slope confirmation. When RequireOBVAlignment is true, a
-	// trend-follow BUY requires OBVSlope20 > 0 (net buying volume over the
-	// last 20 bars) and SELL requires OBVSlope20 < 0. Missing OBVSlope20
+	// trend-follow BUY requires OBVSlope > 0 (net buying volume over the
+	// last 20 bars) and SELL requires OBVSlope < 0. Missing OBVSlope
 	// fails the gate, matching the ADX/Stoch convention. Defaults to false
 	// so existing profiles are bit-identical.
 	RequireOBVAlignment bool `json:"require_obv_alignment,omitempty"`
@@ -112,8 +112,8 @@ type BreakoutConfig struct {
 	// Donchian (warmup) treats the gate as a fail, matching ADX/Stoch.
 	DonchianPeriod int `json:"donchian_period,omitempty"`
 	// PR-9: CMF confirmation. CMFBuyMin > 0 activates the BUY gate
-	// (breakout BUY requires CMF20 >= CMFBuyMin); CMFSellMax < 0
-	// activates the SELL gate (SELL requires CMF20 <= CMFSellMax). Both
+	// (breakout BUY requires CMF >= CMFBuyMin); CMFSellMax < 0
+	// activates the SELL gate (SELL requires CMF <= CMFSellMax). Both
 	// default to 0 so existing profiles are bit-identical. CMF is
 	// bounded in [-1, 1]; typical active values ~ ±0.1.
 	CMFBuyMin  float64 `json:"cmf_buy_min,omitempty"`
@@ -126,7 +126,7 @@ type HTFFilterConfig struct {
 	BlockCounterTrend bool    `json:"block_counter_trend"`
 	AlignmentBoost    float64 `json:"alignment_boost"`
 	// PR-8: Mode selects the HTF trend-detection method.
-	//   - "" or "ema":      legacy SMA20/SMA50 comparison (default).
+	//   - "" or "ema":      legacy SMAShort/SMALong comparison (default).
 	//   - "ichimoku":       price vs. cloud on the higher timeframe.
 	//                       above-cloud -> uptrend, below-cloud -> downtrend,
 	//                       inside-cloud -> neutral (blocks both directions

@@ -102,7 +102,7 @@ func TestTickRiskHandler_StopLossDistance_ATRBiggerThanPercent(t *testing.T) {
 }
 
 // TestTickRiskHandler_UpdateATRFromIndicatorEvent verifies the event wiring:
-// when an IndicatorEvent with a Primary.ATR14 arrives, Handle feeds the value
+// when an IndicatorEvent with a Primary.ATR arrives, Handle feeds the value
 // into the handler so the next TickEvent sees the updated distance.
 // TestTickRiskHandler_UpdateATRAcceptsZero is the Codex PR-12 follow-up:
 // previously UpdateATR rejected zero (treated it like NaN), which meant a
@@ -153,7 +153,7 @@ func TestTickRiskHandler_UpdateATRFromIndicatorEvent(t *testing.T) {
 		SymbolID:  1,
 		Interval:  "PT15M",
 		Timestamp: 1,
-		Primary:   entity.IndicatorSet{ATR14: &atr},
+		Primary:   entity.IndicatorSet{ATR: &atr},
 	}
 	if _, err := h.Handle(context.Background(), ev); err != nil {
 		t.Fatalf("Handle: %v", err)
