@@ -167,9 +167,10 @@ func main() {
 				BalanceHaltPct:  cfg.Reconcile.BalanceHaltPct,
 				OrderTTL:        time.Duration(cfg.Reconcile.OrderTTLSec) * time.Second,
 			},
-			IndicatorPeriods:  liveProfileIndicators(liveProfile),
-			BBSqueezeLookback: liveProfileBBSqueezeLookback(liveProfile),
-			DecisionLogRepo:   decisionLogRepo,
+			IndicatorPeriods:   liveProfileIndicators(liveProfile),
+			BBSqueezeLookback:  liveProfileBBSqueezeLookback(liveProfile),
+			DecisionLogRepo:    decisionLogRepo,
+			CandlestickFetcher: restClient,
 		},
 		restClient,
 		restClient, // SymbolFetcher

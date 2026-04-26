@@ -25,6 +25,61 @@ func NewLiveSource(symbolID int64, primaryInterval string) *LiveSource {
 	}
 }
 
+// SeedFromMinuteCandles primes the LiveSource's CandleBuilder so the first
+// PT15M bar emitted after a restart contains the OHLC from the *whole*
+// 15-minute window, not just the post-restart ticks.
+//
+// minuteCandles must be PT1M candles ordered oldest-first. Only the ones
+// whose Time falls inside the *current* primary period (relative to now)
+// are aggregated; older candles are ignored. If no candles fall in the
+// current period the builder is left untouched (the next live tick will
+// initialise it normally).
+//
+// Returns the number of minute candles that were folded into the seed so
+// the caller can log how much of the partial bar was reconstructed.
+func (s *LiveSource) SeedFromMinuteCandles(now time.Time, minuteCandles []entity.Candle) int {
+	interval := s.candleBuilder.interval
+	if interval <= 0 {
+		return 0
+	}
+	periodStart := now.Truncate(interval)
+	periodEndMs := periodStart.Add(interval).UnixMilli()
+	periodStartMs := periodStart.UnixMilli()
+
+	var folded entity.Candle
+	count := 0
+	for _, c := range minuteCandles {
+		if c.Time < periodStartMs || c.Time >= periodEndMs {
+			continue
+		}
+		if count == 0 {
+			folded = entity.Candle{
+				Open:   c.Open,
+				High:   c.High,
+				Low:    c.Low,
+				Close:  c.Close,
+				Volume: c.Volume,
+				Time:   periodStartMs,
+			}
+		} else {
+			if c.High > folded.High {
+				folded.High = c.High
+			}
+			if c.Low < folded.Low {
+				folded.Low = c.Low
+			}
+			folded.Close = c.Close
+			folded.Volume += c.Volume
+		}
+		count++
+	}
+	if count == 0 {
+		return 0
+	}
+	s.candleBuilder.SeedPartial(periodStart, folded)
+	return count
+}
+
 // HandleTick processes a real-time ticker and returns events to feed into EventEngine.
 // Every ticker produces a TickEvent. When a candle period closes, a CandleEvent is also emitted.
 func (s *LiveSource) HandleTick(ticker entity.Ticker) []entity.Event {
@@ -65,6 +120,23 @@ func NewCandleBuilder(symbolID int64, interval time.Duration) *CandleBuilder {
 		symbolID: symbolID,
 		interval: interval,
 	}
+}
+
+// SeedPartial primes the builder with an in-progress candle so the first
+// emit after a restart includes the OHLC from before the daemon came up.
+// periodStart must be the start of the bar (caller is responsible for
+// truncating to the interval). Subsequent AddTick calls in the same
+// period update the seeded candle's High/Low/Close/Volume; ticks in a
+// later period emit it as usual. A second SeedPartial call replaces the
+// previous seed.
+func (b *CandleBuilder) SeedPartial(periodStart time.Time, candle entity.Candle) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	c := candle
+	c.Time = periodStart.UnixMilli()
+	b.currentStart = periodStart
+	b.currentCandle = &c
 }
 
 // AddTick ingests a ticker. Returns a CandleEvent if the current period has closed, nil otherwise.
