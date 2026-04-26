@@ -38,7 +38,8 @@ func (c *RESTClient) GetOrders(ctx context.Context, symbolID int64) ([]entity.Or
 func (c *RESTClient) CreateOrder(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
 	reqBody, err := json.Marshal(req)
 	if err != nil { return nil, fmt.Errorf("CreateOrder marshal: %w", err) }
-	body, err := c.DoPrivate(ctx, "POST", "/api/v1/cfd/order", "", reqBody)
+	// 発注は PriorityHigh で参照系のキューを追い越す。
+	body, err := c.DoPrivateWithPriority(ctx, "POST", "/api/v1/cfd/order", "", reqBody, PriorityHigh)
 	if err != nil { return nil, fmt.Errorf("CreateOrder: %w", err) }
 	var orders []entity.Order
 	if err := json.Unmarshal(body, &orders); err != nil { return nil, fmt.Errorf("CreateOrder unmarshal: %w", err) }
@@ -64,7 +65,8 @@ func (c *RESTClient) CreateOrderRaw(ctx context.Context, req entity.OrderRequest
 		return out, out.TransportError
 	}
 
-	statusCode, body, transportErr := c.DoPrivateRaw(ctx, "POST", "/api/v1/cfd/order", "", reqBody)
+	// 発注は PriorityHigh で参照系のキューを追い越す。
+	statusCode, body, transportErr := c.DoPrivateRawWithPriority(ctx, "POST", "/api/v1/cfd/order", "", reqBody, PriorityHigh)
 	out.HTTPStatus = statusCode
 	out.RawResponse = body
 	if transportErr != nil {
@@ -93,7 +95,8 @@ func (c *RESTClient) CreateOrderRaw(ctx context.Context, req entity.OrderRequest
 
 func (c *RESTClient) CancelOrder(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error) {
 	query := fmt.Sprintf("symbolId=%d&id=%d", symbolID, orderID)
-	body, err := c.DoPrivate(ctx, "DELETE", "/api/v1/cfd/order", query, nil)
+	// キャンセルも発注経路 (post-only エスカレ等) で時間に敏感なので high。
+	body, err := c.DoPrivateWithPriority(ctx, "DELETE", "/api/v1/cfd/order", query, nil, PriorityHigh)
 	if err != nil { return nil, fmt.Errorf("CancelOrder: %w", err) }
 	var orders []entity.Order
 	if err := json.Unmarshal(body, &orders); err != nil { return nil, fmt.Errorf("CancelOrder unmarshal: %w", err) }
