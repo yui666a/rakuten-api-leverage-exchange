@@ -98,17 +98,26 @@ export function SymbolProvider({ children }: { children: ReactNode }) {
   //   - both URL and backend config are settled (no race during boot)
   //   - the symbols differ
   //   - no PUT is already in-flight (avoid loops on transient errors)
+  //
+  // The deps array intentionally only depends on the resolved IDs (primitive
+  // values) — putting the mutation object or queryClient in deps would
+  // re-fire this effect on every mutation status change and re-PUT the same
+  // value, which silently restarted the EventDrivenPipeline event loop and
+  // wiped the decision recorder's pending bar. The mutate / invalidate calls
+  // are accessed via the closure but their identities don't drive the effect.
+  const urlResolvedId = resolvedFromUrl?.id
+  const backendSymbolId = tradingConfig?.symbolId
+  const backendTradeAmount = tradingConfig?.tradeAmount
   useEffect(() => {
-    if (!tradingConfig) return
-    if (!resolvedFromUrl) return
+    if (urlResolvedId === undefined || backendSymbolId === undefined) return
     if (updateConfig.isPending) return
-    if (resolvedFromUrl.id === tradingConfig.symbolId) return
+    if (urlResolvedId === backendSymbolId) return
     console.warn(
       '[SymbolContext] mismatch between URL symbol and backend trading_config; auto-syncing',
-      { urlSymbolId: resolvedFromUrl.id, backendSymbolId: tradingConfig.symbolId },
+      { urlSymbolId: urlResolvedId, backendSymbolId },
     )
     updateConfig.mutate(
-      { symbolId: resolvedFromUrl.id, tradeAmount: tradingConfig.tradeAmount },
+      { symbolId: urlResolvedId, tradeAmount: backendTradeAmount ?? 0 },
       {
         onSuccess: () => {
           void queryClient.invalidateQueries({ queryKey: ['candles'] })
@@ -116,7 +125,8 @@ export function SymbolProvider({ children }: { children: ReactNode }) {
         },
       },
     )
-  }, [resolvedFromUrl, tradingConfig, updateConfig, queryClient])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlResolvedId, backendSymbolId])
 
   const switchSymbol = useCallback(
     (newSymbolId: number) => {
