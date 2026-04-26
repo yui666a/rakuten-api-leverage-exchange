@@ -281,6 +281,7 @@ func main() {
 		ExecutionQualityReporter: executionQualityReporter,
 		ExecutionQualityRepo:     executionQualityRepo,
 		DecisionLogRepo:          decisionLogRepo,
+		BacktestDecisionLogRepo:  backtestDecisionLogRepo,
 	})
 
 	sigCh := make(chan os.Signal, 1)

@@ -56,6 +56,11 @@ type Dependencies struct {
 
 	// DecisionLogRepo (optional). When set, GET /api/v1/decisions is exposed.
 	DecisionLogRepo repository.DecisionLogRepository
+
+	// BacktestDecisionLogRepo (optional). When set, every backtest run
+	// persists per-cycle decisions and the GET/DELETE
+	// /backtest/results/:id/decisions endpoints become available.
+	BacktestDecisionLogRepo repository.BacktestDecisionLogRepository
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -181,6 +186,9 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.MarketDataService != nil {
 			opts = append(opts, handler.WithMarketDataService(deps.MarketDataService))
 		}
+		if deps.BacktestDecisionLogRepo != nil {
+			opts = append(opts, handler.WithDecisionLogRepo(deps.BacktestDecisionLogRepo))
+		}
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		// PR-12: profile discovery endpoints used by the FE backtest picker.
 		// The same profilesBaseDir default is used so /profiles and
@@ -205,6 +213,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.WalkForwardResultRepo != nil {
 			v1.GET("/backtest/walk-forward", backtestHandler.ListWalkForward)
 			v1.GET("/backtest/walk-forward/:id", backtestHandler.GetWalkForward)
+		}
+		if deps.BacktestDecisionLogRepo != nil {
+			v1.GET("/backtest/results/:id/decisions", backtestHandler.ListDecisions)
+			v1.DELETE("/backtest/results/:id/decisions", backtestHandler.DeleteDecisions)
 		}
 	}
 
