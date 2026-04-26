@@ -1,15 +1,17 @@
 import { useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { AppFrame } from '../components/AppFrame'
+import { DecisionLogTable } from '../components/DecisionLogTable'
 import { TradeHistoryTable, type TradeHistoryRow } from '../components/TradeHistoryTable'
 import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
 import { useTradeHistory } from '../hooks/useTradeHistory'
 import { useAllTrades } from '../hooks/useAllTrades'
+import { useDecisionLog } from '../hooks/useDecisionLog'
 import { useSymbolContext } from '../contexts/SymbolContext'
 
 export const Route = createFileRoute('/history')({ component: HistoryPage })
 
-type TabKey = 'all' | 'single'
+type TabKey = 'all' | 'single' | 'decisions'
 
 function HistoryPage() {
   const { symbolId, currentSymbol } = useSymbolContext()
@@ -19,6 +21,7 @@ function HistoryPage() {
 
   const { data: singleTrades } = useTradeHistory(symbolId)
   const { data: allTradesData } = useAllTrades()
+  const { data: decisionData } = useDecisionLog(symbolId)
 
   const rows = useMemo<TradeHistoryRow[]>(() => {
     if (tab === 'single') {
@@ -46,36 +49,47 @@ function HistoryPage() {
   const subtitle =
     tab === 'all'
       ? '楽天 private API から全通貨の約定をまとめて REST 経由で表示します。'
-      : `現在選択中の ${currentSymbol?.currencyPair ?? ''} に絞った約定一覧です。`
+      : tab === 'single'
+      ? `現在選択中の ${currentSymbol?.currencyPair ?? ''} に絞った約定一覧です。`
+      : `${currentSymbol?.currencyPair ?? ''} の 15 分足ごとの売買判断ログです。`
 
   return (
     <AppFrame title="Trade History" subtitle={subtitle}>
       <div className="mb-4 flex gap-2">
         <TabButton active={tab === 'all'} onClick={() => setTab('all')}>
-          全通貨
+          全通貨の約定
         </TabButton>
         <TabButton active={tab === 'single'} onClick={() => setTab('single')}>
-          {currentSymbol?.currencyPair ?? '個別通貨'}
+          {currentSymbol?.currencyPair ?? '個別通貨'}の約定
+        </TabButton>
+        <TabButton active={tab === 'decisions'} onClick={() => setTab('decisions')}>
+          {currentSymbol?.currencyPair ?? '個別通貨'}の判断ログ
         </TabButton>
       </div>
-      <div className="mb-4 grid gap-4 md:grid-cols-3">
-        <SummaryCard label="約定件数" value={rows.length.toLocaleString()} />
-        <SummaryCard
-          label="累計損益"
-          value={`¥${totalProfit.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
-          color={totalProfit >= 0 ? 'text-accent-green' : 'text-accent-red'}
-        />
-        <SummaryCard
-          label="最新更新"
-          value={rows[0] ? new Date(rows[0].createdAt).toLocaleString('ja-JP') : '\u2014'}
-        />
-      </div>
+      {tab !== 'decisions' && (
+        <div className="mb-4 grid gap-4 md:grid-cols-3">
+          <SummaryCard label="約定件数" value={rows.length.toLocaleString()} />
+          <SummaryCard
+            label="累計損益"
+            value={`¥${totalProfit.toLocaleString('ja-JP', { maximumFractionDigits: 0 })}`}
+            color={totalProfit >= 0 ? 'text-accent-green' : 'text-accent-red'}
+          />
+          <SummaryCard
+            label="最新更新"
+            value={rows[0] ? new Date(rows[0].createdAt).toLocaleString('ja-JP') : '—'}
+          />
+        </div>
+      )}
       {failedSymbols.length > 0 && (
         <div className="mb-4 rounded-2xl border border-accent-red/40 bg-accent-red/10 px-5 py-3 text-sm text-accent-red">
           一部通貨の取得に失敗しました: {failedSymbols.map((e) => e.currencyPair).join(', ')}
         </div>
       )}
-      <TradeHistoryTable trades={rows} showCurrencyPair={tab === 'all'} />
+      {tab === 'decisions' ? (
+        <DecisionLogTable decisions={decisionData?.decisions ?? []} />
+      ) : (
+        <TradeHistoryTable trades={rows} showCurrencyPair={tab === 'all'} />
+      )}
     </AppFrame>
   )
 }
