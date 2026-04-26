@@ -31,10 +31,14 @@ type StrategyProfile struct {
 }
 
 // IndicatorConfig declares the lookback periods and shape parameters used when
-// computing technical indicators (SMA / RSI / MACD / BB / ATR).
+// computing technical indicators. PR-B covers SMA / EMA / RSI / MACD / BB /
+// ATR / VolumeSMA. PR-C will extend this with ADX / Stochastics / Donchian /
+// CMF / OBVSlope / Ichimoku periods.
 type IndicatorConfig struct {
 	SMAShort     int     `json:"sma_short"`
 	SMALong      int     `json:"sma_long"`
+	EMAFast      int     `json:"ema_fast"`
+	EMASlow      int     `json:"ema_slow"`
 	RSIPeriod    int     `json:"rsi_period"`
 	MACDFast     int     `json:"macd_fast"`
 	MACDSlow     int     `json:"macd_slow"`
@@ -42,6 +46,58 @@ type IndicatorConfig struct {
 	BBPeriod     int     `json:"bb_period"`
 	BBMultiplier float64 `json:"bb_multiplier"`
 	ATRPeriod    int     `json:"atr_period"`
+	// VolumeSMAPeriod drives both VolumeSMA and the VolumeRatio denominator.
+	// 0 falls back to BBPeriod (legacy behaviour computed VolumeSMA20 alongside
+	// BB20; keeping the same default avoids surprising existing profiles).
+	VolumeSMAPeriod int `json:"volume_sma_period"`
+}
+
+// WithDefaults returns the IndicatorConfig with zero-valued fields filled
+// in from the legacy hardcoded defaults (SMA 20/50, EMA 12/26, RSI 14, MACD
+// 12/26/9, BB 20×2.0, ATR 14, VolumeSMA = bb_period). This is what the
+// IndicatorCalculator / IndicatorHandler use when a profile does not specify
+// every field — they get period-aware behaviour where the profile is
+// explicit and the legacy LTC PT15M baseline elsewhere.
+//
+// Method on a copy so callers cannot accidentally mutate the receiver.
+func (c IndicatorConfig) WithDefaults() IndicatorConfig {
+	if c.SMAShort <= 0 {
+		c.SMAShort = 20
+	}
+	if c.SMALong <= 0 {
+		c.SMALong = 50
+	}
+	if c.EMAFast <= 0 {
+		c.EMAFast = 12
+	}
+	if c.EMASlow <= 0 {
+		c.EMASlow = 26
+	}
+	if c.RSIPeriod <= 0 {
+		c.RSIPeriod = 14
+	}
+	if c.MACDFast <= 0 {
+		c.MACDFast = 12
+	}
+	if c.MACDSlow <= 0 {
+		c.MACDSlow = 26
+	}
+	if c.MACDSignal <= 0 {
+		c.MACDSignal = 9
+	}
+	if c.BBPeriod <= 0 {
+		c.BBPeriod = 20
+	}
+	if c.BBMultiplier <= 0 {
+		c.BBMultiplier = 2.0
+	}
+	if c.ATRPeriod <= 0 {
+		c.ATRPeriod = 14
+	}
+	if c.VolumeSMAPeriod <= 0 {
+		c.VolumeSMAPeriod = c.BBPeriod
+	}
+	return c
 }
 
 // StanceRulesConfig declares thresholds for rule-based stance classification
@@ -342,6 +398,20 @@ func (p StrategyProfile) Validate() error {
 	}
 	if ind.SMAShort > 0 && ind.SMALong > 0 && ind.SMAShort >= ind.SMALong {
 		errs = append(errs, fmt.Errorf("indicators.sma_short (%d) must be < sma_long (%d)", ind.SMAShort, ind.SMALong))
+	}
+	// EMAFast/Slow are optional: 0 means "fall back to defaults" via WithDefaults.
+	// Reject only obviously broken ordering (fast >= slow) and negative values.
+	if ind.EMAFast < 0 {
+		errs = append(errs, fmt.Errorf("indicators.ema_fast must be >= 0 (got %d)", ind.EMAFast))
+	}
+	if ind.EMASlow < 0 {
+		errs = append(errs, fmt.Errorf("indicators.ema_slow must be >= 0 (got %d)", ind.EMASlow))
+	}
+	if ind.EMAFast > 0 && ind.EMASlow > 0 && ind.EMAFast >= ind.EMASlow {
+		errs = append(errs, fmt.Errorf("indicators.ema_fast (%d) must be < ema_slow (%d)", ind.EMAFast, ind.EMASlow))
+	}
+	if ind.VolumeSMAPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.volume_sma_period must be >= 0 (got %d)", ind.VolumeSMAPeriod))
 	}
 	if ind.RSIPeriod <= 0 {
 		errs = append(errs, fmt.Errorf("indicators.rsi_period must be > 0 (got %d)", ind.RSIPeriod))

@@ -13,7 +13,7 @@ import (
 func TestCalculateIndicatorSet_BBSqueezeLookbackZeroDisables(t *testing.T) {
 	candles := buildTightRangeCandles(80)
 
-	got := calculateIndicatorSet(42, candles, 0)
+	got := calculateIndicatorSet(42, candles, entity.IndicatorConfig{}, 0)
 	if got.RecentSqueeze != nil {
 		t.Fatalf("bbSqueezeLookback=0 should leave RecentSqueeze nil; got %v", *got.RecentSqueeze)
 	}
@@ -33,8 +33,8 @@ func TestCalculateIndicatorSet_BBSqueezeLookbackZeroDisables(t *testing.T) {
 func TestCalculateIndicatorSet_BBSqueezeLookbackDrivesDetection(t *testing.T) {
 	candles := buildTightRangeCandles(80)
 
-	off := calculateIndicatorSet(42, candles, 0)
-	on := calculateIndicatorSet(42, candles, 5)
+	off := calculateIndicatorSet(42, candles, entity.IndicatorConfig{}, 0)
+	on := calculateIndicatorSet(42, candles, entity.IndicatorConfig{}, 5)
 
 	if off.RecentSqueeze != nil {
 		t.Fatalf("off lookback=0 should leave RecentSqueeze nil; got %v", *off.RecentSqueeze)

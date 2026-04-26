@@ -212,10 +212,12 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			// the profile. Zero falls back to the legacy default of 5.
 			var bbLookback int
 			var positionSizing *entity.PositionSizingConfig
+			var indicatorPeriods entity.IndicatorConfig
 			if profile != nil {
 				resolved := resolveRiskProfile(baseDir, profile)
 				bbLookback = resolved.StanceRules.BBSqueezeLookback
 				positionSizing = resolved.Risk.PositionSizing
+				indicatorPeriods = resolved.Indicators
 			}
 			fillSrc, bookSrc, buildErr := h.buildExecutionSourcesForCfg(c.Request.Context(), cfg)
 			if buildErr != nil {
@@ -227,6 +229,7 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				PrimaryCandles:    primary.Candles,
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: bbLookback,
+				IndicatorPeriods:  indicatorPeriods,
 				PositionSizing:    positionSizing,
 				FillPriceSource:   fillSrc,
 				BookSource:        bookSrc,

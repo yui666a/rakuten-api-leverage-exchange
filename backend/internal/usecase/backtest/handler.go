@@ -130,6 +130,13 @@ type IndicatorHandler struct {
 	// effect (cycle43 discovered this field was a silent no-op).
 	bbSqueezeLookback int
 
+	// periods drives the lookback periods for SMA / EMA / RSI / MACD / BB /
+	// ATR / VolumeSMA. Filled from a StrategyProfile via SetIndicatorPeriods
+	// at composition time; zero-valued fields fall back to legacy defaults
+	// via IndicatorConfig.WithDefaults so callers without a profile keep the
+	// pre-PR-B behaviour.
+	periods entity.IndicatorConfig
+
 	primaryCandles map[int64][]entity.Candle
 	higherCandles  map[int64][]entity.Candle
 
@@ -182,9 +189,23 @@ func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize in
 		HigherTFInterval:  higherTFInterval,
 		BufferSize:        bufferSize,
 		bbSqueezeLookback: 5, // cycle44: legacy default, overridable via SetBBSqueezeLookback
+		periods:           entity.IndicatorConfig{}.WithDefaults(),
 		primaryCandles:    make(map[int64][]entity.Candle),
 		higherCandles:     make(map[int64][]entity.Candle),
 	}
+}
+
+// SetIndicatorPeriods overrides the lookback periods used inside
+// calculateIndicatorSet for SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA.
+// Zero-valued fields fall back to the legacy defaults via
+// IndicatorConfig.WithDefaults. Mirrors usecase.IndicatorCalculator's
+// SetIndicatorPeriods so live and backtest paths share one knob set.
+//
+// PR-C will extend this to ADX / Stochastics / Donchian / CMF / OBVSlope /
+// Ichimoku; until then those continue to use their hardcoded periods inside
+// calculateIndicatorSet.
+func (h *IndicatorHandler) SetIndicatorPeriods(p entity.IndicatorConfig) {
+	h.periods = p.WithDefaults()
 }
 
 // attachBookDerived populates Microprice / OFI on the supplied IndicatorSet
@@ -246,13 +267,13 @@ func (h *IndicatorHandler) Handle(_ context.Context, event entity.Event) ([]enti
 	switch candleEvent.Interval {
 	case h.PrimaryInterval:
 		h.primaryCandles[candleEvent.SymbolID] = appendCapped(h.primaryCandles[candleEvent.SymbolID], candleEvent.Candle, h.BufferSize)
-		primary := calculateIndicatorSet(candleEvent.SymbolID, h.primaryCandles[candleEvent.SymbolID], h.bbSqueezeLookback)
+		primary := calculateIndicatorSet(candleEvent.SymbolID, h.primaryCandles[candleEvent.SymbolID], h.periods, h.bbSqueezeLookback)
 		h.attachBookDerived(&primary, candleEvent.SymbolID, candleEvent.Timestamp)
 
 		var higherTF *entity.IndicatorSet
 		if h.HigherTFInterval != "" {
 			if selected := selectCandlesAtOrBefore(h.higherCandles[candleEvent.SymbolID], candleEvent.Timestamp); len(selected) > 0 {
-				set := calculateIndicatorSet(candleEvent.SymbolID, selected, h.bbSqueezeLookback)
+				set := calculateIndicatorSet(candleEvent.SymbolID, selected, h.periods, h.bbSqueezeLookback)
 				higherTF = &set
 			}
 		}
@@ -817,15 +838,24 @@ func selectCandlesAtOrBefore(candles []entity.Candle, timestamp int64) []entity.
 }
 
 // calculateIndicatorSet builds an IndicatorSet from oldest-first candles.
+// periods drives SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA lookbacks; a
+// zero-valued IndicatorConfig falls back to legacy defaults via WithDefaults
+// so legacy call sites without a profile keep their pre-PR-B behaviour.
+//
 // bbSqueezeLookback is the window (in bars) used to detect a recent BB
 // squeeze; 0 disables the detection (RecentSqueeze stays false), matching
 // the cycle43 "0 = disabled" convention for the other integer stance
 // parameters. Legacy callers can pass 5 to preserve pre-cycle44 behaviour.
-func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLookback int) entity.IndicatorSet {
+//
+// PR-C will profile-drive ADX / Stochastics / Donchian / CMF / OBVSlope /
+// Ichimoku; until then those use their hardcoded periods below.
+func calculateIndicatorSet(symbolID int64, candles []entity.Candle, periods entity.IndicatorConfig, bbSqueezeLookback int) entity.IndicatorSet {
 	n := len(candles)
 	if n == 0 {
 		return entity.IndicatorSet{SymbolID: symbolID}
 	}
+
+	periods = periods.WithDefaults()
 
 	closes := make([]float64, n)
 	highs := make([]float64, n)
@@ -838,59 +868,60 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 
 	result := entity.IndicatorSet{
 		SymbolID:  symbolID,
-		SMAShort:     floatToPtr(indicator.SMA(closes, 20)),
-		SMALong:     floatToPtr(indicator.SMA(closes, 50)),
-		EMAFast:     floatToPtr(indicator.EMA(closes, 12)),
-		EMASlow:     floatToPtr(indicator.EMA(closes, 26)),
-		RSI:     floatToPtr(indicator.RSI(closes, 14)),
+		SMAShort:  floatToPtr(indicator.SMA(closes, periods.SMAShort)),
+		SMALong:   floatToPtr(indicator.SMA(closes, periods.SMALong)),
+		EMAFast:   floatToPtr(indicator.EMA(closes, periods.EMAFast)),
+		EMASlow:   floatToPtr(indicator.EMA(closes, periods.EMASlow)),
+		RSI:       floatToPtr(indicator.RSI(closes, periods.RSIPeriod)),
 		Timestamp: candles[n-1].Time,
 	}
 
-	macdLine, signalLine, histogram := indicator.MACD(closes, 12, 26, 9)
+	macdLine, signalLine, histogram := indicator.MACD(closes, periods.MACDFast, periods.MACDSlow, periods.MACDSignal)
 	result.MACDLine = floatToPtr(macdLine)
 	result.SignalLine = floatToPtr(signalLine)
 	result.Histogram = floatToPtr(histogram)
 
-	bbUpper, bbMiddle, bbLower, bbBandwidth := indicator.BollingerBands(closes, 20, 2.0)
+	bbUpper, bbMiddle, bbLower, bbBandwidth := indicator.BollingerBands(closes, periods.BBPeriod, periods.BBMultiplier)
 	result.BBUpper = floatToPtr(bbUpper)
 	result.BBMiddle = floatToPtr(bbMiddle)
 	result.BBLower = floatToPtr(bbLower)
 	result.BBBandwidth = floatToPtr(bbBandwidth)
 
-	result.ATR = floatToPtr(indicator.ATR(highs, lows, closes, 14))
+	result.ATR = floatToPtr(indicator.ATR(highs, lows, closes, periods.ATRPeriod))
 
-	// PR-6: ADX family. Mirror the live-pipeline calculator.
+	// PR-6: ADX family. Mirror the live-pipeline calculator. PR-C will profile-drive.
 	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, closes, 14)
 	result.ADX = floatToPtr(adxVal)
 	result.PlusDI = floatToPtr(plusDI)
 	result.MinusDI = floatToPtr(minusDI)
 
 	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Mirror the
-	// live-pipeline calculator.
+	// live-pipeline calculator. PR-C will profile-drive.
 	stochK, stochD := indicator.Stochastics(highs, lows, closes, 14, 3, 3)
 	result.StochK = floatToPtr(stochK)
 	result.StochD = floatToPtr(stochD)
 	result.StochRSI = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
 
 	// PR-8: Ichimoku. Mirror the live pipeline; nil when all five lines
-	// are still in warmup.
+	// are still in warmup. PR-C will profile-drive.
 	if snap := buildIchimokuSnapshotBT(indicator.Ichimoku(highs, lows, closes, 9, 26, 52)); snap != nil {
 		result.Ichimoku = snap
 	}
 
 	// PR-11: Donchian Channel (20-bar default). Mirror the live pipeline;
-	// nil until 20 bars of history are available.
+	// nil until 20 bars of history are available. PR-C will profile-drive.
 	donU, donL, donM := indicator.Donchian(highs, lows, 20)
 	result.DonchianUpper = floatToPtr(donU)
 	result.DonchianLower = floatToPtr(donL)
 	result.DonchianMiddle = floatToPtr(donM)
 
-	// Volume indicators
+	// Volume indicators. VolumeSMA shares the BB period by default (legacy
+	// behaviour was VolumeSMA20 alongside BB20).
 	volumes := make([]float64, n)
 	for i, c := range candles {
 		volumes[i] = c.Volume
 	}
-	volSMA := indicator.VolumeSMA(volumes, 20)
+	volSMA := indicator.VolumeSMA(volumes, periods.VolumeSMAPeriod)
 	result.VolumeSMA = floatToPtr(volSMA)
 	if !math.IsNaN(volSMA) && volSMA > 0 && n > 0 {
 		vr := indicator.VolumeRatio(volumes[n-1], volSMA)
@@ -898,25 +929,26 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 	}
 
 	// PR-9: OBV + CMF (volume-based). Mirror the live-pipeline calculator.
+	// PR-C will profile-drive.
 	result.OBV = floatToPtr(indicator.OBV(closes, volumes))
 	result.OBVSlope = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
 	result.CMF = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
 
 	// RecentSqueeze: check if any of the last `bbSqueezeLookback` candles
-	// had BBBandwidth < 0.02. cycle44: now honours the profile field via
-	// the handler's bbSqueezeLookback. 0 keeps RecentSqueeze false (gate
-	// disabled). Capped by n-19 so small warmup windows do not read past
-	// the start of BB computation.
-	if n >= 20 && bbSqueezeLookback > 0 {
+	// had BBBandwidth < threshold. cycle44: now honours the profile field
+	// via the handler's bbSqueezeLookback. 0 keeps RecentSqueeze false
+	// (gate disabled). Capped by n-(bbPeriod-1) so small warmup windows
+	// do not read past the start of BB computation.
+	if n >= periods.BBPeriod && bbSqueezeLookback > 0 {
 		recentSqueeze := false
 		lookback := bbSqueezeLookback
-		if lookback > n-19 {
-			lookback = n - 19
+		if lookback > n-(periods.BBPeriod-1) {
+			lookback = n - (periods.BBPeriod - 1)
 		}
 		for i := 0; i < lookback; i++ {
 			offset := n - 1 - i
 			windowCloses := closes[:offset+1]
-			_, _, _, bw := indicator.BollingerBands(windowCloses, 20, 2.0)
+			_, _, _, bw := indicator.BollingerBands(windowCloses, periods.BBPeriod, periods.BBMultiplier)
 			if !math.IsNaN(bw) && bw < 0.02 {
 				recentSqueeze = true
 				break

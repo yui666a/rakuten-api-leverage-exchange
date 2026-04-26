@@ -723,6 +723,7 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 	}
 	if profile != nil {
 		in.BBSqueezeLookback = profile.StanceRules.BBSqueezeLookback
+		in.IndicatorPeriods = profile.Indicators
 		in.PositionSizing = profile.Risk.PositionSizing
 	}
 	return in, nil

@@ -46,6 +46,13 @@ type RunInput struct {
 	// callers that don't set a profile (baseline DefaultStrategy runs).
 	BBSqueezeLookback int
 
+	// IndicatorPeriods drives the lookback periods used inside
+	// calculateIndicatorSet for SMA / EMA / RSI / MACD / BB / ATR /
+	// VolumeSMA. Zero-valued fields fall back to the legacy defaults via
+	// IndicatorConfig.WithDefaults so callers without a profile keep the
+	// pre-PR-B behaviour bit-identical.
+	IndicatorPeriods entity.IndicatorConfig
+
 	// PositionSizing declares dynamic lot sizing for the run. nil / zero-value
 	// keeps the legacy fixed-lot behaviour (TradeAmount is used verbatim on
 	// every approved signal).
@@ -188,6 +195,11 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	if input.BBSqueezeLookback > 0 {
 		indicatorHandler.SetBBSqueezeLookback(input.BBSqueezeLookback)
 	}
+	// PR-B: profile-driven indicator periods. WithDefaults inside
+	// SetIndicatorPeriods means an empty IndicatorPeriods is bit-identical to
+	// the pre-PR-B hardcoded periods; a profile with non-zero fields lets PT5M
+	// / PT1M strategies tune their own lookbacks.
+	indicatorHandler.SetIndicatorPeriods(input.IndicatorPeriods)
 	// PR-J: enable Microprice / OFI when the caller supplied a BookSource.
 	// Same source the pre-trade gate uses, so backtest runs see the same
 	// L2 history.
