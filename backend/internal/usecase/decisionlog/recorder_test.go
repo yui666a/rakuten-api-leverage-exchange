@@ -3,6 +3,7 @@ package decisionlog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
@@ -20,6 +21,30 @@ func (s *stubRepo) Insert(_ context.Context, rec entity.DecisionRecord) error {
 	}
 	s.inserted = append(s.inserted, rec)
 	return nil
+}
+
+func (s *stubRepo) InsertAndID(_ context.Context, rec entity.DecisionRecord) (int64, error) {
+	if s.insertErr != nil {
+		return 0, s.insertErr
+	}
+	s.inserted = append(s.inserted, rec)
+	// id starts at 1 and matches the insertion order so tests can correlate
+	// later Update calls back to a specific row.
+	return int64(len(s.inserted)), nil
+}
+
+func (s *stubRepo) Update(_ context.Context, rec entity.DecisionRecord) error {
+	if s.insertErr != nil {
+		// Reuse the same fault-injection knob — tests only need one switch.
+		return s.insertErr
+	}
+	for i := range s.inserted {
+		if int64(i+1) == rec.ID {
+			s.inserted[i] = rec
+			return nil
+		}
+	}
+	return fmt.Errorf("stub Update: id %d not found", rec.ID)
 }
 
 func (s *stubRepo) List(_ context.Context, _ repository.DecisionLogFilter) ([]entity.DecisionRecord, int64, error) {
@@ -44,7 +69,10 @@ func indicatorEvent(symbolID int64, ts int64) entity.IndicatorEvent {
 	}
 }
 
-func TestRecorder_HoldOnlyBarFlushesOnNextIndicator(t *testing.T) {
+func TestRecorder_HoldOnlyBarInsertsImmediatelyOnIndicator(t *testing.T) {
+	// New flush model: every IndicatorEvent INSERTs a row right away with
+	// HOLD/SKIPPED/NOOP defaults, so HOLD-only bars are visible without
+	// waiting for the next bar.
 	repo := &stubRepo{}
 	rec := newRecorderForTest(repo)
 	ctx := context.Background()
@@ -52,15 +80,15 @@ func TestRecorder_HoldOnlyBarFlushesOnNextIndicator(t *testing.T) {
 	if _, err := rec.Handle(ctx, indicatorEvent(7, 1_000)); err != nil {
 		t.Fatalf("Handle bar1: %v", err)
 	}
-	if len(repo.inserted) != 0 {
-		t.Fatalf("after bar1 alone, expected 0 inserts, got %d", len(repo.inserted))
+	if len(repo.inserted) != 1 {
+		t.Fatalf("after bar1 indicator, expected 1 insert, got %d", len(repo.inserted))
 	}
-
+	// A second bar adds another row; the first row stays as HOLD/SKIPPED/NOOP.
 	if _, err := rec.Handle(ctx, indicatorEvent(7, 2_000)); err != nil {
 		t.Fatalf("Handle bar2: %v", err)
 	}
-	if len(repo.inserted) != 1 {
-		t.Fatalf("expected 1 insert (bar1 flushed), got %d", len(repo.inserted))
+	if len(repo.inserted) != 2 {
+		t.Fatalf("after bar2 indicator, expected 2 inserts, got %d", len(repo.inserted))
 	}
 	got := repo.inserted[0]
 	if got.SignalAction != "HOLD" {
@@ -114,20 +142,22 @@ func TestRecorder_FullBuyFlushesOnOrder(t *testing.T) {
 		t.Fatalf("Handle order: %v", err)
 	}
 
+	// Immediate-flush model: 1 INSERT (Indicator) + 3 UPDATEs (Signal,
+	// Approved, Order) all on the same row id.
 	if len(repo.inserted) != 1 {
-		t.Fatalf("expected 1 insert (flushed on OrderEvent), got %d", len(repo.inserted))
+		t.Fatalf("expected 1 insert (single row UPDATEd in place), got %d", len(repo.inserted))
 	}
 	got := repo.inserted[0]
 	if got.SignalAction != "BUY" || got.RiskOutcome != entity.DecisionRiskApproved ||
 		got.BookGateOutcome != entity.DecisionBookAllowed || got.OrderOutcome != entity.DecisionOrderFilled {
-		t.Errorf("flushed record fields wrong: %+v", got)
+		t.Errorf("final record fields wrong: %+v", got)
 	}
 	if got.OpenedPositionID != 100 || got.OrderID != 42 || got.ExecutedAmount != 0.5 {
 		t.Errorf("execution fields wrong: %+v", got)
 	}
 }
 
-func TestRecorder_RiskRejectionFlushesImmediately(t *testing.T) {
+func TestRecorder_RiskRejectionUpdatesInPlace(t *testing.T) {
 	repo := &stubRepo{}
 	rec := newRecorderForTest(repo)
 	ctx := context.Background()
@@ -147,7 +177,7 @@ func TestRecorder_RiskRejectionFlushesImmediately(t *testing.T) {
 	})
 
 	if len(repo.inserted) != 1 {
-		t.Fatalf("expected 1 insert (flushed on Rejected), got %d", len(repo.inserted))
+		t.Fatalf("expected 1 row (Indicator inserted, then UPDATEd by Signal+Rejected), got %d", len(repo.inserted))
 	}
 	got := repo.inserted[0]
 	if got.RiskOutcome != entity.DecisionRiskRejected || got.RiskReason != "daily loss limit hit" {
@@ -204,10 +234,11 @@ func TestRecorder_TickSLTPClosePersistedAsSeparateRow(t *testing.T) {
 		Trigger: entity.DecisionTriggerTickSLTP, ClosedPositionID: 100,
 	})
 
-	if len(repo.inserted) != 1 {
-		t.Fatalf("expected 1 insert (tick row, bar1 still pending), got %d", len(repo.inserted))
+	// Immediate-flush model: bar1 INSERT (BAR_CLOSE) + tick INSERT = 2 rows.
+	if len(repo.inserted) != 2 {
+		t.Fatalf("expected 2 inserts (BAR_CLOSE + tick row), got %d", len(repo.inserted))
 	}
-	got := repo.inserted[0]
+	got := repo.inserted[1]
 	if got.TriggerKind != entity.DecisionTriggerTickSLTP {
 		t.Errorf("TriggerKind = %q, want TICK_SLTP", got.TriggerKind)
 	}

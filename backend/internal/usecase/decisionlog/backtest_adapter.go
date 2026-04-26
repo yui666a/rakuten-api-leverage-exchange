@@ -26,6 +26,14 @@ func (a *backtestRepoAdapter) Insert(ctx context.Context, rec entity.DecisionRec
 	return a.repo.Insert(ctx, rec, a.runID)
 }
 
+func (a *backtestRepoAdapter) InsertAndID(ctx context.Context, rec entity.DecisionRecord) (int64, error) {
+	return a.repo.InsertAndID(ctx, rec, a.runID)
+}
+
+func (a *backtestRepoAdapter) Update(ctx context.Context, rec entity.DecisionRecord) error {
+	return a.repo.Update(ctx, rec)
+}
+
 func (a *backtestRepoAdapter) List(_ context.Context, _ repository.DecisionLogFilter) ([]entity.DecisionRecord, int64, error) {
 	return nil, 0, nil
 }
