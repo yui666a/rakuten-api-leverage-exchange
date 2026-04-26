@@ -53,6 +53,9 @@ type Dependencies struct {
 	// most recent persisted snapshot (cheap) and only falls back to the
 	// reporter on cache miss / `?fresh=true`.
 	ExecutionQualityRepo repository.ExecutionQualityRepository
+
+	// DecisionLogRepo (optional). When set, GET /api/v1/decisions is exposed.
+	DecisionLogRepo repository.DecisionLogRepository
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -203,6 +206,11 @@ func NewRouter(deps Dependencies) *gin.Engine {
 			v1.GET("/backtest/walk-forward", backtestHandler.ListWalkForward)
 			v1.GET("/backtest/walk-forward/:id", backtestHandler.GetWalkForward)
 		}
+	}
+
+	if deps.DecisionLogRepo != nil {
+		decisionHandler := handler.NewDecisionHandler(deps.DecisionLogRepo)
+		v1.GET("/decisions", decisionHandler.List)
 	}
 
 	return r
