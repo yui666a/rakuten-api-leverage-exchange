@@ -92,6 +92,7 @@ function Dashboard() {
         <section className="space-y-4">
           <LiveTickerCard
             ticker={ticker}
+            orderbook={orderbook}
             connectionState={connectionState}
             currencyPair={currentSymbol?.currencyPair?.replace('_', '/')}
           />
