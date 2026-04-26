@@ -62,6 +62,14 @@ type RunInput struct {
 	// confidence scaling matches the live path. 0 disables confidence
 	// scaling (the sizer passes the multiplier through as 1.0).
 	MinConfidence float64
+
+	// ResultID, when non-empty, overrides the auto-generated ULID assigned
+	// at the end of Run. Callers wire this when they need to know the run
+	// id *before* Run starts — e.g. to bind a DecisionRecorder to it via
+	// BacktestRepoAdapter so per-run decision rows can be scoped before the
+	// first event flows through the bus. Empty preserves the legacy
+	// behaviour (Run allocates a fresh ULID).
+	ResultID string
 }
 
 // RunnerOption tunes optional aspects of a BacktestRunner at construction.
@@ -351,9 +359,13 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	}
 	summary.ThinBookSkips = executionHandler.ThinBookSkips + tickRiskHandler.ThinBookSkips
 
-	id, err := NewULID()
-	if err != nil {
-		return nil, err
+	id := input.ResultID
+	if id == "" {
+		generated, err := NewULID()
+		if err != nil {
+			return nil, err
+		}
+		id = generated
 	}
 	result := &entity.BacktestResult{
 		ID:        id,
