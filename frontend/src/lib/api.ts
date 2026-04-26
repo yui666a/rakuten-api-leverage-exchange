@@ -678,6 +678,33 @@ export async function createManualOrder(req: ManualOrderRequest): Promise<Manual
   return sendApi<ManualOrderResponse, ManualOrderRequest>('/orders', 'POST', req)
 }
 
+export type DecisionLogItem = {
+  id: number
+  barCloseAt: number
+  sequenceInBar: number
+  triggerKind: 'BAR_CLOSE' | 'TICK_SLTP' | 'TICK_TRAILING'
+  symbolId: number
+  currencyPair: string
+  primaryInterval: string
+  stance: string
+  lastPrice: number
+  signal: { action: 'BUY' | 'SELL' | 'HOLD'; confidence: number; reason: string }
+  risk: { outcome: 'APPROVED' | 'REJECTED' | 'SKIPPED'; reason: string }
+  bookGate: { outcome: 'ALLOWED' | 'VETOED' | 'SKIPPED'; reason: string }
+  order: { outcome: 'FILLED' | 'FAILED' | 'NOOP'; orderId: number; amount: number; price: number; error: string }
+  closedPositionId: number
+  openedPositionId: number
+  indicators: Record<string, unknown>
+  higherTfIndicators: Record<string, unknown>
+  createdAt: number
+}
+
+export type DecisionLogResponse = {
+  decisions: DecisionLogItem[]
+  nextCursor: number
+  hasMore: boolean
+}
+
 export function buildRealtimeWebSocketUrl(symbolId: number): string {
   if (typeof window === 'undefined') {
     return `${WS_BASE}/ws?symbolId=${symbolId}`
