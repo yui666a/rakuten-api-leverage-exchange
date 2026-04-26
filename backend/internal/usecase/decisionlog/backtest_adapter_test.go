@@ -20,6 +20,16 @@ func (s *stubBacktestRepoForAdapter) Insert(_ context.Context, rec entity.Decisi
 	s.seen = true
 	return nil
 }
+func (s *stubBacktestRepoForAdapter) InsertAndID(_ context.Context, rec entity.DecisionRecord, runID string) (int64, error) {
+	s.rec = rec
+	s.runID = runID
+	s.seen = true
+	return 1, nil
+}
+func (s *stubBacktestRepoForAdapter) Update(_ context.Context, rec entity.DecisionRecord) error {
+	s.rec = rec
+	return nil
+}
 func (s *stubBacktestRepoForAdapter) ListByRun(_ context.Context, _ string, _ int, _ int64) ([]entity.DecisionRecord, int64, error) {
 	return nil, 0, nil
 }

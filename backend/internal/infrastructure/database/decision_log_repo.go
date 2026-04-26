@@ -26,6 +26,11 @@ func NewDecisionLogRepository(db *sql.DB) repository.DecisionLogRepository {
 }
 
 func (r *decisionLogRepo) Insert(ctx context.Context, rec entity.DecisionRecord) error {
+	_, err := r.InsertAndID(ctx, rec)
+	return err
+}
+
+func (r *decisionLogRepo) InsertAndID(ctx context.Context, rec entity.DecisionRecord) (int64, error) {
 	const q = `
 		INSERT INTO decision_log (
 			bar_close_at, sequence_in_bar, trigger_kind,
@@ -40,7 +45,7 @@ func (r *decisionLogRepo) Insert(ctx context.Context, rec entity.DecisionRecord)
 			created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	if _, err := r.db.ExecContext(ctx, q,
+	res, err := r.db.ExecContext(ctx, q,
 		rec.BarCloseAt, rec.SequenceInBar, rec.TriggerKind,
 		rec.SymbolID, rec.CurrencyPair, rec.PrimaryInterval,
 		rec.Stance, rec.LastPrice,
@@ -51,8 +56,54 @@ func (r *decisionLogRepo) Insert(ctx context.Context, rec entity.DecisionRecord)
 		rec.ClosedPositionID, rec.OpenedPositionID,
 		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
 		rec.CreatedAt,
-	); err != nil {
-		return fmt.Errorf("decision_log insert: %w", err)
+	)
+	if err != nil {
+		return 0, fmt.Errorf("decision_log insert: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("decision_log insert last id: %w", err)
+	}
+	return id, nil
+}
+
+func (r *decisionLogRepo) Update(ctx context.Context, rec entity.DecisionRecord) error {
+	const q = `
+		UPDATE decision_log SET
+			bar_close_at = ?, sequence_in_bar = ?, trigger_kind = ?,
+			symbol_id = ?, currency_pair = ?, primary_interval = ?,
+			stance = ?, last_price = ?,
+			signal_action = ?, signal_confidence = ?, signal_reason = ?,
+			risk_outcome = ?, risk_reason = ?,
+			book_gate_outcome = ?, book_gate_reason = ?,
+			order_outcome = ?, order_id = ?, executed_amount = ?, executed_price = ?, order_error = ?,
+			closed_position_id = ?, opened_position_id = ?,
+			indicators_json = ?, higher_tf_indicators_json = ?,
+			created_at = ?
+		WHERE id = ?
+	`
+	res, err := r.db.ExecContext(ctx, q,
+		rec.BarCloseAt, rec.SequenceInBar, rec.TriggerKind,
+		rec.SymbolID, rec.CurrencyPair, rec.PrimaryInterval,
+		rec.Stance, rec.LastPrice,
+		rec.SignalAction, rec.SignalConfidence, rec.SignalReason,
+		rec.RiskOutcome, rec.RiskReason,
+		rec.BookGateOutcome, rec.BookGateReason,
+		rec.OrderOutcome, rec.OrderID, rec.ExecutedAmount, rec.ExecutedPrice, rec.OrderError,
+		rec.ClosedPositionID, rec.OpenedPositionID,
+		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
+		rec.CreatedAt,
+		rec.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("decision_log update: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("decision_log update rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("decision_log update: id %d not found", rec.ID)
 	}
 	return nil
 }

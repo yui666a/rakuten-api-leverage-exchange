@@ -10,6 +10,10 @@ import (
 type minimalRepo struct{}
 
 func (*minimalRepo) Insert(_ context.Context, _ entity.DecisionRecord) error { return nil }
+func (*minimalRepo) InsertAndID(_ context.Context, _ entity.DecisionRecord) (int64, error) {
+	return 0, nil
+}
+func (*minimalRepo) Update(_ context.Context, _ entity.DecisionRecord) error { return nil }
 func (*minimalRepo) List(_ context.Context, _ DecisionLogFilter) ([]entity.DecisionRecord, int64, error) {
 	return nil, 0, nil
 }
@@ -19,6 +23,10 @@ type minimalBacktestRepo struct{}
 func (*minimalBacktestRepo) Insert(_ context.Context, _ entity.DecisionRecord, _ string) error {
 	return nil
 }
+func (*minimalBacktestRepo) InsertAndID(_ context.Context, _ entity.DecisionRecord, _ string) (int64, error) {
+	return 0, nil
+}
+func (*minimalBacktestRepo) Update(_ context.Context, _ entity.DecisionRecord) error { return nil }
 func (*minimalBacktestRepo) ListByRun(_ context.Context, _ string, _ int, _ int64) ([]entity.DecisionRecord, int64, error) {
 	return nil, 0, nil
 }

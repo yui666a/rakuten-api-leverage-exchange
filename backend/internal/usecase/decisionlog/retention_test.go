@@ -20,6 +20,12 @@ type stubBacktestRepo struct {
 func (s *stubBacktestRepo) Insert(_ context.Context, _ entity.DecisionRecord, _ string) error {
 	return nil
 }
+func (s *stubBacktestRepo) InsertAndID(_ context.Context, _ entity.DecisionRecord, _ string) (int64, error) {
+	return 1, nil
+}
+func (s *stubBacktestRepo) Update(_ context.Context, _ entity.DecisionRecord) error {
+	return nil
+}
 func (s *stubBacktestRepo) ListByRun(_ context.Context, _ string, _ int, _ int64) ([]entity.DecisionRecord, int64, error) {
 	return nil, 0, nil
 }
@@ -81,6 +87,12 @@ type countingErrorRepo struct {
 
 func (c *countingErrorRepo) Insert(ctx context.Context, rec entity.DecisionRecord, runID string) error {
 	return c.stub.Insert(ctx, rec, runID)
+}
+func (c *countingErrorRepo) InsertAndID(ctx context.Context, rec entity.DecisionRecord, runID string) (int64, error) {
+	return c.stub.InsertAndID(ctx, rec, runID)
+}
+func (c *countingErrorRepo) Update(ctx context.Context, rec entity.DecisionRecord) error {
+	return c.stub.Update(ctx, rec)
 }
 func (c *countingErrorRepo) ListByRun(ctx context.Context, runID string, limit int, cursor int64) ([]entity.DecisionRecord, int64, error) {
 	return c.stub.ListByRun(ctx, runID, limit, cursor)

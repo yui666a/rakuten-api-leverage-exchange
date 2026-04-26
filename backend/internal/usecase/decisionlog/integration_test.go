@@ -79,14 +79,20 @@ func TestRecorder_EndToEnd_FullCycleAndHoldBar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 rows (bar1 + bar2), got %d", len(rows))
+	// Immediate-flush model: every IndicatorEvent inserts a row right
+	// away, so bar1, bar2, bar3 each produce exactly one row (3 total),
+	// independent of subsequent Signal/Order events landing on bar1.
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows (bar1 + bar2 + bar3, all inserted immediately), got %d", len(rows))
 	}
-	// Newest first: bar2 then bar1.
-	if rows[0].BarCloseAt != 2_000 || rows[0].SignalAction != "HOLD" {
-		t.Errorf("bar2 row wrong: %+v", rows[0])
+	// Newest first: bar3 then bar2 then bar1.
+	if rows[0].BarCloseAt != 3_000 || rows[0].SignalAction != "HOLD" {
+		t.Errorf("bar3 row wrong: %+v", rows[0])
 	}
-	if rows[1].BarCloseAt != 1_000 || rows[1].SignalAction != "BUY" || rows[1].OrderOutcome != entity.DecisionOrderFilled {
-		t.Errorf("bar1 row wrong: %+v", rows[1])
+	if rows[1].BarCloseAt != 2_000 || rows[1].SignalAction != "HOLD" {
+		t.Errorf("bar2 row wrong: %+v", rows[1])
+	}
+	if rows[2].BarCloseAt != 1_000 || rows[2].SignalAction != "BUY" || rows[2].OrderOutcome != entity.DecisionOrderFilled {
+		t.Errorf("bar1 row wrong: %+v", rows[2])
 	}
 }
