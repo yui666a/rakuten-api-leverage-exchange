@@ -236,6 +236,54 @@ func TestRiskHandler_EmitsApprovedSignalEvent(t *testing.T) {
 	}
 }
 
+func TestRiskHandler_EmitsRejectedOnRiskManagerVeto(t *testing.T) {
+	// Daily loss already exceeds the cap so any new BUY proposal is rejected
+	// by RiskManager.CheckOrderAt with a non-empty Reason.
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount:    1000000,
+		MaxDailyLoss:         100,
+		StopLossPercent:      5,
+		TakeProfitPercent:    10,
+		InitialCapital:       1000000,
+		MaxConsecutiveLosses: 3,
+		CooldownMinutes:      30,
+	})
+	riskMgr.RecordLoss(500) // push past MaxDailyLoss=100
+	handler := &RiskHandler{
+		RiskManager: riskMgr,
+		TradeAmount: 0.01,
+	}
+
+	events, err := handler.Handle(context.Background(), entity.SignalEvent{
+		Signal: entity.Signal{
+			SymbolID: 7,
+			Action:   entity.SignalActionBuy,
+			Reason:   "ema cross",
+		},
+		Price:     10000,
+		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("handle error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 emitted event, got %d", len(events))
+	}
+	rej, ok := events[0].(entity.RejectedSignalEvent)
+	if !ok {
+		t.Fatalf("expected RejectedSignalEvent, got %T", events[0])
+	}
+	if rej.Stage != entity.RejectedStageRisk {
+		t.Errorf("Stage = %q, want %q", rej.Stage, entity.RejectedStageRisk)
+	}
+	if rej.Reason == "" {
+		t.Errorf("Reason must be populated from RiskManager check")
+	}
+	if rej.Signal.Action != entity.SignalActionBuy {
+		t.Errorf("Signal must be carried through, got action %q", rej.Signal.Action)
+	}
+}
+
 type fakeTickRiskExecutor struct {
 	positions []eventengine.Position
 	closedIDs []int64

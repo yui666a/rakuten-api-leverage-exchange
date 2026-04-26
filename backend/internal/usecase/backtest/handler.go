@@ -463,7 +463,19 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 			h.MinConfidence,
 		)
 		if skipReason != "" || sized <= 0 {
-			return nil, nil
+			reason := "sizer skipped"
+			if skipReason != "" {
+				reason = "sizer skipped: " + skipReason
+			} else if sized <= 0 {
+				reason = "sizer returned zero lot"
+			}
+			return []entity.Event{entity.RejectedSignalEvent{
+				Signal:    signalEvent.Signal,
+				Stage:     entity.RejectedStageRisk,
+				Reason:    reason,
+				Price:     signalEvent.Price,
+				Timestamp: signalEvent.Timestamp,
+			}}, nil
 		}
 		amount = sized
 	}
@@ -482,7 +494,13 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 
 	check := h.RiskManager.CheckOrderAt(ctx, time.UnixMilli(signalEvent.Timestamp), proposal)
 	if !check.Approved {
-		return nil, nil
+		return []entity.Event{entity.RejectedSignalEvent{
+			Signal:    signalEvent.Signal,
+			Stage:     entity.RejectedStageRisk,
+			Reason:    check.Reason,
+			Price:     signalEvent.Price,
+			Timestamp: signalEvent.Timestamp,
+		}}, nil
 	}
 
 	// Pre-trade orderbook depth gate. Runs after RiskManager so the gate
@@ -495,7 +513,13 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 				h.BookGateRejects = make(map[string]int)
 			}
 			h.BookGateRejects[decision.Reason]++
-			return nil, nil
+			return []entity.Event{entity.RejectedSignalEvent{
+				Signal:    signalEvent.Signal,
+				Stage:     entity.RejectedStageBookGate,
+				Reason:    decision.Reason,
+				Price:     signalEvent.Price,
+				Timestamp: signalEvent.Timestamp,
+			}}, nil
 		}
 	}
 
