@@ -1,0 +1,78 @@
+{
+  "name": "experiment_eth_pt5m_scale_4x",
+  "description": "cycle65 sweep: ETH PT5M with indicator periods scaled 4x off the LTC PT15M production v7 source. Signal / stance / risk rules identical to the 3x baseline. Goal: confirm whether 3x is local optimum or 2x / 4x adapts better to the ETH PT5M problem window 2024-04~10.",
+  "indicators": {
+    "sma_short": 80,
+    "sma_long": 200,
+    "ema_fast": 48,
+    "ema_slow": 104,
+    "rsi_period": 56,
+    "macd_fast": 48,
+    "macd_slow": 104,
+    "macd_signal": 36,
+    "bb_period": 80,
+    "bb_multiplier": 2.0,
+    "atr_period": 56,
+    "volume_sma_period": 80,
+    "adx_period": 56,
+    "stoch_k_period": 56,
+    "stoch_smooth_k": 12,
+    "stoch_smooth_d": 12,
+    "stoch_rsi_rsi_period": 56,
+    "stoch_rsi_stoch_period": 56,
+    "donchian_period": 80,
+    "obv_slope_period": 80,
+    "cmf_period": 80,
+    "ichimoku_tenkan": 36,
+    "ichimoku_kijun": 104,
+    "ichimoku_senkou_b": 208
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 3,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": true,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5,
+    "position_sizing": {
+      "mode": "risk_pct",
+      "risk_per_trade_pct": 0.5,
+      "max_position_pct_of_equity": 20,
+      "min_lot": 0.1,
+      "lot_step": 0.1
+    }
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
