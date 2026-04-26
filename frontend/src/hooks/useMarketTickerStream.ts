@@ -79,9 +79,20 @@ export function useMarketTickerStream(symbolId: number) {
           case 'market_trades':
             void queryClient.invalidateQueries({ queryKey: ['trades', symbolId] })
             return
-          case 'orderbook':
+          case 'orderbook': {
             setOrderbook(payload.data)
+            // 楽天 venue は ticker payload を ~600ms 遅らせて配信する一方、
+            // orderbook はほぼリアルタイム (p50≈10ms) で届く。板の bestBid/
+            // bestAsk と timestamp を ticker state にマージし、リアルタイム
+            // ティッカーの気配値が板より遅れて見える現象を解消する。
+            const ob = payload.data
+            setTicker((prev) =>
+              prev
+                ? { ...prev, bestBid: ob.bestBid, bestAsk: ob.bestAsk, timestamp: ob.timestamp }
+                : prev,
+            )
             return
+          }
           case 'position_update':
             // RealExecutor pushes position changes immediately on diff
             // detection (see PR-O). Invalidate the positions query so the
