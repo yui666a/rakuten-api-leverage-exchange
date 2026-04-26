@@ -6,6 +6,7 @@ const (
 	EventTypeTick      = "tick"
 	EventTypeSignal    = "signal"
 	EventTypeApproved  = "approved_signal"
+	EventTypeRejected  = "rejected_signal"
 	EventTypeOrder     = "order"
 )
 
@@ -94,6 +95,17 @@ type OrderEvent struct {
 	Amount    float64
 	Reason    string
 	Timestamp int64
+	// Trigger identifies what produced this order. Zero value means
+	// "legacy / unknown" so existing call-sites that haven't been updated
+	// still compile and dispatch normally. Recorder uses this to decide
+	// whether the row belongs to the bar's BAR_CLOSE record or is a
+	// separate tick-driven row.
+	Trigger string
+	// OpenedPositionID is set when this order opened a new position.
+	OpenedPositionID int64
+	// ClosedPositionID is set when this order closed an existing position
+	// (set on both stand-alone closes and the close-leg of a reversal).
+	ClosedPositionID int64
 }
 
 func (e OrderEvent) EventType() string     { return EventTypeOrder }
