@@ -1,0 +1,69 @@
+{
+  "name": "experiment_ltc_60k_stance_bblook_5",
+  "description": "cycle71m: no_break winner + bb_squeeze_lookback 3 -> 5.",
+  "indicators": {
+    "sma_short": 20,
+    "sma_long": 50,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_multiplier": 2.0,
+    "atr_period": 14
+  },
+  "stance_rules": {
+    "rsi_oversold": 32,
+    "rsi_overbought": 68,
+    "sma_convergence_threshold": 0.002,
+    "bb_squeeze_lookback": 5,
+    "breakout_volume_ratio": 1.5
+  },
+  "signal_rules": {
+    "trend_follow": {
+      "enabled": true,
+      "require_macd_confirm": false,
+      "require_ema_cross": true,
+      "rsi_buy_max": 60,
+      "rsi_sell_min": 35
+    },
+    "contrarian": {
+      "enabled": true,
+      "rsi_entry": 32,
+      "rsi_exit": 68,
+      "macd_histogram_limit": 10
+    },
+    "breakout": {
+      "enabled": false,
+      "volume_ratio_min": 1.5,
+      "require_macd_confirm": true,
+      "cmf_buy_min": 0.1
+    }
+  },
+  "strategy_risk": {
+    "stop_loss_percent": 14,
+    "take_profit_percent": 4,
+    "stop_loss_atr_multiplier": 0,
+    "max_position_amount": 100000,
+    "max_daily_loss": 50000,
+    "trailing_atr_multiplier": 2.5,
+    "position_sizing": {
+      "mode": "risk_pct",
+      "risk_per_trade_pct": 0.75,
+      "max_position_pct_of_equity": 20,
+      "min_lot": 0.1,
+      "lot_step": 0.1,
+      "drawdown_scale_down": {
+        "tier_a_pct": 13,
+        "tier_a_scale": 0.65,
+        "tier_b_pct": 19,
+        "tier_b_scale": 0.4
+      }
+    }
+  },
+  "htf_filter": {
+    "enabled": true,
+    "block_counter_trend": false,
+    "alignment_boost": 0.1
+  }
+}
