@@ -29,11 +29,11 @@ func TestConfigurableStrategy_ADXGateBlocksBelowThreshold(t *testing.T) {
 	}
 
 	// Build an IndicatorSet that would otherwise trigger a trend-follow
-	// buy (SMA20 > SMA50, EMA12 > EMA26, RSI moderate, positive
+	// buy (SMAShort > SMALong, EMAFast > EMASlow, RSI moderate, positive
 	// histogram) but ADX is only 25 — well below the 99 cap.
 	ind := makeTrendFollowReadyIndicators()
 	adx := 25.0
-	ind.ADX14 = &adx
+	ind.ADX = &adx
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -65,7 +65,7 @@ func TestConfigurableStrategy_ADXGateAllowsAboveThreshold(t *testing.T) {
 
 	ind := makeTrendFollowReadyIndicators()
 	adx := 50.0
-	ind.ADX14 = &adx
+	ind.ADX = &adx
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -91,7 +91,7 @@ func TestConfigurableStrategy_ADXGateMissingADXCountsAsFail(t *testing.T) {
 	}
 
 	ind := makeTrendFollowReadyIndicators()
-	ind.ADX14 = nil // unknown
+	ind.ADX = nil // unknown
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -132,11 +132,11 @@ func makeTrendFollowReadyIndicators() entity.IndicatorSet {
 	hist := 1.5
 	return entity.IndicatorSet{
 		SymbolID:  10,
-		SMA20:     &sma20,
-		SMA50:     &sma50,
-		EMA12:     &ema12,
-		EMA26:     &ema26,
-		RSI14:     &rsi,
+		SMAShort:     &sma20,
+		SMALong:     &sma50,
+		EMAFast:     &ema12,
+		EMASlow:     &ema26,
+		RSI:     &rsi,
 		Histogram: &hist,
 		Timestamp: time.Now().Unix(),
 	}

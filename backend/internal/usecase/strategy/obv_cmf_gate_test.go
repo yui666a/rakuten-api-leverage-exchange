@@ -9,7 +9,7 @@ import (
 )
 
 // TestConfigurableStrategy_OBVAlignmentBlocksTrendFollowBuy verifies the
-// PR-9 wiring: when RequireOBVAlignment is true and OBVSlope20 is negative
+// PR-9 wiring: when RequireOBVAlignment is true and OBVSlope is negative
 // (net selling volume), a trend-follow BUY must be blocked. Silent-no-op
 // regression guard.
 func TestConfigurableStrategy_OBVAlignmentBlocksTrendFollowBuy(t *testing.T) {
@@ -25,7 +25,7 @@ func TestConfigurableStrategy_OBVAlignmentBlocksTrendFollowBuy(t *testing.T) {
 
 	ind := makeTrendFollowReadyIndicators()
 	slope := -100.0
-	ind.OBVSlope20 = &slope
+	ind.OBVSlope = &slope
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -40,7 +40,7 @@ func TestConfigurableStrategy_OBVAlignmentBlocksTrendFollowBuy(t *testing.T) {
 }
 
 // TestConfigurableStrategy_OBVAlignmentAllowsTrendFollowBuy: with positive
-// OBVSlope20 the gate passes and BUY fires.
+// OBVSlope the gate passes and BUY fires.
 func TestConfigurableStrategy_OBVAlignmentAllowsTrendFollowBuy(t *testing.T) {
 	profile := productionProfile(t)
 	profile.SignalRules.TrendFollow.RequireOBVAlignment = true
@@ -53,7 +53,7 @@ func TestConfigurableStrategy_OBVAlignmentAllowsTrendFollowBuy(t *testing.T) {
 
 	ind := makeTrendFollowReadyIndicators()
 	slope := 100.0
-	ind.OBVSlope20 = &slope
+	ind.OBVSlope = &slope
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -64,7 +64,7 @@ func TestConfigurableStrategy_OBVAlignmentAllowsTrendFollowBuy(t *testing.T) {
 	}
 }
 
-// TestConfigurableStrategy_OBVAlignmentMissingCountsAsFail: nil OBVSlope20
+// TestConfigurableStrategy_OBVAlignmentMissingCountsAsFail: nil OBVSlope
 // during warmup fails the gate.
 func TestConfigurableStrategy_OBVAlignmentMissingCountsAsFail(t *testing.T) {
 	profile := productionProfile(t)
@@ -77,14 +77,14 @@ func TestConfigurableStrategy_OBVAlignmentMissingCountsAsFail(t *testing.T) {
 	}
 
 	ind := makeTrendFollowReadyIndicators()
-	ind.OBVSlope20 = nil
+	ind.OBVSlope = nil
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	if sig.Action != entity.SignalActionHold {
-		t.Fatalf("expected HOLD on nil OBVSlope20, got %v", sig.Action)
+		t.Fatalf("expected HOLD on nil OBVSlope, got %v", sig.Action)
 	}
 	if !containsSubstring(sig.Reason, "OBV") {
 		t.Fatalf("expected OBV in reason, got %q", sig.Reason)
@@ -92,7 +92,7 @@ func TestConfigurableStrategy_OBVAlignmentMissingCountsAsFail(t *testing.T) {
 }
 
 // TestConfigurableStrategy_OBVAlignmentFalseIsDisabled: when the toggle is
-// off, an adversarial OBVSlope20 must not affect the BUY path.
+// off, an adversarial OBVSlope must not affect the BUY path.
 func TestConfigurableStrategy_OBVAlignmentFalseIsDisabled(t *testing.T) {
 	profile := productionProfile(t)
 	profile.SignalRules.TrendFollow.RequireOBVAlignment = false
@@ -105,7 +105,7 @@ func TestConfigurableStrategy_OBVAlignmentFalseIsDisabled(t *testing.T) {
 
 	ind := makeTrendFollowReadyIndicators()
 	slope := -999.0
-	ind.OBVSlope20 = &slope
+	ind.OBVSlope = &slope
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -117,7 +117,7 @@ func TestConfigurableStrategy_OBVAlignmentFalseIsDisabled(t *testing.T) {
 }
 
 // TestConfigurableStrategy_CMFBuyGateBlocks is the PR-9 CMF wiring guard:
-// when CMFBuyMin > 0 and CMF20 is below the threshold, a breakout BUY is
+// when CMFBuyMin > 0 and CMF is below the threshold, a breakout BUY is
 // blocked.
 func TestConfigurableStrategy_CMFBuyGateBlocks(t *testing.T) {
 	profile := productionProfile(t)
@@ -134,7 +134,7 @@ func TestConfigurableStrategy_CMFBuyGateBlocks(t *testing.T) {
 
 	ind := makeBreakoutBuyReadyIndicators()
 	cmf := 0.05
-	ind.CMF20 = &cmf
+	ind.CMF = &cmf
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 120.0, time.Now())
 	if err != nil {
@@ -165,7 +165,7 @@ func TestConfigurableStrategy_CMFBuyGateAllows(t *testing.T) {
 
 	ind := makeBreakoutBuyReadyIndicators()
 	cmf := 0.25
-	ind.CMF20 = &cmf
+	ind.CMF = &cmf
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 120.0, time.Now())
 	if err != nil {
@@ -177,7 +177,7 @@ func TestConfigurableStrategy_CMFBuyGateAllows(t *testing.T) {
 }
 
 // TestConfigurableStrategy_CMFGateZeroIsDisabled: CMFBuyMin=0 must not
-// touch the signal path even when CMF20 is strongly negative.
+// touch the signal path even when CMF is strongly negative.
 func TestConfigurableStrategy_CMFGateZeroIsDisabled(t *testing.T) {
 	profile := productionProfile(t)
 	profile.SignalRules.Breakout.Enabled = true
@@ -193,7 +193,7 @@ func TestConfigurableStrategy_CMFGateZeroIsDisabled(t *testing.T) {
 
 	ind := makeBreakoutBuyReadyIndicators()
 	cmf := -0.9
-	ind.CMF20 = &cmf
+	ind.CMF = &cmf
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 120.0, time.Now())
 	if err != nil {
@@ -205,7 +205,7 @@ func TestConfigurableStrategy_CMFGateZeroIsDisabled(t *testing.T) {
 }
 
 // TestConfigurableStrategy_CMFSellGateBlocks: the SELL-direction mirror of
-// the BUY gate. With CMFSellMax = -0.2 and CMF20 = -0.05, the SELL must be
+// the BUY gate. With CMFSellMax = -0.2 and CMF = -0.05, the SELL must be
 // blocked (|CMF| too small = not selling-pressure enough).
 func TestConfigurableStrategy_CMFSellGateBlocks(t *testing.T) {
 	profile := productionProfile(t)
@@ -222,7 +222,7 @@ func TestConfigurableStrategy_CMFSellGateBlocks(t *testing.T) {
 
 	ind := makeBreakoutSellReadyIndicators()
 	cmf := -0.05
-	ind.CMF20 = &cmf
+	ind.CMF = &cmf
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 80.0, time.Now())
 	if err != nil {
@@ -236,7 +236,7 @@ func TestConfigurableStrategy_CMFSellGateBlocks(t *testing.T) {
 	}
 }
 
-// TestConfigurableStrategy_CMFGateMissingCountsAsFail: nil CMF20 during
+// TestConfigurableStrategy_CMFGateMissingCountsAsFail: nil CMF during
 // warmup fails the gate.
 func TestConfigurableStrategy_CMFGateMissingCountsAsFail(t *testing.T) {
 	profile := productionProfile(t)
@@ -252,14 +252,14 @@ func TestConfigurableStrategy_CMFGateMissingCountsAsFail(t *testing.T) {
 	}
 
 	ind := makeBreakoutBuyReadyIndicators()
-	ind.CMF20 = nil
+	ind.CMF = nil
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 120.0, time.Now())
 	if err != nil {
 		t.Fatalf("Evaluate: %v", err)
 	}
 	if sig.Action != entity.SignalActionHold {
-		t.Fatalf("expected HOLD on nil CMF20, got %v", sig.Action)
+		t.Fatalf("expected HOLD on nil CMF, got %v", sig.Action)
 	}
 	if !containsSubstring(sig.Reason, "CMF") {
 		t.Fatalf("expected CMF in reason, got %q", sig.Reason)

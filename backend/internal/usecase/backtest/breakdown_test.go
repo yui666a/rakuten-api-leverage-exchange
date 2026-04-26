@@ -15,12 +15,12 @@ func TestParseSignalSource(t *testing.T) {
 	}{
 		{
 			name:   "trend follow buy variant 1",
-			reason: "trend follow: EMA12 > EMA26, SMA aligned, RSI not overbought, MACD confirmed",
+			reason: "trend follow: EMAFast > EMASlow, SMA aligned, RSI not overbought, MACD confirmed",
 			want:   "trend_follow",
 		},
 		{
 			name:   "trend follow sell variant",
-			reason: "trend follow: SMA20 < SMA50, RSI not oversold",
+			reason: "trend follow: SMAShort < SMALong, RSI not oversold",
 			want:   "trend_follow",
 		},
 		{
@@ -60,7 +60,7 @@ func TestParseSignalSource(t *testing.T) {
 		},
 		{
 			name:   "leading whitespace is tolerated",
-			reason: "  trend follow: EMA12 > EMA26",
+			reason: "  trend follow: EMAFast > EMASlow",
 			want:   "trend_follow",
 		},
 		{
@@ -204,10 +204,10 @@ func TestBuildBreakdown_ByExitReason(t *testing.T) {
 
 func TestBuildBreakdown_BySignalSource(t *testing.T) {
 	trades := []entity.BacktestTradeRecord{
-		{PnL: 10, ReasonEntry: "trend follow: EMA12 > EMA26"},
+		{PnL: 10, ReasonEntry: "trend follow: EMAFast > EMASlow"},
 		{PnL: -5, ReasonEntry: "contrarian: RSI oversold"},
 		{PnL: 3, ReasonEntry: "breakout: price above BB upper"},
-		{PnL: 7, ReasonEntry: "trend follow: SMA20 > SMA50"},
+		{PnL: 7, ReasonEntry: "trend follow: SMAShort > SMALong"},
 		{PnL: -1, ReasonEntry: ""},
 	}
 	got := BuildBreakdown(trades, func(t entity.BacktestTradeRecord) string {

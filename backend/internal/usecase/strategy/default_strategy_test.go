@@ -61,14 +61,14 @@ func TestDefaultStrategy_Evaluate_DelegatesToEngine(t *testing.T) {
 	wrapped := NewDefaultStrategy(engine)
 
 	// Minimal indicator set that drives StrategyEngine into a BUY decision
-	// under TREND_FOLLOW: SMA20 > SMA50, RSI < 70, EMA aligned with SMA.
+	// under TREND_FOLLOW: SMAShort > SMALong, RSI < 70, EMA aligned with SMA.
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    floatPtr(5_100_000),
-		SMA50:    floatPtr(5_000_000),
-		EMA12:    floatPtr(5_100_000),
-		EMA26:    floatPtr(5_000_000),
-		RSI14:    floatPtr(55),
+		SMAShort:    floatPtr(5_100_000),
+		SMALong:    floatPtr(5_000_000),
+		EMAFast:    floatPtr(5_100_000),
+		EMASlow:    floatPtr(5_000_000),
+		RSI:    floatPtr(55),
 	}
 	lastPrice := 5_100_000.0
 	now := time.Unix(1_700_000_000, 0)

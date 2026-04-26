@@ -38,7 +38,7 @@ func (c *IndicatorCalculator) SetBBSqueezeLookback(n int) {
 // Indicators that cannot be calculated due to insufficient data are nil.
 func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, interval string) (*entity.IndicatorSet, error) {
 	// EMA/RSI/MACDはパス依存型指標のため、十分なウォームアップ期間が必要。
-	// EMA26は約3倍(78本)、MACD Signal(9)の追加で約90本のウォームアップ。
+	// EMASlowは約3倍(78本)、MACD Signal(9)の追加で約90本のウォームアップ。
 	// 500本取得すれば実用上十分な精度に収束する。
 	candles, err := c.repo.GetCandles(ctx, symbolID, interval, 500, 0)
 	if err != nil {
@@ -63,11 +63,11 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 
 	result := &entity.IndicatorSet{
 		SymbolID:  symbolID,
-		SMA20:     toPtr(indicator.SMA(prices, 20)),
-		SMA50:     toPtr(indicator.SMA(prices, 50)),
-		EMA12:     toPtr(indicator.EMA(prices, 12)),
-		EMA26:     toPtr(indicator.EMA(prices, 26)),
-		RSI14:     toPtr(indicator.RSI(prices, 14)),
+		SMAShort:     toPtr(indicator.SMA(prices, 20)),
+		SMALong:     toPtr(indicator.SMA(prices, 50)),
+		EMAFast:     toPtr(indicator.EMA(prices, 12)),
+		EMASlow:     toPtr(indicator.EMA(prices, 26)),
+		RSI:     toPtr(indicator.RSI(prices, 14)),
 		Timestamp: timestamp,
 	}
 
@@ -82,21 +82,21 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	result.BBLower = toPtr(bbLower)
 	result.BBBandwidth = toPtr(bbBandwidth)
 
-	result.ATR14 = toPtr(indicator.ATR(highs, lows, prices, 14))
+	result.ATR = toPtr(indicator.ATR(highs, lows, prices, 14))
 
 	// PR-6: ADX family. ADX/PlusDI/MinusDI return NaN until 2*period+1
 	// bars are available; toPtr collapses that to nil for the caller.
 	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, prices, 14)
-	result.ADX14 = toPtr(adxVal)
-	result.PlusDI14 = toPtr(plusDI)
-	result.MinusDI14 = toPtr(minusDI)
+	result.ADX = toPtr(adxVal)
+	result.PlusDI = toPtr(plusDI)
+	result.MinusDI = toPtr(minusDI)
 
 	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Both return
 	// NaN -> nil pointer when the warmup window is not filled yet.
 	stochK, stochD := indicator.Stochastics(highs, lows, prices, 14, 3, 3)
-	result.StochK14_3 = toPtr(stochK)
-	result.StochD14_3 = toPtr(stochD)
-	result.StochRSI14 = toPtr(indicator.StochasticRSI(prices, 14, 14))
+	result.StochK = toPtr(stochK)
+	result.StochD = toPtr(stochD)
+	result.StochRSI = toPtr(indicator.StochasticRSI(prices, 14, 14))
 
 	// PR-8: Ichimoku. Each of the five lines may be NaN independently during
 	// warmup; buildIchimokuSnapshot returns nil when every line is unknown.
@@ -108,9 +108,9 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	// indicators — NaN until 20 bars of history are available; toPtr
 	// collapses that into nil pointers for downstream gates.
 	donU, donL, donM := indicator.Donchian(highs, lows, 20)
-	result.Donchian20Upper = toPtr(donU)
-	result.Donchian20Lower = toPtr(donL)
-	result.Donchian20Middle = toPtr(donM)
+	result.DonchianUpper = toPtr(donU)
+	result.DonchianLower = toPtr(donL)
+	result.DonchianMiddle = toPtr(donM)
 
 	// Volume indicators
 	volumes := make([]float64, n)
@@ -118,18 +118,18 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 		volumes[n-1-i] = cd.Volume
 	}
 	volSMA := indicator.VolumeSMA(volumes, 20)
-	result.VolumeSMA20 = toPtr(volSMA)
+	result.VolumeSMA = toPtr(volSMA)
 	if !math.IsNaN(volSMA) && volSMA > 0 && n > 0 {
 		vr := indicator.VolumeRatio(volumes[n-1], volSMA)
 		result.VolumeRatio = toPtr(vr)
 	}
 
-	// PR-9: OBV + CMF (volume-based). OBVSlope20 carries the gate signal
+	// PR-9: OBV + CMF (volume-based). OBVSlope carries the gate signal
 	// (cumulative buying volume over 20 bars); raw OBV is exposed for
-	// diagnostics / frontend charting. CMF20 is bounded in [-1, 1].
+	// diagnostics / frontend charting. CMF is bounded in [-1, 1].
 	result.OBV = toPtr(indicator.OBV(prices, volumes))
-	result.OBVSlope20 = toPtr(indicator.OBVSlope(prices, volumes, 20))
-	result.CMF20 = toPtr(indicator.CMF(highs, lows, prices, volumes, 20))
+	result.OBVSlope = toPtr(indicator.OBVSlope(prices, volumes, 20))
+	result.CMF = toPtr(indicator.CMF(highs, lows, prices, volumes, 20))
 
 	// RecentSqueeze: check if any of the last `c.bbSqueezeLookback`
 	// candles had BBBandwidth < 0.02. cycle44: profile's stance_rules

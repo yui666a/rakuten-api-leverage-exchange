@@ -12,18 +12,18 @@ import (
 func fp(v float64) *float64 { return &v }
 
 // indicatorsWith builds an IndicatorSet with ADX/ATR set and the rest
-// nil — the two required inputs. SMA20/SMA50 are optional direction
+// nil — the two required inputs. SMAShort/SMALong are optional direction
 // inputs, set when the test wants the SMA-cross fallback to fire.
 func indicatorsWith(adx, atr float64) entity.IndicatorSet {
 	return entity.IndicatorSet{
-		ADX14:     fp(adx),
-		ATR14:     fp(atr),
+		ADX:     fp(adx),
+		ATR:     fp(atr),
 		Timestamp: 1700000000000,
 	}
 }
 
 func htfWithSMA(sma20, sma50 float64) *entity.IndicatorSet {
-	return &entity.IndicatorSet{SMA20: fp(sma20), SMA50: fp(sma50)}
+	return &entity.IndicatorSet{SMAShort: fp(sma20), SMALong: fp(sma50)}
 }
 
 func htfWithCloud(senkouA, senkouB float64) *entity.IndicatorSet {
@@ -63,7 +63,7 @@ func TestClassifyOnce_BullTrend_FromHTFSMACross_NoCloud(t *testing.T) {
 	d := NewDetector(Config{HysteresisBars: 1})
 	got := d.Classify(indicatorsWith(25, 1.0), htfWithSMA(110, 100), 100)
 	if got.Regime != entity.RegimeBullTrend {
-		t.Fatalf("regime = %q, want bull-trend (SMA20>SMA50 fallback)", got.Regime)
+		t.Fatalf("regime = %q, want bull-trend (SMAShort>SMALong fallback)", got.Regime)
 	}
 	if got.CloudPosition != "" {
 		t.Fatalf("cloud should be empty without ichimoku, got %q", got.CloudPosition)
@@ -102,7 +102,7 @@ func TestClassifyOnce_Range_LowATR_LowADX(t *testing.T) {
 
 func TestClassifyOnce_Unknown_ADXMissing(t *testing.T) {
 	d := NewDetector(DefaultConfig())
-	in := entity.IndicatorSet{ATR14: fp(1.0)} // no ADX
+	in := entity.IndicatorSet{ATR: fp(1.0)} // no ADX
 	got := d.Classify(in, nil, 100)
 	if got.Regime != entity.RegimeUnknown {
 		t.Fatalf("regime = %q, want unknown when ADX missing", got.Regime)
@@ -111,7 +111,7 @@ func TestClassifyOnce_Unknown_ADXMissing(t *testing.T) {
 
 func TestClassifyOnce_Unknown_ATRMissing(t *testing.T) {
 	d := NewDetector(DefaultConfig())
-	in := entity.IndicatorSet{ADX14: fp(30)}
+	in := entity.IndicatorSet{ADX: fp(30)}
 	got := d.Classify(in, nil, 100)
 	if got.Regime != entity.RegimeUnknown {
 		t.Fatalf("regime = %q, want unknown when ATR missing", got.Regime)
@@ -143,8 +143,8 @@ func TestClassifyOnce_TrendStrongNoDirection_FallsToRangeOrVolatile(t *testing.T
 func TestClassifyOnce_DirectionPrefersCloudOverSMA(t *testing.T) {
 	d := NewDetector(Config{HysteresisBars: 1})
 	htf := &entity.IndicatorSet{
-		SMA20:    fp(95),
-		SMA50:    fp(100),
+		SMAShort:    fp(95),
+		SMALong:    fp(100),
 		Ichimoku: &entity.IchimokuSnapshot{SenkouA: fp(95), SenkouB: fp(90)}, // cloud below price 100
 	}
 	got := d.Classify(indicatorsWith(35, 1.0), htf, 100)

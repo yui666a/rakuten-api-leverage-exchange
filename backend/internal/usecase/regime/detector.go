@@ -89,7 +89,7 @@ func NewDetector(cfg Config) *Detector {
 // normalise ATR into a percentage and to read Ichimoku cloud position.
 //
 // The Ichimoku snapshot, when present, comes from the higher timeframe;
-// when nil the detector falls back to SMA20/SMA50 cross for direction.
+// when nil the detector falls back to SMAShort/SMALong cross for direction.
 // This matches the existing htfTrendDirection convention so a regime
 // router can reuse the same higher-TF wiring the HTF filter uses.
 //
@@ -106,7 +106,7 @@ func (d *Detector) Classify(indicators entity.IndicatorSet, higherTF *entity.Ind
 	// classifier cannot speak — committing Unknown also resets the
 	// candidate counter so the next valid bar starts the dwell clock
 	// from one, not from a stale partial count.
-	if indicators.ADX14 == nil || indicators.ATR14 == nil || lastPrice <= 0 {
+	if indicators.ADX == nil || indicators.ATR == nil || lastPrice <= 0 {
 		d.committed = entity.RegimeUnknown
 		d.candidate = entity.RegimeUnknown
 		d.candidateN = 0
@@ -114,8 +114,8 @@ func (d *Detector) Classify(indicators entity.IndicatorSet, higherTF *entity.Ind
 		return out
 	}
 
-	adx := *indicators.ADX14
-	atrPct := *indicators.ATR14 / lastPrice * 100
+	adx := *indicators.ADX
+	atrPct := *indicators.ATR / lastPrice * 100
 	out.ADXValue = adx
 	out.ATRPercent = atrPct
 
@@ -289,7 +289,7 @@ func classifyCloudPosition(higherTF *entity.IndicatorSet, lastPrice float64) str
 }
 
 // classifyDirection picks between "up" / "down" / "" using Ichimoku
-// cloud position when available, falling back to higher-TF SMA20/SMA50
+// cloud position when available, falling back to higher-TF SMAShort/SMALong
 // cross, falling back to primary-TF SMA cross. Returns the empty
 // string when no source has enough data — the caller treats that as
 // "trend strong but undirected" and routes to volatile/range instead.
@@ -300,14 +300,14 @@ func classifyDirection(indicators entity.IndicatorSet, higherTF *entity.Indicato
 	case "below":
 		return "down"
 	}
-	if higherTF != nil && higherTF.SMA20 != nil && higherTF.SMA50 != nil {
-		if *higherTF.SMA20 > *higherTF.SMA50 {
+	if higherTF != nil && higherTF.SMAShort != nil && higherTF.SMALong != nil {
+		if *higherTF.SMAShort > *higherTF.SMALong {
 			return "up"
 		}
 		return "down"
 	}
-	if indicators.SMA20 != nil && indicators.SMA50 != nil {
-		if *indicators.SMA20 > *indicators.SMA50 {
+	if indicators.SMAShort != nil && indicators.SMALong != nil {
+		if *indicators.SMAShort > *indicators.SMALong {
 			return "up"
 		}
 		return "down"

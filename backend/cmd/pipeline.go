@@ -348,8 +348,8 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 	}
 
 	// Update ATR for dynamic stop-loss
-	if indicators.ATR14 != nil {
-		p.riskMgr.UpdateATR(*indicators.ATR14)
+	if indicators.ATR != nil {
+		p.riskMgr.UpdateATR(*indicators.ATR)
 	}
 
 	higherTF, err := p.indicatorCalc.Calculate(ctx, snap.symbolID, "PT1H")
@@ -415,8 +415,8 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		baseline := (snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)) / price
 		equity := p.riskMgr.GetStatus().Balance
 		var atr float64
-		if indicators != nil && indicators.ATR14 != nil {
-			atr = *indicators.ATR14
+		if indicators != nil && indicators.ATR != nil {
+			atr = *indicators.ATR
 		}
 		sized, skipReason := snap.sizer.Sized(baseline, price, snap.stopLossPercent, equity, atr, 0, signal.Confidence, snap.minConfidence)
 		if skipReason != "" || sized <= 0 {

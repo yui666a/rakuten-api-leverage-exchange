@@ -322,8 +322,8 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 	}
 
 	var atr float64
-	if indicators.ATR14 != nil {
-		atr = *indicators.ATR14
+	if indicators.ATR != nil {
+		atr = *indicators.ATR
 	}
 	return []entity.Event{
 		entity.SignalEvent{
@@ -597,8 +597,8 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 	// 受けて IndicatorEvent を emit するので、その直後に ATR が最新化される。
 	// Trailing stop / ATR SL はこの最新値を使う。
 	if indicatorEvent, ok := event.(entity.IndicatorEvent); ok {
-		if indicatorEvent.Primary.ATR14 != nil {
-			h.UpdateATR(*indicatorEvent.Primary.ATR14)
+		if indicatorEvent.Primary.ATR != nil {
+			h.UpdateATR(*indicatorEvent.Primary.ATR)
 		}
 		return nil, nil
 	}
@@ -838,11 +838,11 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 
 	result := entity.IndicatorSet{
 		SymbolID:  symbolID,
-		SMA20:     floatToPtr(indicator.SMA(closes, 20)),
-		SMA50:     floatToPtr(indicator.SMA(closes, 50)),
-		EMA12:     floatToPtr(indicator.EMA(closes, 12)),
-		EMA26:     floatToPtr(indicator.EMA(closes, 26)),
-		RSI14:     floatToPtr(indicator.RSI(closes, 14)),
+		SMAShort:     floatToPtr(indicator.SMA(closes, 20)),
+		SMALong:     floatToPtr(indicator.SMA(closes, 50)),
+		EMAFast:     floatToPtr(indicator.EMA(closes, 12)),
+		EMASlow:     floatToPtr(indicator.EMA(closes, 26)),
+		RSI:     floatToPtr(indicator.RSI(closes, 14)),
 		Timestamp: candles[n-1].Time,
 	}
 
@@ -857,20 +857,20 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 	result.BBLower = floatToPtr(bbLower)
 	result.BBBandwidth = floatToPtr(bbBandwidth)
 
-	result.ATR14 = floatToPtr(indicator.ATR(highs, lows, closes, 14))
+	result.ATR = floatToPtr(indicator.ATR(highs, lows, closes, 14))
 
 	// PR-6: ADX family. Mirror the live-pipeline calculator.
 	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, closes, 14)
-	result.ADX14 = floatToPtr(adxVal)
-	result.PlusDI14 = floatToPtr(plusDI)
-	result.MinusDI14 = floatToPtr(minusDI)
+	result.ADX = floatToPtr(adxVal)
+	result.PlusDI = floatToPtr(plusDI)
+	result.MinusDI = floatToPtr(minusDI)
 
 	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Mirror the
 	// live-pipeline calculator.
 	stochK, stochD := indicator.Stochastics(highs, lows, closes, 14, 3, 3)
-	result.StochK14_3 = floatToPtr(stochK)
-	result.StochD14_3 = floatToPtr(stochD)
-	result.StochRSI14 = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
+	result.StochK = floatToPtr(stochK)
+	result.StochD = floatToPtr(stochD)
+	result.StochRSI = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
 
 	// PR-8: Ichimoku. Mirror the live pipeline; nil when all five lines
 	// are still in warmup.
@@ -881,9 +881,9 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 	// PR-11: Donchian Channel (20-bar default). Mirror the live pipeline;
 	// nil until 20 bars of history are available.
 	donU, donL, donM := indicator.Donchian(highs, lows, 20)
-	result.Donchian20Upper = floatToPtr(donU)
-	result.Donchian20Lower = floatToPtr(donL)
-	result.Donchian20Middle = floatToPtr(donM)
+	result.DonchianUpper = floatToPtr(donU)
+	result.DonchianLower = floatToPtr(donL)
+	result.DonchianMiddle = floatToPtr(donM)
 
 	// Volume indicators
 	volumes := make([]float64, n)
@@ -891,7 +891,7 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 		volumes[i] = c.Volume
 	}
 	volSMA := indicator.VolumeSMA(volumes, 20)
-	result.VolumeSMA20 = floatToPtr(volSMA)
+	result.VolumeSMA = floatToPtr(volSMA)
 	if !math.IsNaN(volSMA) && volSMA > 0 && n > 0 {
 		vr := indicator.VolumeRatio(volumes[n-1], volSMA)
 		result.VolumeRatio = floatToPtr(vr)
@@ -899,8 +899,8 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, bbSqueezeLoo
 
 	// PR-9: OBV + CMF (volume-based). Mirror the live-pipeline calculator.
 	result.OBV = floatToPtr(indicator.OBV(closes, volumes))
-	result.OBVSlope20 = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
-	result.CMF20 = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
+	result.OBVSlope = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
+	result.CMF = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
 
 	// RecentSqueeze: check if any of the last `bbSqueezeLookback` candles
 	// had BBBandwidth < 0.02. cycle44: now honours the profile field via

@@ -124,10 +124,10 @@ func TestConfigurableStrategy_HTFEMAModeDefaultUnchanged(t *testing.T) {
 
 	ind := makeTrendFollowReadyIndicators()
 	down20 := 100.0
-	down50 := 110.0 // SMA20 < SMA50 => higher-TF downtrend
+	down50 := 110.0 // SMAShort < SMALong => higher-TF downtrend
 	higherTF := &entity.IndicatorSet{
-		SMA20: &down20,
-		SMA50: &down50,
+		SMAShort: &down20,
+		SMALong: &down50,
 	}
 
 	sig, err := s.Evaluate(context.Background(), &ind, higherTF, 100.0, time.Now())

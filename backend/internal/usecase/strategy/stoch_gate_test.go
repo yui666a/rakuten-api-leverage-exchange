@@ -28,7 +28,7 @@ func TestConfigurableStrategy_ContrarianStochEntryGateBlocks(t *testing.T) {
 
 	ind := makeContrarianBuyReadyIndicators()
 	stochK := 25.0
-	ind.StochK14_3 = &stochK
+	ind.StochK = &stochK
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -60,7 +60,7 @@ func TestConfigurableStrategy_ContrarianStochEntryGateAllows(t *testing.T) {
 
 	ind := makeContrarianBuyReadyIndicators()
 	stochK := 5.0 // deeply oversold
-	ind.StochK14_3 = &stochK
+	ind.StochK = &stochK
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -89,7 +89,7 @@ func TestConfigurableStrategy_ContrarianStochExitGateBlocks(t *testing.T) {
 
 	ind := makeContrarianSellReadyIndicators()
 	stochK := 75.0 // overbought but below StochExitMin
-	ind.StochK14_3 = &stochK
+	ind.StochK = &stochK
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -117,7 +117,7 @@ func TestConfigurableStrategy_ContrarianStochGateMissingStochCountsAsFail(t *tes
 	}
 
 	ind := makeContrarianBuyReadyIndicators()
-	ind.StochK14_3 = nil // unknown
+	ind.StochK = nil // unknown
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -147,7 +147,7 @@ func TestConfigurableStrategy_StochGateZeroIsDisabled(t *testing.T) {
 	}
 
 	ind := makeContrarianBuyReadyIndicators()
-	// Intentionally omit StochK14_3 — a disabled gate must not care.
+	// Intentionally omit StochK — a disabled gate must not care.
 
 	sig, err := s.Evaluate(context.Background(), &ind, nil, 100.0, time.Now())
 	if err != nil {
@@ -171,11 +171,11 @@ func makeContrarianBuyReadyIndicators() entity.IndicatorSet {
 	hist := 0.0
 	return entity.IndicatorSet{
 		SymbolID:  10,
-		SMA20:     &sma20,
-		SMA50:     &sma50,
-		EMA12:     &ema12,
-		EMA26:     &ema26,
-		RSI14:     &rsi,
+		SMAShort:     &sma20,
+		SMALong:     &sma50,
+		EMAFast:     &ema12,
+		EMASlow:     &ema26,
+		RSI:     &rsi,
 		Histogram: &hist,
 		Timestamp: time.Now().Unix(),
 	}
@@ -191,11 +191,11 @@ func makeContrarianSellReadyIndicators() entity.IndicatorSet {
 	hist := 0.0
 	return entity.IndicatorSet{
 		SymbolID:  10,
-		SMA20:     &sma20,
-		SMA50:     &sma50,
-		EMA12:     &ema12,
-		EMA26:     &ema26,
-		RSI14:     &rsi,
+		SMAShort:     &sma20,
+		SMALong:     &sma50,
+		EMAFast:     &ema12,
+		EMASlow:     &ema26,
+		RSI:     &rsi,
 		Histogram: &hist,
 		Timestamp: time.Now().Unix(),
 	}

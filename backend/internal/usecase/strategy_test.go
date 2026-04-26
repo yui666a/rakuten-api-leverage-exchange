@@ -21,7 +21,7 @@ func (m *mockStanceResolver) ResolveAt(ctx context.Context, indicators entity.In
 }
 
 func TestStrategyEngine_TrendFollow_BuySignal(t *testing.T) {
-	// TREND_FOLLOW: SMA20 > SMA50 かつ RSI < 70 → BUY
+	// TREND_FOLLOW: SMAShort > SMALong かつ RSI < 70 → BUY
 	resolver := &mockStanceResolver{
 		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
@@ -34,9 +34,9 @@ func TestStrategyEngine_TrendFollow_BuySignal(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(55),
+		SMAShort:    ptr(5100000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(55),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
 	if err != nil {
@@ -60,9 +60,9 @@ func TestStrategyEngine_TrendFollow_SellSignal(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(4900000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(45),
+		SMAShort:    ptr(4900000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(45),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
 	if err != nil {
@@ -86,9 +86,9 @@ func TestStrategyEngine_TrendFollow_HoldOnOverbought(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(75),
+		SMAShort:    ptr(5100000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(75),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
 	if err != nil {
@@ -112,9 +112,9 @@ func TestStrategyEngine_Contrarian_BuyOnOversold(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(4900000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(25),
+		SMAShort:    ptr(4900000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(25),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
 	if err != nil {
@@ -138,9 +138,9 @@ func TestStrategyEngine_Contrarian_SellOnOverbought(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(75),
+		SMAShort:    ptr(5100000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(75),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
 	if err != nil {
@@ -164,9 +164,9 @@ func TestStrategyEngine_Contrarian_HoldInNeutral(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5000000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(50),
+		SMAShort:    ptr(5000000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(50),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5000000)
 	if err != nil {
@@ -190,9 +190,9 @@ func TestStrategyEngine_HoldStance_AlwaysHold(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(55),
+		SMAShort:    ptr(5100000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(55),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestStrategyEngine_InsufficientIndicators_Hold(t *testing.T) {
 }
 
 func TestStrategyEngine_TrendFollow_HoldWhenMACDAgainst(t *testing.T) {
-	// SMA20 > SMA50 (uptrend) but histogram negative → HOLD
+	// SMAShort > SMALong (uptrend) but histogram negative → HOLD
 	resolver := &mockStanceResolver{
 		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
@@ -240,9 +240,9 @@ func TestStrategyEngine_TrendFollow_HoldWhenMACDAgainst(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000),
-		SMA50:     ptr(5000000),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000),
+		SMALong:     ptr(5000000),
+		RSI:     ptr(55.0),
 		Histogram: ptr(-5.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
@@ -259,7 +259,7 @@ func TestStrategyEngine_TrendFollow_HoldWhenMACDAgainst(t *testing.T) {
 }
 
 func TestStrategyEngine_TrendFollow_SellBlockedByPositiveHistogram(t *testing.T) {
-	// SMA20 < SMA50 (downtrend) but histogram positive → HOLD
+	// SMAShort < SMALong (downtrend) but histogram positive → HOLD
 	resolver := &mockStanceResolver{
 		result: StanceResult{
 			Stance:    entity.MarketStanceTrendFollow,
@@ -272,9 +272,9 @@ func TestStrategyEngine_TrendFollow_SellBlockedByPositiveHistogram(t *testing.T)
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000),
-		SMA50:     ptr(5000000),
-		RSI14:     ptr(45.0),
+		SMAShort:     ptr(4900000),
+		SMALong:     ptr(5000000),
+		RSI:     ptr(45.0),
 		Histogram: ptr(5.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
@@ -304,9 +304,9 @@ func TestStrategyEngine_TrendFollow_BuyWithMACDConfirmation(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000),
-		SMA50:     ptr(5000000),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000),
+		SMALong:     ptr(5000000),
+		RSI:     ptr(55.0),
 		Histogram: ptr(3.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
@@ -316,7 +316,7 @@ func TestStrategyEngine_TrendFollow_BuyWithMACDConfirmation(t *testing.T) {
 	if signal.Action != entity.SignalActionBuy {
 		t.Fatalf("expected BUY with MACD confirmation, got %s", signal.Action)
 	}
-	expected := "trend follow: SMA20 > SMA50, RSI not overbought, MACD confirmed"
+	expected := "trend follow: SMAShort > SMALong, RSI not overbought, MACD confirmed"
 	if signal.Reason != expected {
 		t.Fatalf("expected reason %q, got %q", expected, signal.Reason)
 	}
@@ -336,9 +336,9 @@ func TestStrategyEngine_Contrarian_HoldWhenMACDAgainst(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000),
-		SMA50:     ptr(5000000),
-		RSI14:     ptr(25.0),
+		SMAShort:     ptr(4900000),
+		SMALong:     ptr(5000000),
+		RSI:     ptr(25.0),
 		Histogram: ptr(-15.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
@@ -368,9 +368,9 @@ func TestStrategyEngine_TrendFollow_NilHistogramStillTrades(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000),
-		SMA50:     ptr(5000000),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000),
+		SMALong:     ptr(5000000),
+		RSI:     ptr(55.0),
 		Histogram: nil,
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
@@ -391,11 +391,11 @@ func TestStrategyEngine_Confidence_TrendFollowStrong(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000.0), // 2% above SMA50
-		SMA50:     ptr(5000000.0),
-		EMA12:     ptr(5120000.0), // ~2.4% above EMA26
-		EMA26:     ptr(5000000.0),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000.0), // 2% above SMALong
+		SMALong:     ptr(5000000.0),
+		EMAFast:     ptr(5120000.0), // ~2.4% above EMASlow
+		EMASlow:     ptr(5000000.0),
+		RSI:     ptr(55.0),
 		Histogram: ptr(5.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
@@ -424,11 +424,11 @@ func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5005000.0), // 0.1% above SMA50
-		SMA50:     ptr(5000000.0),
-		EMA12:     ptr(5003000.0), // 0.06% above EMA26
-		EMA26:     ptr(5000000.0),
-		RSI14:     ptr(68.0),
+		SMAShort:     ptr(5005000.0), // 0.1% above SMALong
+		SMALong:     ptr(5000000.0),
+		EMAFast:     ptr(5003000.0), // 0.06% above EMASlow
+		EMASlow:     ptr(5000000.0),
+		RSI:     ptr(68.0),
 		Histogram: nil,
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5005000)
@@ -449,7 +449,7 @@ func TestStrategyEngine_Confidence_TrendFollowWeak(t *testing.T) {
 }
 
 func TestStrategyEngine_EMA_CrossWithSMAMisalignment(t *testing.T) {
-	// EMA12 > EMA26 (bullish) but SMA20 < SMA50 (SMA not aligned) → HOLD
+	// EMAFast > EMASlow (bullish) but SMAShort < SMALong (SMA not aligned) → HOLD
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -457,11 +457,11 @@ func TestStrategyEngine_EMA_CrossWithSMAMisalignment(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(4990000.0), // SMA still bearish
-		SMA50:    ptr(5000000.0),
-		EMA12:    ptr(5010000.0), // EMA already bullish
-		EMA26:    ptr(5000000.0),
-		RSI14:    ptr(55.0),
+		SMAShort:    ptr(4990000.0), // SMA still bearish
+		SMALong:    ptr(5000000.0),
+		EMAFast:    ptr(5010000.0), // EMA already bullish
+		EMASlow:    ptr(5000000.0),
+		RSI:    ptr(55.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5010000)
 	if err != nil {
@@ -481,11 +481,11 @@ func TestStrategyEngine_EMA_FallbackToSMAWhenNil(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000.0),
-		SMA50:     ptr(5000000.0),
-		EMA12:     nil, // no EMA data
-		EMA26:     nil,
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000.0),
+		SMALong:     ptr(5000000.0),
+		EMAFast:     nil, // no EMA data
+		EMASlow:     nil,
+		RSI:     ptr(55.0),
 		Histogram: ptr(3.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
@@ -506,9 +506,9 @@ func TestStrategyEngine_Confidence_ContrarianStrong(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(15.0),
+		SMAShort:     ptr(4900000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(15.0),
 		Histogram: ptr(-3.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 4900000)
@@ -527,7 +527,7 @@ func TestStrategyEngine_Confidence_ContrarianStrong(t *testing.T) {
 }
 
 func TestStrategyEngine_MTF_BuyBlockedByHigherDowntrend(t *testing.T) {
-	// PT15M says BUY, but PT1H SMA20 < SMA50 (higher timeframe downtrend) → HOLD
+	// PT15M says BUY, but PT1H SMAShort < SMALong (higher timeframe downtrend) → HOLD
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "uptrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -535,15 +535,15 @@ func TestStrategyEngine_MTF_BuyBlockedByHigherDowntrend(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(55.0),
 		Histogram: ptr(3.0),
 	}
 	higherTF := &entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(4900000.0), // downtrend on higher TF
-		SMA50:    ptr(5000000.0),
+		SMAShort:    ptr(4900000.0), // downtrend on higher TF
+		SMALong:    ptr(5000000.0),
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 5100000)
 	if err != nil {
@@ -555,7 +555,7 @@ func TestStrategyEngine_MTF_BuyBlockedByHigherDowntrend(t *testing.T) {
 }
 
 func TestStrategyEngine_MTF_SellBlockedByHigherUptrend(t *testing.T) {
-	// PT15M says SELL, but PT1H SMA20 > SMA50 (higher timeframe uptrend) → HOLD
+	// PT15M says SELL, but PT1H SMAShort > SMALong (higher timeframe uptrend) → HOLD
 	resolver := &mockStanceResolver{
 		result: StanceResult{Stance: entity.MarketStanceTrendFollow, Reasoning: "downtrend", Source: "rule-based", UpdatedAt: time.Now().Unix()},
 	}
@@ -563,15 +563,15 @@ func TestStrategyEngine_MTF_SellBlockedByHigherUptrend(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(45.0),
+		SMAShort:     ptr(4900000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(45.0),
 		Histogram: ptr(-3.0),
 	}
 	higherTF := &entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000.0), // uptrend on higher TF
-		SMA50:    ptr(5000000.0),
+		SMAShort:    ptr(5100000.0), // uptrend on higher TF
+		SMALong:    ptr(5000000.0),
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 4900000)
 	if err != nil {
@@ -591,15 +591,15 @@ func TestStrategyEngine_MTF_BuyAlignedWithHigherUptrend(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(55.0),
 		Histogram: ptr(5.0),
 	}
 	higherTF := &entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5200000.0), // uptrend on higher TF too
-		SMA50:    ptr(5000000.0),
+		SMAShort:    ptr(5200000.0), // uptrend on higher TF too
+		SMALong:    ptr(5000000.0),
 	}
 
 	signalWithMTF, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 5100000)
@@ -626,9 +626,9 @@ func TestStrategyEngine_MTF_NilHigherTFFallsBack(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(55.0),
+		SMAShort:     ptr(5100000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(55.0),
 		Histogram: ptr(3.0),
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
@@ -649,15 +649,15 @@ func TestStrategyEngine_MTF_ContrarianNotFiltered(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(25.0),
+		SMAShort:     ptr(4900000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(25.0),
 		Histogram: ptr(-3.0),
 	}
 	higherTF := &entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(4800000.0), // downtrend on higher TF
-		SMA50:    ptr(5000000.0),
+		SMAShort:    ptr(4800000.0), // downtrend on higher TF
+		SMALong:    ptr(5000000.0),
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, higherTF, 4900000)
 	if err != nil {
@@ -678,9 +678,9 @@ func TestStrategyEngine_SqueezeNowHandledByStance(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5100000.0),
-		SMA50:       ptr(5000000.0),
-		RSI14:       ptr(55.0),
+		SMAShort:       ptr(5100000.0),
+		SMALong:       ptr(5000000.0),
+		RSI:       ptr(55.0),
 		Histogram:   ptr(3.0),
 		BBBandwidth: ptr(0.015), // squeeze - but no longer filtered here
 	}
@@ -703,9 +703,9 @@ func TestStrategyEngine_VolatilityFilter_NormalBandwidthAllowsTrade(t *testing.T
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5100000.0),
-		SMA50:       ptr(5000000.0),
-		RSI14:       ptr(55.0),
+		SMAShort:       ptr(5100000.0),
+		SMALong:       ptr(5000000.0),
+		RSI:       ptr(55.0),
 		Histogram:   ptr(3.0),
 		BBBandwidth: ptr(0.05), // normal volatility
 	}
@@ -727,9 +727,9 @@ func TestStrategyEngine_BB_ContrarianBuyAtLowerBandBoost(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(4900000.0),
-		SMA50:     ptr(5000000.0),
-		RSI14:     ptr(25.0),
+		SMAShort:     ptr(4900000.0),
+		SMALong:     ptr(5000000.0),
+		RSI:     ptr(25.0),
 		Histogram: ptr(-3.0),
 		BBUpper:   ptr(5200000.0),
 		BBLower:   ptr(4850000.0),
@@ -762,9 +762,9 @@ func TestStrategyEngine_Confidence_HoldIsZero(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000.0),
-		SMA50:    ptr(5000000.0),
-		RSI14:    ptr(55.0),
+		SMAShort:    ptr(5100000.0),
+		SMALong:    ptr(5000000.0),
+		RSI:    ptr(55.0),
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5100000)
 	if err != nil {
@@ -813,16 +813,16 @@ func TestStrategyEngine_EvaluateWithHigherTFAt_UsesInjectedTimestampForMTFHold(t
 
 	indicators := entity.IndicatorSet{
 		SymbolID:  7,
-		SMA20:     ptr(5100000),
-		SMA50:     ptr(5000000),
-		EMA12:     ptr(101),
-		EMA26:     ptr(100),
-		RSI14:     ptr(55),
+		SMAShort:     ptr(5100000),
+		SMALong:     ptr(5000000),
+		EMAFast:     ptr(101),
+		EMASlow:     ptr(100),
+		RSI:     ptr(55),
 		Histogram: ptr(2),
 	}
 	higherTF := &entity.IndicatorSet{
-		SMA20: ptr(5000000),
-		SMA50: ptr(5100000), // downtrend blocks buy
+		SMAShort: ptr(5000000),
+		SMALong: ptr(5100000), // downtrend blocks buy
 	}
 
 	signal, err := engine.EvaluateWithHigherTFAt(context.Background(), indicators, higherTF, 5100000, at)
@@ -850,9 +850,9 @@ func TestStrategyEngine_Breakout_BuySignal(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5000000),
-		SMA50:       ptr(4900000),
-		RSI14:       ptr(55.0),
+		SMAShort:       ptr(5000000),
+		SMALong:       ptr(4900000),
+		RSI:       ptr(55.0),
 		BBUpper:     ptr(5100000),
 		BBMiddle:    ptr(5000000),
 		BBLower:     ptr(4900000),
@@ -884,9 +884,9 @@ func TestStrategyEngine_Breakout_SellSignal(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5000000),
-		SMA50:       ptr(5100000),
-		RSI14:       ptr(45.0),
+		SMAShort:       ptr(5000000),
+		SMALong:       ptr(5100000),
+		RSI:       ptr(45.0),
 		BBUpper:     ptr(5100000),
 		BBMiddle:    ptr(5000000),
 		BBLower:     ptr(4900000),
@@ -915,9 +915,9 @@ func TestStrategyEngine_Breakout_HoldWhenMACDAgainst(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5000000),
-		SMA50:       ptr(4900000),
-		RSI14:       ptr(55.0),
+		SMAShort:       ptr(5000000),
+		SMALong:       ptr(4900000),
+		RSI:       ptr(55.0),
 		BBUpper:     ptr(5100000),
 		BBMiddle:    ptr(5000000),
 		BBLower:     ptr(4900000),
@@ -946,9 +946,9 @@ func TestStrategyEngine_Breakout_MissingBBData_Hold(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5000000),
-		SMA50:    ptr(4900000),
-		RSI14:    ptr(55.0),
+		SMAShort:    ptr(5000000),
+		SMALong:    ptr(4900000),
+		RSI:    ptr(55.0),
 		// BB fields nil
 	}
 	signal, err := engine.Evaluate(context.Background(), indicators, 5200000)
@@ -973,9 +973,9 @@ func TestStrategyEngine_LowVolume_FiltersSignal(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID:    7,
-		SMA20:       ptr(5100000),
-		SMA50:       ptr(5000000),
-		RSI14:       ptr(55.0),
+		SMAShort:       ptr(5100000),
+		SMALong:       ptr(5000000),
+		RSI:       ptr(55.0),
 		VolumeRatio: ptr(0.2), // Very low volume
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)
@@ -1000,9 +1000,9 @@ func TestStrategyEngine_LowVolume_NilRatio_NoFilter(t *testing.T) {
 
 	indicators := entity.IndicatorSet{
 		SymbolID: 7,
-		SMA20:    ptr(5100000),
-		SMA50:    ptr(5000000),
-		RSI14:    ptr(55.0),
+		SMAShort:    ptr(5100000),
+		SMALong:    ptr(5000000),
+		RSI:    ptr(55.0),
 		// VolumeRatio nil → フィルターは適用されない
 	}
 	signal, err := engine.EvaluateWithHigherTF(context.Background(), indicators, nil, 5100000)

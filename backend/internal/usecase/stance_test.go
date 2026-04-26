@@ -17,9 +17,9 @@ func boolPtr(b bool) *bool { return &b }
 func TestRuleBasedStanceResolver_RSIBelow25_Contrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(20.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(20.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("expected CONTRARIAN, got %s", result.Stance)
@@ -32,9 +32,9 @@ func TestRuleBasedStanceResolver_RSIBelow25_Contrarian(t *testing.T) {
 func TestRuleBasedStanceResolver_RSIAbove75_Contrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(80.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(80.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("expected CONTRARIAN, got %s", result.Stance)
@@ -45,9 +45,9 @@ func TestRuleBasedStanceResolver_SMAConverged_Hold(t *testing.T) {
 	// divergence = |5000000 - 5000400| / 5000400 ≈ 0.00008 < 0.001
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5000000),
-		SMA50: ptr(5000400),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5000000),
+		SMALong: ptr(5000400),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceHold {
 		t.Fatalf("expected HOLD for converged SMA, got %s", result.Stance)
@@ -55,12 +55,12 @@ func TestRuleBasedStanceResolver_SMAConverged_Hold(t *testing.T) {
 }
 
 func TestRuleBasedStanceResolver_SMAUptrend_TrendFollow(t *testing.T) {
-	// SMA20 > SMA50, divergence > 0.1%
+	// SMAShort > SMALong, divergence > 0.1%
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceTrendFollow {
 		t.Fatalf("expected TREND_FOLLOW for uptrend, got %s", result.Stance)
@@ -68,12 +68,12 @@ func TestRuleBasedStanceResolver_SMAUptrend_TrendFollow(t *testing.T) {
 }
 
 func TestRuleBasedStanceResolver_SMADowntrend_TrendFollow(t *testing.T) {
-	// SMA20 < SMA50, divergence > 0.1%
+	// SMAShort < SMALong, divergence > 0.1%
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(4900000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(4900000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceTrendFollow {
 		t.Fatalf("expected TREND_FOLLOW for downtrend, got %s", result.Stance)
@@ -97,9 +97,9 @@ func TestRuleBasedStanceResolver_OverrideTakesPriority(t *testing.T) {
 
 	// Without override, this would be TREND_FOLLOW
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("expected CONTRARIAN from override, got %s", result.Stance)
@@ -126,9 +126,9 @@ func TestRuleBasedStanceResolver_ExpiredOverrideFallsBack(t *testing.T) {
 
 	// Should fall back to rules: TREND_FOLLOW
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceTrendFollow {
 		t.Fatalf("expected TREND_FOLLOW after expired override, got %s", result.Stance)
@@ -144,9 +144,9 @@ func TestRuleBasedStanceResolver_ClearOverride(t *testing.T) {
 	resolver.ClearOverride()
 
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceTrendFollow {
 		t.Fatalf("expected TREND_FOLLOW after clearing override, got %s", result.Stance)
@@ -163,9 +163,9 @@ func TestRuleBasedStanceResolver_ClearOverride(t *testing.T) {
 func TestRuleBasedStanceResolver_RSIExactly25_NotContrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(25.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(25.0),
 	}, 0)
 	if result.Stance == entity.MarketStanceContrarian {
 		t.Fatalf("RSI=25.0 should NOT be CONTRARIAN, got %s", result.Stance)
@@ -175,9 +175,9 @@ func TestRuleBasedStanceResolver_RSIExactly25_NotContrarian(t *testing.T) {
 func TestRuleBasedStanceResolver_RSIExactly75_NotContrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(75.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(75.0),
 	}, 0)
 	if result.Stance == entity.MarketStanceContrarian {
 		t.Fatalf("RSI=75.0 should NOT be CONTRARIAN, got %s", result.Stance)
@@ -187,9 +187,9 @@ func TestRuleBasedStanceResolver_RSIExactly75_NotContrarian(t *testing.T) {
 func TestRuleBasedStanceResolver_RSI24_9_Contrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(24.9),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(24.9),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("RSI=24.9 should be CONTRARIAN, got %s", result.Stance)
@@ -199,9 +199,9 @@ func TestRuleBasedStanceResolver_RSI24_9_Contrarian(t *testing.T) {
 func TestRuleBasedStanceResolver_RSI75_1_Contrarian(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(75.1),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(75.1),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("RSI=75.1 should be CONTRARIAN, got %s", result.Stance)
@@ -273,9 +273,9 @@ func TestRuleBasedStanceResolver_RestoresFromRepo(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(repo)
 
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Stance != entity.MarketStanceContrarian {
 		t.Fatalf("expected CONTRARIAN from restored override, got %s", result.Stance)
@@ -316,9 +316,9 @@ func TestRuleBasedStanceResolver_ExpiredOverrideOnRestore_AutoDeleted(t *testing
 
 	// The override should not be active
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Source != "rule-based" {
 		t.Fatalf("expected rule-based after expired override cleanup, got %s", result.Source)
@@ -384,18 +384,18 @@ func TestRuleBasedStanceResolver_ResolveAt_UsesInjectedTimeForExpiry(t *testing.
 	resolver.SetOverride(entity.MarketStanceContrarian, "manual", 2*time.Minute)
 
 	early := resolver.ResolveAt(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0, time.Now().Add(1*time.Minute))
 	if early.Source != "override" {
 		t.Fatalf("expected override before expiry, got %s", early.Source)
 	}
 
 	late := resolver.ResolveAt(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0, time.Now().Add(3*time.Minute))
 	if late.Source != "rule-based" {
 		t.Fatalf("expected rule-based after expiry, got %s", late.Source)
@@ -409,9 +409,9 @@ func TestRuleBasedStanceResolverWithOptions_DisableOverride(t *testing.T) {
 	resolver.SetOverride(entity.MarketStanceContrarian, "manual", 5*time.Minute)
 
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20: ptr(5100000),
-		SMA50: ptr(5000000),
-		RSI14: ptr(50.0),
+		SMAShort: ptr(5100000),
+		SMALong: ptr(5000000),
+		RSI: ptr(50.0),
 	}, 0)
 	if result.Source != "rule-based" {
 		t.Fatalf("expected rule-based when override disabled, got %s", result.Source)
@@ -427,9 +427,9 @@ func TestRuleBasedStanceResolver_Breakout_UpwardWithVolume(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	// RecentSqueeze=true, price > BBUpper, VolumeRatio >= 1.5
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5000000),
-		SMA50:         ptr(4900000),
-		RSI14:         ptr(55.0),
+		SMAShort:         ptr(5000000),
+		SMALong:         ptr(4900000),
+		RSI:         ptr(55.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.015),
@@ -444,9 +444,9 @@ func TestRuleBasedStanceResolver_Breakout_UpwardWithVolume(t *testing.T) {
 func TestRuleBasedStanceResolver_Breakout_DownwardWithVolume(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5000000),
-		SMA50:         ptr(5100000),
-		RSI14:         ptr(45.0),
+		SMAShort:         ptr(5000000),
+		SMALong:         ptr(5100000),
+		RSI:         ptr(45.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.015),
@@ -462,9 +462,9 @@ func TestRuleBasedStanceResolver_Squeeze_NoBreakout_Hold(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	// RecentSqueeze=true, but price is between bands → HOLD
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5000000),
-		SMA50:         ptr(5000400),
-		RSI14:         ptr(50.0),
+		SMAShort:         ptr(5000000),
+		SMALong:         ptr(5000400),
+		RSI:         ptr(50.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.01),
@@ -480,9 +480,9 @@ func TestRuleBasedStanceResolver_Breakout_LowVolume_Hold(t *testing.T) {
 	resolver := NewRuleBasedStanceResolver(nil)
 	// Price > BBUpper + RecentSqueeze, but VolumeRatio < 1.5 → HOLD
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5000000),
-		SMA50:         ptr(5000400),
-		RSI14:         ptr(50.0),
+		SMAShort:         ptr(5000000),
+		SMALong:         ptr(5000400),
+		RSI:         ptr(50.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.01),
@@ -498,9 +498,9 @@ func TestRuleBasedStanceResolver_Breakout_NoRecentSqueeze_TrendFollow(t *testing
 	resolver := NewRuleBasedStanceResolver(nil)
 	// Price > BBUpper + high volume, but RecentSqueeze=false → not a breakout
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5100000),
-		SMA50:         ptr(5000000),
-		RSI14:         ptr(55.0),
+		SMAShort:         ptr(5100000),
+		SMALong:         ptr(5000000),
+		RSI:         ptr(55.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.05),
@@ -516,9 +516,9 @@ func TestRuleBasedStanceResolver_RSI_Contrarian_OverridesBreakout(t *testing.T) 
 	resolver := NewRuleBasedStanceResolver(nil)
 	// RSI < 25 takes priority over breakout conditions
 	result := resolver.Resolve(context.Background(), entity.IndicatorSet{
-		SMA20:         ptr(5000000),
-		SMA50:         ptr(4900000),
-		RSI14:         ptr(20.0),
+		SMAShort:         ptr(5000000),
+		SMALong:         ptr(4900000),
+		RSI:         ptr(20.0),
 		BBUpper:       ptr(5100000),
 		BBLower:       ptr(4900000),
 		BBBandwidth:   ptr(0.01),

@@ -11,35 +11,35 @@ type IndicatorDescription = {
 }
 
 const indicatorDescriptions: Record<string, IndicatorDescription> = {
-  rsi14: {
+  rsi: {
     title: 'RSI (Relative Strength Index)',
     description:
       '直近14期間の値上がり幅と値下がり幅の比率から算出されるオシレーター指標。0〜100の範囲で推移し、相場の「買われすぎ・売られすぎ」を判断します。',
     reading:
       '一般的に70以上で買われすぎ（売りシグナル）、30以下で売られすぎ（買いシグナル）と判断します。',
   },
-  sma20: {
+  smaShort: {
     title: 'SMA(20) — 単純移動平均線（短期）',
     description:
       '直近20期間の終値を単純に平均した値。短期のトレンド方向を確認するために使用します。',
     reading:
       '価格がSMA(20)より上なら短期上昇トレンド、下なら短期下降トレンドの可能性があります。',
   },
-  sma50: {
+  smaLong: {
     title: 'SMA(50) — 単純移動平均線（中期）',
     description:
       '直近50期間の終値を単純に平均した値。中期のトレンド方向を確認するために使用します。',
     reading:
       'SMA(20)がSMA(50)を上抜けるとゴールデンクロス（買いシグナル）、下抜けるとデッドクロス（売りシグナル）とされます。',
   },
-  ema12: {
+  emaFast: {
     title: 'EMA(12) — 指数移動平均線（短期）',
     description:
       '直近の価格に高い重みを付けた12期間の移動平均。SMAより価格変動に敏感に反応します。MACDの計算にも使われます。',
     reading:
       'EMA(12)がEMA(26)より上にあれば短期的な上昇モメンタム、下にあれば下降モメンタムを示します。',
   },
-  ema26: {
+  emaSlow: {
     title: 'EMA(26) — 指数移動平均線（中期）',
     description:
       '直近の価格に高い重みを付けた26期間の移動平均。EMA(12)とともにMACDの算出に使われます。',
@@ -133,34 +133,34 @@ export function IndicatorPanel({ indicators }: IndicatorPanelProps) {
       </div>
       <div className="space-y-2 text-sm">
         <IndicatorRow
-          id="rsi14"
+          id="rsi"
           label="RSI(14)"
-          value={formatNum(indicators.rsi14, 1)}
-          info={indicatorDescriptions.rsi14}
+          value={formatNum(indicators.rsi, 1)}
+          info={indicatorDescriptions.rsi}
         />
         <IndicatorRow
-          id="sma20"
+          id="smaShort"
           label="SMA(20)"
-          value={formatNum(indicators.sma20)}
-          info={indicatorDescriptions.sma20}
+          value={formatNum(indicators.smaShort)}
+          info={indicatorDescriptions.smaShort}
         />
         <IndicatorRow
-          id="sma50"
+          id="smaLong"
           label="SMA(50)"
-          value={formatNum(indicators.sma50)}
-          info={indicatorDescriptions.sma50}
+          value={formatNum(indicators.smaLong)}
+          info={indicatorDescriptions.smaLong}
         />
         <IndicatorRow
-          id="ema12"
+          id="emaFast"
           label="EMA(12)"
-          value={formatNum(indicators.ema12)}
-          info={indicatorDescriptions.ema12}
+          value={formatNum(indicators.emaFast)}
+          info={indicatorDescriptions.emaFast}
         />
         <IndicatorRow
-          id="ema26"
+          id="emaSlow"
           label="EMA(26)"
-          value={formatNum(indicators.ema26)}
-          info={indicatorDescriptions.ema26}
+          value={formatNum(indicators.emaSlow)}
+          info={indicatorDescriptions.emaSlow}
         />
         <div className="border-t border-bg-card-hover my-2" />
         <IndicatorRow
