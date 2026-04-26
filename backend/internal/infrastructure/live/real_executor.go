@@ -11,6 +11,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/orderretry"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
@@ -308,18 +309,15 @@ func (r *RealExecutor) closeLocked(positionID int64, signalPrice float64, reason
 		},
 	}
 
-	orders, err := r.orderClient.CreateOrder(context.Background(), req)
+	closeOrder, err := r.submit(context.Background(), req)
 	if err != nil {
 		return entity.OrderEvent{}, nil, fmt.Errorf("failed to create close order: %w", err)
 	}
 
-	var orderID int64
+	orderID := closeOrder.ID
 	exitPrice := signalPrice
-	if len(orders) > 0 {
-		orderID = orders[0].ID
-		if orders[0].Price > 0 {
-			exitPrice = orders[0].Price
-		}
+	if closeOrder.Price > 0 {
+		exitPrice = closeOrder.Price
 	}
 
 	slog.Info("live position closed",
@@ -690,16 +688,32 @@ func fallbackVWAP(cost, amount, fallback float64) float64 {
 // Errors propagate up unchanged so the caller can decide whether to escalate
 // or surface the failure. Records the submission timestamp so the pipeline
 // can adapt its position-polling cadence.
+//
+// Uses CreateOrderRaw + orderretry.OnRateLimit so a 20010 (rate limit) hit at
+// order-submission time is automatically retried. Other failure modes (transport
+// error, business errors like 50048) propagate unchanged so the post-only
+// rejection path in runPlan keeps working.
 func (r *RealExecutor) submit(ctx context.Context, req entity.OrderRequest) (entity.Order, error) {
-	orders, err := r.orderClient.CreateOrder(ctx, req)
+	out, fnErr := orderretry.OnRateLimit(ctx, time.Sleep, func() (repository.CreateOrderOutcome, error) {
+		return r.orderClient.CreateOrderRaw(ctx, req)
+	})
 	r.lastOrderAtMillis = time.Now().UnixMilli()
-	if err != nil {
-		return entity.Order{}, err
+	if fnErr != nil {
+		return entity.Order{}, fnErr
 	}
-	if len(orders) == 0 {
+	if out.TransportError != nil {
+		return entity.Order{}, out.TransportError
+	}
+	if out.HTTPError != nil {
+		return entity.Order{}, out.HTTPError
+	}
+	if out.ParseError != nil {
+		return entity.Order{}, out.ParseError
+	}
+	if len(out.Orders) == 0 {
 		return entity.Order{}, errors.New("venue returned no order rows")
 	}
-	return orders[0], nil
+	return out.Orders[0], nil
 }
 
 // pollUntilFilledOrDeadline polls GetOrders until the target order is

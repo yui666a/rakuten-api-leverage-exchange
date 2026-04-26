@@ -32,7 +32,19 @@ func (m *mockOrderClient) CreateOrder(ctx context.Context, req entity.OrderReque
 }
 
 func (m *mockOrderClient) CreateOrderRaw(ctx context.Context, req entity.OrderRequest) (repository.CreateOrderOutcome, error) {
-	return repository.CreateOrderOutcome{}, fmt.Errorf("not implemented")
+	// real_executor.submit is now CreateOrderRaw-based; mirror createOrderFn
+	// so existing tests that exercise submit() continue to work.
+	orders, err := m.CreateOrder(ctx, req)
+	if err != nil {
+		return repository.CreateOrderOutcome{
+			HTTPStatus: 500,
+			HTTPError:  err,
+		}, nil
+	}
+	return repository.CreateOrderOutcome{
+		HTTPStatus: 200,
+		Orders:     orders,
+	}, nil
 }
 
 func (m *mockOrderClient) CancelOrder(ctx context.Context, symbolID, orderID int64) ([]entity.Order, error) {
