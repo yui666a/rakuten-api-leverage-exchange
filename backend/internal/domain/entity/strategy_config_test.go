@@ -221,7 +221,19 @@ func TestStrategyProfile_JSONRoundTrip(t *testing.T) {
     "bb_period": 20,
     "bb_multiplier": 2.0,
     "atr_period": 14,
-    "volume_sma_period": 0
+    "volume_sma_period": 0,
+    "adx_period": 0,
+    "stoch_k_period": 0,
+    "stoch_smooth_k": 0,
+    "stoch_smooth_d": 0,
+    "stoch_rsi_rsi_period": 0,
+    "stoch_rsi_stoch_period": 0,
+    "donchian_period": 0,
+    "obv_slope_period": 0,
+    "cmf_period": 0,
+    "ichimoku_tenkan": 0,
+    "ichimoku_kijun": 0,
+    "ichimoku_senkou_b": 0
   },
   "stance_rules": {
     "rsi_oversold": 20,

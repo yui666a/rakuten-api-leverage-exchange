@@ -44,13 +44,12 @@ func (c *IndicatorCalculator) SetBBSqueezeLookback(n int) {
 	c.bbSqueezeLookback = n
 }
 
-// SetIndicatorPeriods overrides the lookback periods used for SMA / EMA /
-// RSI / MACD / BB / ATR / VolumeSMA. Zero-valued fields are filled in from
-// the legacy hardcoded defaults via IndicatorConfig.WithDefaults so a
-// partial profile still produces a working set.
-//
-// PR-C will extend this to ADX / Stochastics / Donchian / CMF / OBVSlope /
-// Ichimoku; until then those continue to use their hardcoded periods.
+// SetIndicatorPeriods overrides the lookback periods for every indicator
+// the strategy layer consumes — SMA / EMA / RSI / MACD / BB / ATR /
+// VolumeSMA / ADX / Stochastics / StochRSI / Donchian / OBVSlope / CMF /
+// Ichimoku. Zero-valued fields are filled in from the legacy hardcoded
+// defaults via IndicatorConfig.WithDefaults so a partial profile still
+// produces a working set.
 func (c *IndicatorCalculator) SetIndicatorPeriods(p entity.IndicatorConfig) {
 	c.periods = p.WithDefaults()
 }
@@ -110,32 +109,28 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 
 	// PR-6: ADX family. ADX/PlusDI/MinusDI return NaN until 2*period+1
 	// bars are available; toPtr collapses that to nil for the caller.
-	// PR-C will profile-drive this period.
-	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, prices, 14)
+	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, prices, periods.ADXPeriod)
 	result.ADX = toPtr(adxVal)
 	result.PlusDI = toPtr(plusDI)
 	result.MinusDI = toPtr(minusDI)
 
-	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Both return
-	// NaN -> nil pointer when the warmup window is not filled yet.
-	// PR-C will profile-drive these periods.
-	stochK, stochD := indicator.Stochastics(highs, lows, prices, 14, 3, 3)
+	// PR-7: Stochastics + Stochastic RSI. Both return NaN -> nil pointer
+	// when the warmup window is not filled yet.
+	stochK, stochD := indicator.Stochastics(highs, lows, prices, periods.StochKPeriod, periods.StochSmoothK, periods.StochSmoothD)
 	result.StochK = toPtr(stochK)
 	result.StochD = toPtr(stochD)
-	result.StochRSI = toPtr(indicator.StochasticRSI(prices, 14, 14))
+	result.StochRSI = toPtr(indicator.StochasticRSI(prices, periods.StochRSIRSIPeriod, periods.StochRSIStochPeriod))
 
 	// PR-8: Ichimoku. Each of the five lines may be NaN independently during
 	// warmup; buildIchimokuSnapshot returns nil when every line is unknown.
-	// PR-C will profile-drive these periods.
-	if snap := buildIchimokuSnapshot(indicator.Ichimoku(highs, lows, prices, 9, 26, 52)); snap != nil {
+	if snap := buildIchimokuSnapshot(indicator.Ichimoku(highs, lows, prices, periods.IchimokuTenkan, periods.IchimokuKijun, periods.IchimokuSenkouB)); snap != nil {
 		result.Ichimoku = snap
 	}
 
-	// PR-11: Donchian Channel (20-bar default). Mirror the other range-of-N
-	// indicators — NaN until 20 bars of history are available; toPtr
-	// collapses that into nil pointers for downstream gates.
-	// PR-C will profile-drive this period.
-	donU, donL, donM := indicator.Donchian(highs, lows, 20)
+	// PR-11: Donchian Channel. NaN until DonchianPeriod bars of history
+	// are available; toPtr collapses that into nil pointers for downstream
+	// gates.
+	donU, donL, donM := indicator.Donchian(highs, lows, periods.DonchianPeriod)
 	result.DonchianUpper = toPtr(donU)
 	result.DonchianLower = toPtr(donL)
 	result.DonchianMiddle = toPtr(donM)
@@ -153,12 +148,11 @@ func (c *IndicatorCalculator) Calculate(ctx context.Context, symbolID int64, int
 	}
 
 	// PR-9: OBV + CMF (volume-based). OBVSlope carries the gate signal
-	// (cumulative buying volume over 20 bars); raw OBV is exposed for
-	// diagnostics / frontend charting. CMF is bounded in [-1, 1].
-	// PR-C will profile-drive these periods.
+	// (cumulative buying volume over OBVSlopePeriod bars); raw OBV is
+	// exposed for diagnostics / frontend charting. CMF is bounded in [-1, 1].
 	result.OBV = toPtr(indicator.OBV(prices, volumes))
-	result.OBVSlope = toPtr(indicator.OBVSlope(prices, volumes, 20))
-	result.CMF = toPtr(indicator.CMF(highs, lows, prices, volumes, 20))
+	result.OBVSlope = toPtr(indicator.OBVSlope(prices, volumes, periods.OBVSlopePeriod))
+	result.CMF = toPtr(indicator.CMF(highs, lows, prices, volumes, periods.CMFPeriod))
 
 	// RecentSqueeze: check if any of the last `c.bbSqueezeLookback`
 	// candles had BBBandwidth < 0.02. cycle44: profile's stance_rules

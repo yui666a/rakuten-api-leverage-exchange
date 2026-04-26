@@ -195,15 +195,12 @@ func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize in
 	}
 }
 
-// SetIndicatorPeriods overrides the lookback periods used inside
-// calculateIndicatorSet for SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA.
+// SetIndicatorPeriods overrides every indicator lookback used inside
+// calculateIndicatorSet — SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA /
+// ADX / Stochastics / StochRSI / Donchian / OBVSlope / CMF / Ichimoku.
 // Zero-valued fields fall back to the legacy defaults via
 // IndicatorConfig.WithDefaults. Mirrors usecase.IndicatorCalculator's
 // SetIndicatorPeriods so live and backtest paths share one knob set.
-//
-// PR-C will extend this to ADX / Stochastics / Donchian / CMF / OBVSlope /
-// Ichimoku; until then those continue to use their hardcoded periods inside
-// calculateIndicatorSet.
 func (h *IndicatorHandler) SetIndicatorPeriods(p entity.IndicatorConfig) {
 	h.periods = p.WithDefaults()
 }
@@ -889,28 +886,27 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, periods enti
 
 	result.ATR = floatToPtr(indicator.ATR(highs, lows, closes, periods.ATRPeriod))
 
-	// PR-6: ADX family. Mirror the live-pipeline calculator. PR-C will profile-drive.
-	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, closes, 14)
+	// PR-6: ADX family. Mirror the live-pipeline calculator.
+	adxVal, plusDI, minusDI := indicator.ADX(highs, lows, closes, periods.ADXPeriod)
 	result.ADX = floatToPtr(adxVal)
 	result.PlusDI = floatToPtr(plusDI)
 	result.MinusDI = floatToPtr(minusDI)
 
-	// PR-7: Stochastics (14, 3, 3) + Stochastic RSI (14, 14). Mirror the
-	// live-pipeline calculator. PR-C will profile-drive.
-	stochK, stochD := indicator.Stochastics(highs, lows, closes, 14, 3, 3)
+	// PR-7: Stochastics + Stochastic RSI. Mirror the live-pipeline calculator.
+	stochK, stochD := indicator.Stochastics(highs, lows, closes, periods.StochKPeriod, periods.StochSmoothK, periods.StochSmoothD)
 	result.StochK = floatToPtr(stochK)
 	result.StochD = floatToPtr(stochD)
-	result.StochRSI = floatToPtr(indicator.StochasticRSI(closes, 14, 14))
+	result.StochRSI = floatToPtr(indicator.StochasticRSI(closes, periods.StochRSIRSIPeriod, periods.StochRSIStochPeriod))
 
 	// PR-8: Ichimoku. Mirror the live pipeline; nil when all five lines
-	// are still in warmup. PR-C will profile-drive.
-	if snap := buildIchimokuSnapshotBT(indicator.Ichimoku(highs, lows, closes, 9, 26, 52)); snap != nil {
+	// are still in warmup.
+	if snap := buildIchimokuSnapshotBT(indicator.Ichimoku(highs, lows, closes, periods.IchimokuTenkan, periods.IchimokuKijun, periods.IchimokuSenkouB)); snap != nil {
 		result.Ichimoku = snap
 	}
 
-	// PR-11: Donchian Channel (20-bar default). Mirror the live pipeline;
-	// nil until 20 bars of history are available. PR-C will profile-drive.
-	donU, donL, donM := indicator.Donchian(highs, lows, 20)
+	// PR-11: Donchian Channel. Mirror the live pipeline; nil until
+	// DonchianPeriod bars of history are available.
+	donU, donL, donM := indicator.Donchian(highs, lows, periods.DonchianPeriod)
 	result.DonchianUpper = floatToPtr(donU)
 	result.DonchianLower = floatToPtr(donL)
 	result.DonchianMiddle = floatToPtr(donM)
@@ -929,10 +925,9 @@ func calculateIndicatorSet(symbolID int64, candles []entity.Candle, periods enti
 	}
 
 	// PR-9: OBV + CMF (volume-based). Mirror the live-pipeline calculator.
-	// PR-C will profile-drive.
 	result.OBV = floatToPtr(indicator.OBV(closes, volumes))
-	result.OBVSlope = floatToPtr(indicator.OBVSlope(closes, volumes, 20))
-	result.CMF = floatToPtr(indicator.CMF(highs, lows, closes, volumes, 20))
+	result.OBVSlope = floatToPtr(indicator.OBVSlope(closes, volumes, periods.OBVSlopePeriod))
+	result.CMF = floatToPtr(indicator.CMF(highs, lows, closes, volumes, periods.CMFPeriod))
 
 	// RecentSqueeze: check if any of the last `bbSqueezeLookback` candles
 	// had BBBandwidth < threshold. cycle44: now honours the profile field

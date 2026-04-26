@@ -7,35 +7,50 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
 
-// TestCalculateIndicatorSet_PeriodsDriveValues is the PR-B wiring guard:
-// it proves that calculateIndicatorSet actually consumes the IndicatorConfig
-// argument, rather than ignoring it the way SetBBSqueezeLookback was
-// originally a silent no-op (cycle43). Two runs on the same trending
-// candle series with different SMA / EMA / RSI / BB / ATR / VolumeSMA
-// periods must produce numerically distinguishable values.
+// TestCalculateIndicatorSet_PeriodsDriveValues is the PR-B / PR-C wiring
+// guard: it proves that calculateIndicatorSet actually consumes the
+// IndicatorConfig argument, rather than ignoring it the way
+// SetBBSqueezeLookback was originally a silent no-op (cycle43). Two runs
+// on the same noisy candle series with different periods must produce
+// numerically distinguishable values for every indicator.
 //
-// We use a strong linear uptrend so longer lookbacks lag the price
-// noticeably more than shorter ones — every period axis becomes a visible
-// signal. A passive guard (just checking that the values are non-nil)
-// would have missed cycle43-style "the field is set but the period is
-// hardcoded" regressions.
+// We use sinusoidal noise on top of a linear drift so longer lookbacks
+// see different running means / variances than shorter ones — every
+// period axis becomes a visible signal. A passive guard (just checking
+// that the values are non-nil) would have missed cycle43-style "the
+// field is set but the period is hardcoded" regressions.
+//
+// Candle count 320 = scaled IchimokuSenkouB (156) + Kijun (78) + buffer
+// so the longest profile completes warmup.
 func TestCalculateIndicatorSet_PeriodsDriveValues(t *testing.T) {
-	candles := buildTrendingCandles(120)
+	candles := buildTrendingCandles(320)
 
 	defaults := calculateIndicatorSet(42, candles, entity.IndicatorConfig{}, 0)
 	scaled := calculateIndicatorSet(42, candles, entity.IndicatorConfig{
-		SMAShort:        60,
-		SMALong:         100,
-		EMAFast:         36,
-		EMASlow:         78,
-		RSIPeriod:       42,
-		MACDFast:        24,
-		MACDSlow:        52,
-		MACDSignal:      18,
-		BBPeriod:        60,
-		BBMultiplier:    2.0,
-		ATRPeriod:       42,
-		VolumeSMAPeriod: 60,
+		SMAShort:            60,
+		SMALong:             100,
+		EMAFast:             36,
+		EMASlow:             78,
+		RSIPeriod:           42,
+		MACDFast:            24,
+		MACDSlow:            52,
+		MACDSignal:          18,
+		BBPeriod:            60,
+		BBMultiplier:        2.0,
+		ATRPeriod:           42,
+		VolumeSMAPeriod:     60,
+		ADXPeriod:           42,
+		StochKPeriod:        42,
+		StochSmoothK:        9,
+		StochSmoothD:        9,
+		StochRSIRSIPeriod:   42,
+		StochRSIStochPeriod: 42,
+		DonchianPeriod:      60,
+		OBVSlopePeriod:      60,
+		CMFPeriod:           60,
+		IchimokuTenkan:      27,
+		IchimokuKijun:       78,
+		IchimokuSenkouB:     156,
 	}, 0)
 
 	cases := []struct {
@@ -53,6 +68,13 @@ func TestCalculateIndicatorSet_PeriodsDriveValues(t *testing.T) {
 		{"BBMiddle", defaults.BBMiddle, scaled.BBMiddle},
 		{"ATR", defaults.ATR, scaled.ATR},
 		{"VolumeSMA", defaults.VolumeSMA, scaled.VolumeSMA},
+		{"ADX", defaults.ADX, scaled.ADX},
+		{"StochK", defaults.StochK, scaled.StochK},
+		{"StochD", defaults.StochD, scaled.StochD},
+		{"StochRSI", defaults.StochRSI, scaled.StochRSI},
+		{"DonchianUpper", defaults.DonchianUpper, scaled.DonchianUpper},
+		{"OBVSlope", defaults.OBVSlope, scaled.OBVSlope},
+		{"CMF", defaults.CMF, scaled.CMF},
 	}
 
 	for _, tc := range cases {
@@ -65,6 +87,31 @@ func TestCalculateIndicatorSet_PeriodsDriveValues(t *testing.T) {
 			}
 		})
 	}
+
+	// Ichimoku: separate path because its values live inside a nested snapshot.
+	// Tenkan / Kijun must differ between the default 9/26/52 series and the
+	// scaled 27/78/156 series — the longer windows lag the noisy uptrend
+	// noticeably more, so the values land at different points along the same
+	// curve.
+	t.Run("IchimokuTenkan", func(t *testing.T) {
+		if defaults.Ichimoku == nil || scaled.Ichimoku == nil {
+			t.Fatalf("expected non-nil Ichimoku snapshots (defaults=%v scaled=%v)", defaults.Ichimoku, scaled.Ichimoku)
+		}
+		if defaults.Ichimoku.Tenkan == nil || scaled.Ichimoku.Tenkan == nil {
+			t.Fatalf("Tenkan: expected both non-nil (defaults=%v scaled=%v)", defaults.Ichimoku.Tenkan, scaled.Ichimoku.Tenkan)
+		}
+		if math.Abs(*defaults.Ichimoku.Tenkan-*scaled.Ichimoku.Tenkan) < 1e-6 {
+			t.Errorf("Tenkan: defaults=%.6f scaled=%.6f — too close, period likely ignored", *defaults.Ichimoku.Tenkan, *scaled.Ichimoku.Tenkan)
+		}
+	})
+	t.Run("IchimokuKijun", func(t *testing.T) {
+		if defaults.Ichimoku.Kijun == nil || scaled.Ichimoku.Kijun == nil {
+			t.Fatalf("Kijun: expected both non-nil (defaults=%v scaled=%v)", defaults.Ichimoku.Kijun, scaled.Ichimoku.Kijun)
+		}
+		if math.Abs(*defaults.Ichimoku.Kijun-*scaled.Ichimoku.Kijun) < 1e-6 {
+			t.Errorf("Kijun: defaults=%.6f scaled=%.6f — too close, period likely ignored", *defaults.Ichimoku.Kijun, *scaled.Ichimoku.Kijun)
+		}
+	})
 }
 
 // TestCalculateIndicatorSet_DefaultsMatchLegacy proves that an empty
@@ -117,29 +164,37 @@ func TestCalculateIndicatorSet_DefaultsMatchLegacy(t *testing.T) {
 	}
 }
 
-// buildTrendingCandles produces a noisy uptrend that exercises every
-// indicator family — different lookbacks see different running averages,
-// RSI gain/loss balance shifts, ATR window includes more / fewer outlier
-// bars, etc. A pure linear trend was rejected because RSI saturates at
-// 100 and ATR collapses to a constant, masking period-flag regressions.
+// buildTrendingCandles produces a noisy quasi-random walk that exercises
+// every indicator family — RSI gain/loss balance, ATR window, Donchian
+// extremes, Stoch oscillators, etc. all change with the look-back window.
+//
+// Pure linear / monotonic uptrends were rejected because:
+//   - RSI saturates at 100 (no losing bars), masking period changes;
+//   - StochRSI inherits the saturation and stays at 100;
+//   - Donchian's high-of-N collapses to the latest bar's high regardless
+//     of N because the series is monotonic.
+//
+// We use overlapping sinusoids (3 frequencies) plus a mild positive drift
+// so the series advances overall but every window contains genuine
+// max/min variation.
 func buildTrendingCandles(n int) []entity.Candle {
 	out := make([]entity.Candle, n)
 	for i := range out {
-		// Sinusoidal noise on top of a linear drift gives every period
-		// axis a different running mean / variance, so longer lookbacks
-		// produce numerically distinct values from shorter ones.
-		drift := float64(i) * 0.8
-		osc := 5.0 * math.Sin(float64(i)*0.4)
+		drift := float64(i) * 0.05
+		osc := 12.0*math.Sin(float64(i)*0.13) +
+			8.0*math.Sin(float64(i)*0.41) +
+			4.0*math.Sin(float64(i)*1.05)
 		base := 100.0 + drift + osc
-		// Variable bar range so ATR depends on which bars the window
-		// includes, not just the slope.
-		span := 1.0 + 0.5*math.Cos(float64(i)*0.3)
+		span := 1.5 + 1.0*math.Cos(float64(i)*0.27)
+		if span < 0.2 {
+			span = 0.2
+		}
 		out[i] = entity.Candle{
 			Time:   int64(i) * 60_000,
 			Open:   base,
 			High:   base + span,
 			Low:    base - span,
-			Close:  base + 0.3*math.Sin(float64(i)*0.7),
+			Close:  base + 0.6*math.Sin(float64(i)*0.71),
 			Volume: 100 + 30*math.Sin(float64(i)*0.2),
 		}
 	}

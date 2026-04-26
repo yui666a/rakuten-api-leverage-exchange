@@ -31,9 +31,10 @@ type StrategyProfile struct {
 }
 
 // IndicatorConfig declares the lookback periods and shape parameters used when
-// computing technical indicators. PR-B covers SMA / EMA / RSI / MACD / BB /
-// ATR / VolumeSMA. PR-C will extend this with ADX / Stochastics / Donchian /
-// CMF / OBVSlope / Ichimoku periods.
+// computing technical indicators. Every indicator the strategy layer consumes
+// is profile-driven so PT5M / PT1M strategies can scale lookbacks to their
+// timeframe; zero on any field falls back to the legacy LTC PT15M default
+// via WithDefaults.
 type IndicatorConfig struct {
 	SMAShort     int     `json:"sma_short"`
 	SMALong      int     `json:"sma_long"`
@@ -50,6 +51,49 @@ type IndicatorConfig struct {
 	// 0 falls back to BBPeriod (legacy behaviour computed VolumeSMA20 alongside
 	// BB20; keeping the same default avoids surprising existing profiles).
 	VolumeSMAPeriod int `json:"volume_sma_period"`
+
+	// PR-C: ADX (Average Directional Index) family lookback. Used by both
+	// the trend-follow ADX_min gate and the contrarian ADX_max gate; needs
+	// 2*period+1 bars before producing a non-NaN value (Wilder smoothing).
+	// 0 falls back to 14.
+	ADXPeriod int `json:"adx_period"`
+
+	// PR-C: Stochastics (slow %K) parameters. StochKPeriod is the raw
+	// look-back over which the high/low range is taken, StochSmoothK
+	// smooths the raw %K into the slow %K, StochSmoothD smooths the slow
+	// %K into %D. Legacy values 14 / 3 / 3. 0 each falls back.
+	StochKPeriod  int `json:"stoch_k_period"`
+	StochSmoothK  int `json:"stoch_smooth_k"`
+	StochSmoothD  int `json:"stoch_smooth_d"`
+
+	// PR-C: Stochastic RSI parameters. StochRSIRSIPeriod is the inner RSI
+	// window, StochRSIStochPeriod is the outer stochastic window applied
+	// to the RSI series. Legacy 14 / 14. 0 each falls back.
+	StochRSIRSIPeriod   int `json:"stoch_rsi_rsi_period"`
+	StochRSIStochPeriod int `json:"stoch_rsi_stoch_period"`
+
+	// PR-C: Donchian Channel high/low look-back. Default 20 (~5h on 15m
+	// bars). 0 falls back. Used by the breakout gate's Donchian filter.
+	DonchianPeriod int `json:"donchian_period"`
+
+	// PR-C: OBV slope look-back (in bars). Default 20. Drives OBVSlope
+	// which trend-follow uses as a volume-confirmation gate. 0 falls back.
+	OBVSlopePeriod int `json:"obv_slope_period"`
+
+	// PR-C: CMF (Chaikin Money Flow) look-back. Default 20. Drives the
+	// breakout gate's CMF filter (cmf_buy_min / cmf_sell_max). 0 falls back.
+	CMFPeriod int `json:"cmf_period"`
+
+	// PR-C: Ichimoku Kinkō Hyō periods.
+	//   - IchimokuTenkan: conversion line (default 9)
+	//   - IchimokuKijun:  base line; also drives the +N forward shift of
+	//                     SenkouA/B and the −N backward shift of Chikou
+	//                     (default 26)
+	//   - IchimokuSenkouB: leading span B look-back (default 52)
+	// Used by HTFFilter when mode="ichimoku". 0 each falls back.
+	IchimokuTenkan  int `json:"ichimoku_tenkan"`
+	IchimokuKijun   int `json:"ichimoku_kijun"`
+	IchimokuSenkouB int `json:"ichimoku_senkou_b"`
 }
 
 // WithDefaults returns the IndicatorConfig with zero-valued fields filled
@@ -96,6 +140,42 @@ func (c IndicatorConfig) WithDefaults() IndicatorConfig {
 	}
 	if c.VolumeSMAPeriod <= 0 {
 		c.VolumeSMAPeriod = c.BBPeriod
+	}
+	if c.ADXPeriod <= 0 {
+		c.ADXPeriod = 14
+	}
+	if c.StochKPeriod <= 0 {
+		c.StochKPeriod = 14
+	}
+	if c.StochSmoothK <= 0 {
+		c.StochSmoothK = 3
+	}
+	if c.StochSmoothD <= 0 {
+		c.StochSmoothD = 3
+	}
+	if c.StochRSIRSIPeriod <= 0 {
+		c.StochRSIRSIPeriod = 14
+	}
+	if c.StochRSIStochPeriod <= 0 {
+		c.StochRSIStochPeriod = 14
+	}
+	if c.DonchianPeriod <= 0 {
+		c.DonchianPeriod = 20
+	}
+	if c.OBVSlopePeriod <= 0 {
+		c.OBVSlopePeriod = 20
+	}
+	if c.CMFPeriod <= 0 {
+		c.CMFPeriod = 20
+	}
+	if c.IchimokuTenkan <= 0 {
+		c.IchimokuTenkan = 9
+	}
+	if c.IchimokuKijun <= 0 {
+		c.IchimokuKijun = 26
+	}
+	if c.IchimokuSenkouB <= 0 {
+		c.IchimokuSenkouB = 52
 	}
 	return c
 }
@@ -412,6 +492,50 @@ func (p StrategyProfile) Validate() error {
 	}
 	if ind.VolumeSMAPeriod < 0 {
 		errs = append(errs, fmt.Errorf("indicators.volume_sma_period must be >= 0 (got %d)", ind.VolumeSMAPeriod))
+	}
+	// PR-C: optional periods. 0 means "fall back to default" via WithDefaults;
+	// only reject negative values that would otherwise be silently coerced.
+	if ind.ADXPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.adx_period must be >= 0 (got %d)", ind.ADXPeriod))
+	}
+	if ind.StochKPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.stoch_k_period must be >= 0 (got %d)", ind.StochKPeriod))
+	}
+	if ind.StochSmoothK < 0 {
+		errs = append(errs, fmt.Errorf("indicators.stoch_smooth_k must be >= 0 (got %d)", ind.StochSmoothK))
+	}
+	if ind.StochSmoothD < 0 {
+		errs = append(errs, fmt.Errorf("indicators.stoch_smooth_d must be >= 0 (got %d)", ind.StochSmoothD))
+	}
+	if ind.StochRSIRSIPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.stoch_rsi_rsi_period must be >= 0 (got %d)", ind.StochRSIRSIPeriod))
+	}
+	if ind.StochRSIStochPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.stoch_rsi_stoch_period must be >= 0 (got %d)", ind.StochRSIStochPeriod))
+	}
+	if ind.DonchianPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.donchian_period must be >= 0 (got %d)", ind.DonchianPeriod))
+	}
+	if ind.OBVSlopePeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.obv_slope_period must be >= 0 (got %d)", ind.OBVSlopePeriod))
+	}
+	if ind.CMFPeriod < 0 {
+		errs = append(errs, fmt.Errorf("indicators.cmf_period must be >= 0 (got %d)", ind.CMFPeriod))
+	}
+	if ind.IchimokuTenkan < 0 {
+		errs = append(errs, fmt.Errorf("indicators.ichimoku_tenkan must be >= 0 (got %d)", ind.IchimokuTenkan))
+	}
+	if ind.IchimokuKijun < 0 {
+		errs = append(errs, fmt.Errorf("indicators.ichimoku_kijun must be >= 0 (got %d)", ind.IchimokuKijun))
+	}
+	if ind.IchimokuSenkouB < 0 {
+		errs = append(errs, fmt.Errorf("indicators.ichimoku_senkou_b must be >= 0 (got %d)", ind.IchimokuSenkouB))
+	}
+	if ind.IchimokuTenkan > 0 && ind.IchimokuKijun > 0 && ind.IchimokuTenkan >= ind.IchimokuKijun {
+		errs = append(errs, fmt.Errorf("indicators.ichimoku_tenkan (%d) must be < ichimoku_kijun (%d)", ind.IchimokuTenkan, ind.IchimokuKijun))
+	}
+	if ind.IchimokuKijun > 0 && ind.IchimokuSenkouB > 0 && ind.IchimokuKijun >= ind.IchimokuSenkouB {
+		errs = append(errs, fmt.Errorf("indicators.ichimoku_kijun (%d) must be < ichimoku_senkou_b (%d)", ind.IchimokuKijun, ind.IchimokuSenkouB))
 	}
 	if ind.RSIPeriod <= 0 {
 		errs = append(errs, fmt.Errorf("indicators.rsi_period must be > 0 (got %d)", ind.RSIPeriod))
