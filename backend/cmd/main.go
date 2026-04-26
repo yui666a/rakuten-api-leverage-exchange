@@ -23,6 +23,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	backtestuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/quality"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
@@ -56,6 +57,8 @@ func main() {
 	tradeHistoryRepo := database.NewTradeHistoryRepo(db)
 	riskStateRepo := database.NewRiskStateRepo(db)
 	tradingConfigRepo := database.NewTradingConfigRepo(db)
+	decisionLogRepo := database.NewDecisionLogRepository(db)
+	backtestDecisionLogRepo := database.NewBacktestDecisionLogRepository(db)
 
 	// --- Usecase ---
 	marketDataSvc := usecase.NewMarketDataServiceWithConfig(marketDataRepo, loadPersistenceConfig())
@@ -166,6 +169,7 @@ func main() {
 			},
 			IndicatorPeriods:  liveProfileIndicators(liveProfile),
 			BBSqueezeLookback: liveProfileBBSqueezeLookback(liveProfile),
+			DecisionLogRepo:   decisionLogRepo,
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -190,6 +194,15 @@ func main() {
 	// キャプチャし、NewRouter に OnSymbolSwitch として渡すため。
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Decision-log retention sweep (backtest only). The 3-day window matches
+	// the design contract; live decision_log is never auto-purged.
+	decisionLogRetention := decisionlog.NewRetentionCleanup(backtestDecisionLogRepo, decisionlog.RetentionConfig{
+		MaxAge:   72 * time.Hour,
+		Interval: 1 * time.Hour,
+	})
+	go decisionLogRetention.Run(ctx)
+	slog.Info("decisionlog retention started", "maxAge", "72h", "interval", "1h")
 
 	// --- Symbol Switch channel + callback ---
 	// symbolSwitchCh は pipeline 側から startMarketRelay に切替を伝える。
