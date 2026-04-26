@@ -172,6 +172,52 @@ func TestSwitchSymbol_PreservesRunningState(t *testing.T) {
 	p.Stop()
 }
 
+// TestEventDrivenPipeline_SwitchSymbol_NoOpForSameSymbolAndAmount は、
+// 同じ symbol/amount への SwitchSymbol が event loop を再起動せず、onSwitch
+// コールバックも呼ばない (= no-op) ことを検証する。frontend が trading-config
+// を意図せず再 PUT したときに recorder の pending bar / WS subscription が
+// 破壊されるのを防ぐガード。
+//
+// EventDrivenPipeline 本体は依存 nil で start すると即 ctx.Done を待つだけの
+// goroutine を回すので、ロック/フィールドの整合だけを検証できる。
+func TestEventDrivenPipeline_SwitchSymbol_NoOpForSameSymbolAndAmount(t *testing.T) {
+	p := &EventDrivenPipeline{
+		symbolID:    10,
+		tradeAmount: 2000,
+	}
+
+	// Start で event loop goroutine を起動 (依存 nil なので即 ctx.Done 待ちで block)。
+	p.Start()
+	defer p.Stop()
+	if !p.Running() {
+		t.Fatal("pipeline must be running after Start")
+	}
+
+	switchCalled := 0
+	p.SwitchSymbol(10, 2000, func(_, _ int64) { switchCalled++ })
+	if switchCalled != 0 {
+		t.Errorf("onSwitch must not fire for same symbol+amount, called %d times", switchCalled)
+	}
+	if !p.Running() {
+		t.Error("pipeline must stay running across no-op switch")
+	}
+
+	// tradeAmount==0 (= "keep current") も同 symbol なら no-op。
+	p.SwitchSymbol(10, 0, func(_, _ int64) { switchCalled++ })
+	if switchCalled != 0 {
+		t.Errorf("onSwitch must not fire for same symbol with zero amount, called %d times", switchCalled)
+	}
+
+	// 異なる amount に変える場合は通常通り switch される。
+	p.SwitchSymbol(10, 3000, func(_, _ int64) { switchCalled++ })
+	if switchCalled != 1 {
+		t.Errorf("onSwitch must fire when amount changes, called %d times", switchCalled)
+	}
+	if p.TradeAmount() != 3000 {
+		t.Errorf("tradeAmount should update to 3000, got %f", p.TradeAmount())
+	}
+}
+
 func TestRoundDownToStep(t *testing.T) {
 	tests := []struct {
 		name   string

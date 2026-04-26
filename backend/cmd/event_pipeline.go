@@ -226,8 +226,21 @@ func (p *EventDrivenPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, 
 
 	p.mu.RLock()
 	oldID := p.symbolID
+	oldAmount := p.tradeAmount
 	wasRunning := p.cancel != nil
 	p.mu.RUnlock()
+
+	// No-op guard: a switch to the same symbol with the same trade amount
+	// would otherwise tear down and rebuild the event loop, dropping the
+	// in-flight CandleBuilder state and the recorder's pending bar draft.
+	// We saw this in production when the frontend re-PUTs trading-config
+	// on every focus change — a single redundant call destroyed ~30 min of
+	// decision-log accumulation. Cheap to guard here; the SwitchSymbol
+	// contract still allows reordering callers to detect the no-op via the
+	// onSwitch callback (which we still skip below).
+	if symbolID == oldID && (tradeAmount <= 0 || tradeAmount == oldAmount) {
+		return
+	}
 
 	if wasRunning {
 		p.stopLocked()
