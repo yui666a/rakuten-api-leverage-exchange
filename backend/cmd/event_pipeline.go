@@ -15,6 +15,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
@@ -44,6 +45,7 @@ type EventDrivenPipeline struct {
 
 	// Config
 	symbolID          int64
+	currencyPair      string
 	tradeAmount       float64
 	baseStepAmount    float64
 	minOrderAmount    float64
@@ -56,6 +58,11 @@ type EventDrivenPipeline struct {
 	staleCheckIntervalMs int64
 	reconcileConfig      reconcile.Config
 	clientOrderRepo      repository.ClientOrderRepository
+
+	// decisionLogRepo, when non-nil, attaches a DecisionRecorder to the
+	// EventBus so every pipeline cycle persists a row. nil disables the
+	// recorder; the rest of the pipeline is unaffected.
+	decisionLogRepo repository.DecisionLogRepository
 
 	// indicatorPeriods / bbSqueezeLookback are the live counterparts of the
 	// per-run RunInput fields the backtest already consumes. They are read
@@ -94,6 +101,12 @@ type EventDrivenPipelineConfig struct {
 	// fix for the backtest path; this PR brings the same plumbing to live).
 	// 0 keeps the legacy default of 5.
 	BBSqueezeLookback int
+
+	// DecisionLogRepo, when non-nil, attaches a DecisionRecorder to the
+	// pipeline's EventBus so every cycle (BAR_CLOSE plus tick-driven
+	// SL/TP/Trailing closes) persists into decision_log. nil disables it
+	// without otherwise affecting the pipeline.
+	DecisionLogRepo repository.DecisionLogRepository
 }
 
 func NewEventDrivenPipeline(
@@ -128,6 +141,7 @@ func NewEventDrivenPipeline(
 		clientOrderRepo:   clientOrderRepo,
 		indicatorPeriods:  cfg.IndicatorPeriods,
 		bbSqueezeLookback: cfg.BBSqueezeLookback,
+		decisionLogRepo:   cfg.DecisionLogRepo,
 	}
 }
 
@@ -251,10 +265,12 @@ func (p *EventDrivenPipeline) loadSymbolMeta(ctx context.Context, symbolID int64
 		if s.ID == symbolID {
 			p.baseStepAmount = s.BaseStepAmount.Float64()
 			p.minOrderAmount = s.MinOrderAmount.Float64()
+			p.currencyPair = s.CurrencyPair
 			slog.Info("event-pipeline: loaded symbol meta",
 				"symbolID", symbolID,
 				"baseStepAmount", p.baseStepAmount,
 				"minOrderAmount", p.minOrderAmount,
+				"currencyPair", p.currencyPair,
 			)
 			return
 		}
@@ -380,6 +396,21 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		TradeAmount: snap.tradeAmount,
 	}
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
+
+	if p.decisionLogRepo != nil {
+		recorder := decisionlog.NewRecorder(p.decisionLogRepo, decisionlog.RecorderConfig{
+			SymbolID:        snap.symbolID,
+			CurrencyPair:    p.currencyPair,
+			PrimaryInterval: "PT15M",
+		})
+		bus.Register(entity.EventTypeIndicator, 99, recorder)
+		bus.Register(entity.EventTypeSignal, 99, recorder)
+		bus.Register(entity.EventTypeApproved, 99, recorder)
+		bus.Register(entity.EventTypeRejected, 99, recorder)
+		bus.Register(entity.EventTypeOrder, 99, recorder)
+		slog.Info("event-pipeline: decision recorder attached",
+			"symbolID", snap.symbolID, "currencyPair", p.currencyPair)
+	}
 
 	engine := eventengine.NewEventEngine(bus)
 
