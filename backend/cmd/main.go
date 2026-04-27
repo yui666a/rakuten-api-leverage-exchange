@@ -174,6 +174,8 @@ func main() {
 			StanceResolver:     stanceResolver,
 			PrimaryInterval:    livePrimaryIntervalFromEnv(),
 			HigherTFInterval:   liveHigherTFIntervalFromEnv(),
+			PositionSizing:     liveProfilePositionSizing(liveProfile),
+			InitialBalance:     cfg.Risk.InitialCapital,
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -478,6 +480,18 @@ func liveProfileBBSqueezeLookback(p *entity.StrategyProfile) int {
 		return 0
 	}
 	return p.StanceRules.BBSqueezeLookback
+}
+
+// liveProfilePositionSizing returns profile.Risk.PositionSizing or nil when
+// the profile is missing / unset. nil means the live RiskHandler keeps the
+// legacy fixed-amount path; a non-nil pointer routes the live signal through
+// the same positionsize.Sizer the backtest runner uses, so the profile that
+// was tuned in PDCA actually shapes production lot size.
+func liveProfilePositionSizing(p *entity.StrategyProfile) *entity.PositionSizingConfig {
+	if p == nil {
+		return nil
+	}
+	return p.Risk.PositionSizing
 }
 
 // livePrimaryIntervalFromEnv reads $LIVE_PRIMARY_INTERVAL with a PT15M

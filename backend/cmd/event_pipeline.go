@@ -17,6 +17,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
@@ -86,6 +87,15 @@ type EventDrivenPipeline struct {
 	// the same lookbacks the strategy was tuned for.
 	indicatorPeriods  entity.IndicatorConfig
 	bbSqueezeLookback int
+
+	// positionSizing mirrors the profile's PositionSizing block so the live
+	// RiskHandler runs through the same sizer the backtest does. nil (or
+	// Mode == "" / "fixed") falls back to the legacy fixed-amount path
+	// where TradeAmount is used as proposal.Amount verbatim.
+	positionSizing *entity.PositionSizingConfig
+	// initialBalance seeds the PeakTracker for drawdown-based lot scaling.
+	// Sourced from cfg.Risk.InitialCapital at startup.
+	initialBalance float64
 
 	// primaryInterval / higherTFInterval drive the LiveSource, the
 	// IndicatorHandler, and every per-bar handler that needs to know which
@@ -169,6 +179,15 @@ type EventDrivenPipelineConfig struct {
 	// HigherTFInterval is the optional confirmation timeframe (used by the
 	// HTF gate inside StrategyEngine). Empty falls back to "PT1H".
 	HigherTFInterval string
+
+	// PositionSizing mirrors profile.Risk.PositionSizing so the live
+	// RiskHandler computes per-trade lot size via the same sizer the
+	// backtest uses. nil keeps the legacy fixed-amount behaviour.
+	PositionSizing *entity.PositionSizingConfig
+
+	// InitialBalance seeds the PeakTracker for drawdown-aware lot scaling.
+	// Typically cfg.Risk.InitialCapital. 0 disables PeakTracker.
+	InitialBalance float64
 }
 
 func NewEventDrivenPipeline(
@@ -208,6 +227,8 @@ func NewEventDrivenPipeline(
 		stanceResolver:     cfg.StanceResolver,
 		primaryInterval:    primaryIntervalOrDefault(cfg.PrimaryInterval),
 		higherTFInterval:   higherTFIntervalOrDefault(cfg.HigherTFInterval),
+		positionSizing:     cfg.PositionSizing,
+		initialBalance:     cfg.InitialBalance,
 	}
 }
 
@@ -646,9 +667,35 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
 
 	// RiskHandler: risk gating for signals (priority 30).
+	//
+	// The backtest runner attaches a positionsize.Sizer + EquityFunc + PeakTracker
+	// here so the strategy's profile-driven position_sizing block actually shapes
+	// per-trade lot. Live used to skip this wiring, which left every signal
+	// hitting the risk manager with TradeAmount as a literal coin count
+	// (e.g. 1000 LTC × ¥8.8k = ¥8.8M) and the position-limit guard rejecting
+	// every BUY. Live now mirrors the runner's wiring so the sizer the strategy
+	// was tuned against is the same one production runs against.
 	riskHandler := &backtest.RiskHandler{
-		RiskManager: p.riskMgr,
-		TradeAmount: snap.tradeAmount,
+		RiskManager:     p.riskMgr,
+		TradeAmount:     snap.tradeAmount,
+		StopLossPercent: snap.stopLossPercent,
+		MinConfidence:   snap.minConfidence,
+	}
+	if ps := p.positionSizing; ps != nil && ps.Mode != "" && ps.Mode != "fixed" {
+		defaults := positionsize.VenueDefaults(p.currencyPair)
+		riskHandler.Sizer = positionsize.New(ps, defaults)
+		rm := p.riskMgr
+		riskHandler.Equity = backtest.EquityFunc(func() float64 { return rm.LocalBalance() })
+		if p.initialBalance > 0 {
+			riskHandler.Peak = backtest.NewPeakTracker(p.initialBalance)
+		}
+		slog.Info("event-pipeline: position sizer attached",
+			"mode", ps.Mode,
+			"riskPerTradePct", ps.RiskPerTradePct,
+			"minLot", ps.MinLot,
+			"initialBalance", p.initialBalance,
+			"currencyPair", p.currencyPair,
+		)
 	}
 	// Pre-trade orderbook depth gate. Live mode keeps the gate forgiving on
 	// missing/stale snapshots (AllowOnMissingBook=true) so a transient WS
