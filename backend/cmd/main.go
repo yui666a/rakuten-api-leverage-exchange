@@ -337,6 +337,23 @@ const (
 	wsMaxSessionDuration = 110 * time.Minute // 2時間制限の10分前に事前再接続
 	wsInitialBackoff     = 1 * time.Second
 	wsMaxBackoff         = 60 * time.Second
+
+	// wsHeartbeatStaleAfter is the maximum gap between any two messages
+	// (TICKER / ORDERBOOK / TRADES combined) before we declare the
+	// WebSocket silently dead and force a reconnect. The venue normally
+	// pushes ticker frames sub-second during active markets, so 60s is
+	// well outside the legitimate silence band and tight enough that the
+	// PT15M decision pipeline does not skip a whole bar's worth of data.
+	//
+	// 2026-04-26 incident root cause: a 7-hour silent WS gap left
+	// IndicatorHandler with stale buffers, which combined with the
+	// no-history-warmup bug to fill decision_log with all-HOLD rows.
+	wsHeartbeatStaleAfter = 60 * time.Second
+
+	// wsHeartbeatCheckInterval controls how often the watchdog wakes up
+	// to compare lastMsgAt against now. Picked at 1/4 of the stale
+	// threshold so the worst-case detection latency is bounded.
+	wsHeartbeatCheckInterval = 15 * time.Second
 )
 
 // loadSORConfig reads SOR_* env vars and returns a sor.Config. Unset /
@@ -536,16 +553,35 @@ func startMarketRelay(
 		// 2時間制限の事前再接続タイマー
 		sessionTimer := time.NewTimer(wsMaxSessionDuration)
 
+		// Silent-death watchdog: a 2026-04-26 incident showed the venue
+		// can stop pushing frames for hours without sending a close. The
+		// session timer fires only once per 110 min so it cannot catch
+		// these gaps. We instead track lastMsgAt on every incoming frame
+		// and force a reconnect whenever the gap exceeds the heartbeat
+		// stale threshold.
+		lastMsgAt := time.Now()
+		heartbeatTicker := time.NewTicker(wsHeartbeatCheckInterval)
+
 		reconnect := false
 		for !reconnect {
 			select {
 			case <-ctx.Done():
 				sessionTimer.Stop()
+				heartbeatTicker.Stop()
 				_ = wsClient.Close()
 				return
 			case <-sessionTimer.C:
 				slog.Info("market websocket session approaching 2h limit, reconnecting proactively")
 				reconnect = true
+			case now := <-heartbeatTicker.C:
+				if wsIsSilentlyDead(now, lastMsgAt, wsHeartbeatStaleAfter) {
+					slog.Warn("market websocket silent beyond heartbeat threshold, reconnecting",
+						"symbolID", currentSymbolID,
+						"silenceFor", now.Sub(lastMsgAt).Round(time.Second).String(),
+						"threshold", wsHeartbeatStaleAfter.String(),
+					)
+					reconnect = true
+				}
 			case ids := <-symbolSwitchCh:
 				oldID, newID := ids[0], ids[1]
 				slog.Info("switching websocket symbol subscription", "from", oldID, "to", newID)
@@ -577,11 +613,13 @@ func startMarketRelay(
 					reconnect = true
 					break
 				}
+				lastMsgAt = time.Now()
 				handleMarketMessage(ctx, raw, marketDataSvc, realtimeHub)
 			}
 		}
 
 		sessionTimer.Stop()
+		heartbeatTicker.Stop()
 		slog.Info("market websocket disconnected, reconnecting")
 		_ = wsClient.Close()
 		waitFor(ctx, wsInitialBackoff)
@@ -729,6 +767,15 @@ func handleMarketMessage(ctx context.Context, raw []byte, marketDataSvc *usecase
 		}
 		marketDataSvc.HandleTicker(ctx, ticker)
 	}
+}
+
+// wsIsSilentlyDead returns true when the gap between now and the most
+// recent message timestamp exceeds the heartbeat threshold. Extracted so
+// the threshold logic stays unit-testable without spinning up a real
+// WebSocket — the production caller is the watchdog branch in
+// startMarketRelay's select.
+func wsIsSilentlyDead(now, lastMsgAt time.Time, threshold time.Duration) bool {
+	return now.Sub(lastMsgAt) > threshold
 }
 
 func waitFor(ctx context.Context, d time.Duration) {
