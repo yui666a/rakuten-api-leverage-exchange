@@ -1,58 +1,60 @@
-import { createFileRoute, Link, useSearch } from '@tanstack/react-router'
-import { AppFrame } from '../components/AppFrame'
-import { KpiCard } from '../components/KpiCard'
-import { CandlestickChart } from '../components/CandlestickChart'
-import { IndicatorPanel } from '../components/IndicatorPanel'
-import { PositionPanel } from '../components/PositionPanel'
-import { BotControlCard } from '../components/BotControlCard'
-import { LiveTickerCard } from '../components/LiveTickerCard'
-import { ManualTradeCard } from '../components/ManualTradeCard'
-import { OrderbookPanel } from '../components/OrderbookPanel'
-import { ExecutionQualityCard } from '../components/ExecutionQualityCard'
-import { HaltReasonBadge } from '../components/HaltReasonBadge'
-import { useStatus } from '../hooks/useStatus'
-import { usePnl } from '../hooks/usePnl'
-import { useStrategy } from '../hooks/useStrategy'
-import { useIndicators } from '../hooks/useIndicators'
-import { usePositions } from '../hooks/usePositions'
-import { useStartBot, useStopBot } from '../hooks/useBotControl'
-import { useMarketTickerStream } from '../hooks/useMarketTickerStream'
-import { useSymbolContext } from '../contexts/SymbolContext'
+import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
+import { AppFrame } from "../components/AppFrame";
+import { KpiCard } from "../components/KpiCard";
+import { CandlestickChart } from "../components/CandlestickChart";
+import { IndicatorPanel } from "../components/IndicatorPanel";
+import { PositionPanel } from "../components/PositionPanel";
+import { BotControlCard } from "../components/BotControlCard";
+import { LiveTickerCard } from "../components/LiveTickerCard";
+import { ManualTradeCard } from "../components/ManualTradeCard";
+import { StanceLegendPopover } from "../components/StanceLegendPopover";
+import { OrderbookPanel } from "../components/OrderbookPanel";
+import { ExecutionQualityCard } from "../components/ExecutionQualityCard";
+import { HaltReasonBadge } from "../components/HaltReasonBadge";
+import { useStatus } from "../hooks/useStatus";
+import { usePnl } from "../hooks/usePnl";
+import { useStrategy } from "../hooks/useStrategy";
+import { useIndicators } from "../hooks/useIndicators";
+import { usePositions } from "../hooks/usePositions";
+import { useStartBot, useStopBot } from "../hooks/useBotControl";
+import { useMarketTickerStream } from "../hooks/useMarketTickerStream";
+import { useSymbolContext } from "../contexts/SymbolContext";
 
-export const Route = createFileRoute('/')({ component: Dashboard })
+export const Route = createFileRoute("/")({ component: Dashboard });
 
 function Dashboard() {
-  const { symbolId, currentSymbol } = useSymbolContext()
-  const rootSearch = useSearch({ from: '__root__' }) as { symbol?: string }
-  const { data: status } = useStatus()
-  const { data: pnl } = usePnl()
-  const { data: strategy } = useStrategy()
-  const { data: indicators } = useIndicators(symbolId)
-  const { data: positions } = usePositions(symbolId)
-  const startBot = useStartBot()
-  const stopBot = useStopBot()
-  const { ticker, orderbook, connectionState } = useMarketTickerStream(symbolId)
+  const { symbolId, currentSymbol } = useSymbolContext();
+  const rootSearch = useSearch({ from: "__root__" }) as { symbol?: string };
+  const { data: status } = useStatus();
+  const { data: pnl } = usePnl();
+  const { data: strategy } = useStrategy();
+  const { data: indicators } = useIndicators(symbolId);
+  const { data: positions } = usePositions(symbolId);
+  const startBot = useStartBot();
+  const stopBot = useStopBot();
+  const { ticker, orderbook, connectionState } =
+    useMarketTickerStream(symbolId);
 
   const statusLabel = status?.tradingHalted
-    ? 'リスク停止'
+    ? "リスク停止"
     : status?.manuallyStopped
-      ? '手動停止'
-      : status?.status === 'running'
-        ? '稼働中'
-        : '\u2014'
+      ? "手動停止"
+      : status?.status === "running"
+        ? "稼働中"
+        : "\u2014";
 
-  const dailyPnlTotal = pnl?.dailyPnl?.total ?? null
-  const dailyPnlStale = pnl?.dailyPnl?.stale ?? false
+  const dailyPnlTotal = pnl?.dailyPnl?.total ?? null;
+  const dailyPnlStale = pnl?.dailyPnl?.stale ?? false;
   const dailyPnlLabel =
     dailyPnlTotal === null
-      ? '\u2014'
-      : `${dailyPnlTotal < 0 ? '-' : ''}¥${Math.abs(dailyPnlTotal).toLocaleString()}${dailyPnlStale ? '*' : ''}`
+      ? "\u2014"
+      : `${dailyPnlTotal < 0 ? "-" : ""}¥${Math.abs(dailyPnlTotal).toLocaleString()}${dailyPnlStale ? "*" : ""}`;
 
   const reasoningLabel = strategy?.reasoning
-    ? strategy.reasoning === 'insufficient indicator data'
-      ? '指標データが不足しています'
+    ? strategy.reasoning === "insufficient indicator data"
+      ? "指標データが不足しています"
       : strategy.reasoning
-    : '戦略コメントはまだ生成されていません。'
+    : "戦略コメントはまだ生成されていません。";
 
   return (
     <AppFrame
@@ -68,23 +70,36 @@ function Dashboard() {
       <div className="mt-3 grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <KpiCard
           label="残高"
-          value={pnl ? `¥${pnl.balance.toLocaleString()}` : '\u2014'}
+          value={pnl ? `¥${pnl.balance.toLocaleString()}` : "\u2014"}
           color="text-accent-green"
         />
         <KpiCard
           label="日次損益"
           value={dailyPnlLabel}
-          color={dailyPnlTotal !== null && dailyPnlTotal < 0 ? 'text-accent-red' : 'text-accent-green'}
+          color={
+            dailyPnlTotal !== null && dailyPnlTotal < 0
+              ? "text-accent-red"
+              : "text-accent-green"
+          }
         />
-        <KpiCard
-          label="戦略方針"
-          value={strategy?.stance ?? '\u2014'}
-          color="text-cyan-200"
-        />
+        <div className="relative">
+          <KpiCard
+            label="戦略方針"
+            value={strategy?.stance ?? "\u2014"}
+            color="text-cyan-200"
+          />
+          <div className="absolute right-3 top-3">
+            <StanceLegendPopover />
+          </div>
+        </div>
         <KpiCard
           label="ステータス"
           value={statusLabel}
-          color={status?.tradingHalted || status?.manuallyStopped ? 'text-accent-red' : 'text-accent-green'}
+          color={
+            status?.tradingHalted || status?.manuallyStopped
+              ? "text-accent-red"
+              : "text-accent-green"
+          }
         />
       </div>
 
@@ -94,14 +109,18 @@ function Dashboard() {
             ticker={ticker}
             orderbook={orderbook}
             connectionState={connectionState}
-            currencyPair={currentSymbol?.currencyPair?.replace('_', '/')}
+            currencyPair={currentSymbol?.currencyPair?.replace("_", "/")}
           />
           <CandlestickChart symbolId={symbolId} />
           <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">戦略インサイト</p>
-                <h2 className="mt-2 text-xl font-semibold text-white">LLM判断理由</h2>
+                <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">
+                  戦略インサイト
+                </p>
+                <h2 className="mt-2 text-xl font-semibold text-white">
+                  LLM判断理由
+                </h2>
               </div>
               <Link
                 to="/history"
@@ -143,5 +162,5 @@ function Dashboard() {
         </aside>
       </div>
     </AppFrame>
-  )
+  );
 }
