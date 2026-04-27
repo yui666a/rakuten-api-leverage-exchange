@@ -87,6 +87,15 @@ type EventDrivenPipeline struct {
 	indicatorPeriods  entity.IndicatorConfig
 	bbSqueezeLookback int
 
+	// primaryInterval / higherTFInterval drive the LiveSource, the
+	// IndicatorHandler, and every per-bar handler that needs to know which
+	// timeframe the pipeline is operating on. Sourced from the strategy
+	// profile so a profile tuned for PT5M can run the live pipeline on PT5M
+	// without touching code. Defaults to PT15M / PT1H (the legacy LTC
+	// hardcode) when the config leaves them empty.
+	primaryInterval  string
+	higherTFInterval string
+
 	// latestIndicators caches the most recent IndicatorEvent payload so
 	// the decision recorder's StanceProvider can re-resolve stance without
 	// reaching into the strategy's internal state. Updated by a side
@@ -150,6 +159,16 @@ type EventDrivenPipelineConfig struct {
 	// The pipeline shares this resolver with the StrategyEngine wired in
 	// composition.go, so override-driven stance changes apply consistently.
 	StanceResolver PipelineStanceResolver
+
+	// PrimaryInterval is the timeframe the strategy operates on. Mirrors the
+	// strategy profile's primary period (e.g. "PT15M" for LTC, "PT5M" for
+	// ETH). Empty string falls back to "PT15M" so existing callers stay
+	// bit-identical without explicitly setting it.
+	PrimaryInterval string
+
+	// HigherTFInterval is the optional confirmation timeframe (used by the
+	// HTF gate inside StrategyEngine). Empty falls back to "PT1H".
+	HigherTFInterval string
 }
 
 func NewEventDrivenPipeline(
@@ -187,7 +206,29 @@ func NewEventDrivenPipeline(
 		decisionLogRepo:    cfg.DecisionLogRepo,
 		candlestickFetcher: cfg.CandlestickFetcher,
 		stanceResolver:     cfg.StanceResolver,
+		primaryInterval:    primaryIntervalOrDefault(cfg.PrimaryInterval),
+		higherTFInterval:   higherTFIntervalOrDefault(cfg.HigherTFInterval),
 	}
+}
+
+// primaryIntervalOrDefault returns the configured primary interval, falling
+// back to the legacy LTC PT15M default when the field is left empty so
+// callers that have not yet plumbed a profile-driven value through stay
+// bit-identical.
+func primaryIntervalOrDefault(s string) string {
+	if s == "" {
+		return "PT15M"
+	}
+	return s
+}
+
+// higherTFIntervalOrDefault mirrors primaryIntervalOrDefault for the
+// optional confirmation timeframe.
+func higherTFIntervalOrDefault(s string) string {
+	if s == "" {
+		return "PT1H"
+	}
+	return s
 }
 
 // Start begins the event-driven trading pipeline.
@@ -309,17 +350,28 @@ func (p *EventDrivenPipeline) SwitchSymbol(symbolID int64, tradeAmount float64, 
 }
 
 // seedCandleBuilderFromMinutes pulls PT1M candles covering the current
-// PT15M window and folds them into the LiveSource's CandleBuilder so the
-// first emit after a restart contains the *whole* bar's OHLC, not just
-// post-restart ticks. Best-effort: any error path leaves the builder in
-// its legacy state (next live tick will initialise it from the tick).
+// primary-interval window and folds them into the LiveSource's
+// CandleBuilder so the first emit after a restart contains the *whole*
+// bar's OHLC, not just post-restart ticks. Best-effort: any error path
+// leaves the builder in its legacy state (next live tick will initialise
+// it from the tick).
+//
+// PT1M is used as the universal probe regardless of the primary interval —
+// we just truncate `now` to the primary interval boundary to find the
+// in-progress bar. For sub-minute primaries this would degrade (and the
+// venue does not offer those), so the fetch is skipped when the configured
+// interval is not a clean multiple of one minute.
 func (p *EventDrivenPipeline) seedCandleBuilderFromMinutes(ctx context.Context, symbolID int64, liveSource *live.LiveSource) {
 	if p.candlestickFetcher == nil {
 		return
 	}
+	primaryDur := liveIntervalToDuration(p.primaryInterval)
+	if primaryDur <= 0 || primaryDur < time.Minute {
+		return
+	}
 	now := time.Now().UTC()
-	periodStart := now.Truncate(15 * time.Minute)
-	// Pull a 16-minute window starting at the period boundary so we never
+	periodStart := now.Truncate(primaryDur)
+	// Pull from the period boundary up to one minute past now so we never
 	// miss the first PT1M bar even if the venue is a few seconds behind.
 	from := periodStart.UnixMilli()
 	to := now.Add(time.Minute).UnixMilli()
@@ -336,6 +388,7 @@ func (p *EventDrivenPipeline) seedCandleBuilderFromMinutes(ctx context.Context, 
 	if folded > 0 {
 		slog.Info("event-pipeline: seeded CandleBuilder from PT1M",
 			"symbolID", symbolID,
+			"primaryInterval", p.primaryInterval,
 			"foldedMinutes", folded,
 			"periodStart", periodStart.Format(time.RFC3339),
 		)
@@ -527,7 +580,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	}
 
 	// Create LiveSource for tick-to-candle conversion.
-	liveSource := live.NewLiveSource(snap.symbolID, "PT15M")
+	liveSource := live.NewLiveSource(snap.symbolID, p.primaryInterval)
 
 	// Bootstrap the in-progress 15-min bar from PT1M candles so the first
 	// emit after a restart has correct OHLC instead of just post-restart
@@ -560,7 +613,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 
 	// TickRiskHandler: SL/TP on every tick (priority 15).
 	tickRiskHandler := backtest.NewTickRiskHandler(
-		"PT15M",
+		p.primaryInterval,
 		executor,
 		snap.stopLossPercent,
 		snap.takeProfitPercent,
@@ -568,7 +621,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
-	indicatorHandler := backtest.NewIndicatorHandler("PT15M", "PT1H", 500)
+	indicatorHandler := backtest.NewIndicatorHandler(p.primaryInterval, p.higherTFInterval, 500)
 	// PR-D: profile-driven indicator periods + BB squeeze lookback. The
 	// backtest path has been on this since PR-B/C; live now uses the same
 	// knob set so the strategy sees identical indicator values whether it
@@ -585,7 +638,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	// first live bar already has SMA/RSI/MACD/BB/ATR populated. Defaults
 	// need 52 bars (Ichimoku Senkou B); 64 gives margin without making the
 	// API call expensive.
-	p.seedIndicatorHistory(ctx, snap.symbolID, "PT15M", indicatorHandler, 64)
+	p.seedIndicatorHistory(ctx, snap.symbolID, p.primaryInterval, indicatorHandler, 64)
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
 
 	// StrategyHandler: signal generation from indicators (priority 20).
@@ -629,7 +682,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		recorder := decisionlog.NewRecorder(p.decisionLogRepo, decisionlog.RecorderConfig{
 			SymbolID:        snap.symbolID,
 			CurrencyPair:    p.currencyPair,
-			PrimaryInterval: "PT15M",
+			PrimaryInterval: p.primaryInterval,
 			StanceProvider: func() string {
 				return p.currentStance(ctx)
 			},
