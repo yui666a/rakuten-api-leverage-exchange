@@ -19,7 +19,7 @@ type Config struct {
 
 type TradingConfig struct {
 	SymbolID             int64   // 取引対象シンボルID（デフォルト: 7 = BTC_JPY）
-	TradeAmount          float64 // 1回の注文金額（円）
+	TradeAmount          float64 // 1回の注文数量（base currency 単位、例: LTC なら LTC 枚数）。fixed-amount モードではこの値が proposal.Amount に直接渡る。profile の position_sizing.mode が "risk_pct" 等のときは sizer に上書きされる。
 	PipelineIntervalSec  int     // パイプライン評価間隔（秒）
 	StateSyncIntervalSec int     // ポジション・残高同期間隔（秒）
 	MinConfidence        float64 // シグナル最小信頼度（0.0–1.0, デフォルト 0.3）
