@@ -21,6 +21,14 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
 )
 
+// PipelineStanceResolver is the narrow port the pipeline needs to expose
+// the strategy's stance to the decision recorder. It mirrors the subset of
+// usecase.StanceResolver used here so the pipeline does not pull the whole
+// resolver type into its API.
+type PipelineStanceResolver interface {
+	Resolve(ctx context.Context, indicators entity.IndicatorSet, lastPrice float64) usecase.StanceResult
+}
+
 // EventDrivenPipeline replaces the polling-based TradingPipeline with an
 // EventEngine-driven architecture. LiveSource converts real-time tickers into
 // TickEvent/CandleEvent, and the EventBus dispatches them through the handler
@@ -37,6 +45,7 @@ type EventDrivenPipeline struct {
 	// Existing dependencies (injected at construction)
 	riskMgr          *usecase.RiskManager
 	strategy         port.Strategy
+	stanceResolver   PipelineStanceResolver
 	marketDataSvc    *usecase.MarketDataService
 	orderClient      repository.OrderClient
 	symbolFetcher    repository.SymbolFetcher
@@ -77,6 +86,18 @@ type EventDrivenPipeline struct {
 	// the same lookbacks the strategy was tuned for.
 	indicatorPeriods  entity.IndicatorConfig
 	bbSqueezeLookback int
+
+	// latestIndicators caches the most recent IndicatorEvent payload so
+	// the decision recorder's StanceProvider can re-resolve stance without
+	// reaching into the strategy's internal state. Updated by a side
+	// handler registered on EventTypeIndicator. Guarded by indicatorMu so
+	// the recorder (also on the bus) and the tick path can read it
+	// concurrently with the indicator-handler write. Empty
+	// (hasLatestIndicators=false) until the first IndicatorEvent fires.
+	indicatorMu          sync.RWMutex
+	latestIndicators     entity.IndicatorSet
+	latestLastPrice      float64
+	hasLatestIndicators  bool
 
 	// sleepFn is used by syncState for retry backoff (test-injectable).
 	sleepFn func(time.Duration)
@@ -119,6 +140,16 @@ type EventDrivenPipelineConfig struct {
 	// first emitted bar after a restart has correct OHLC. nil keeps the
 	// legacy behaviour where the first bar only reflects post-restart ticks.
 	CandlestickFetcher repository.CandlestickFetcher
+
+	// StanceResolver, when non-nil, is invoked by the decision recorder's
+	// StanceProvider so every persisted row records the live stance the
+	// strategy is currently classifying against (TREND_FOLLOW / CONTRARIAN /
+	// BREAKOUT / HOLD), instead of the placeholder UNKNOWN.
+	//
+	// nil disables stance reporting; the recorder falls back to "UNKNOWN".
+	// The pipeline shares this resolver with the StrategyEngine wired in
+	// composition.go, so override-driven stance changes apply consistently.
+	StanceResolver PipelineStanceResolver
 }
 
 func NewEventDrivenPipeline(
@@ -155,6 +186,7 @@ func NewEventDrivenPipeline(
 		bbSqueezeLookback:  cfg.BBSqueezeLookback,
 		decisionLogRepo:    cfg.DecisionLogRepo,
 		candlestickFetcher: cfg.CandlestickFetcher,
+		stanceResolver:     cfg.StanceResolver,
 	}
 }
 
@@ -362,6 +394,49 @@ func (p *EventDrivenPipeline) seedIndicatorHistory(
 	)
 }
 
+// indicatorEventTap is a 0-output EventBus handler that copies every
+// IndicatorEvent's primary snapshot into the pipeline's
+// latestIndicators / latestLastPrice cache. The decision recorder's
+// StanceProvider reads from that cache, so by registering this tap before
+// the recorder (priority 25 vs recorder's 99 on EventTypeIndicator) we
+// guarantee the recorder sees the same indicators it is about to record.
+type indicatorEventTap struct {
+	pipeline *EventDrivenPipeline
+}
+
+func (t *indicatorEventTap) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
+	ev, ok := event.(entity.IndicatorEvent)
+	if !ok {
+		return nil, nil
+	}
+	t.pipeline.indicatorMu.Lock()
+	t.pipeline.latestIndicators = ev.Primary
+	t.pipeline.latestLastPrice = ev.LastPrice
+	t.pipeline.hasLatestIndicators = true
+	t.pipeline.indicatorMu.Unlock()
+	return nil, nil
+}
+
+// currentStance returns the stance the resolver classifies for the most
+// recently observed IndicatorEvent. Returns "UNKNOWN" when the resolver is
+// not wired or no indicator event has fired yet (e.g. immediately after a
+// restart, before the first PT15M close).
+func (p *EventDrivenPipeline) currentStance(ctx context.Context) string {
+	if p.stanceResolver == nil {
+		return "UNKNOWN"
+	}
+	p.indicatorMu.RLock()
+	if !p.hasLatestIndicators {
+		p.indicatorMu.RUnlock()
+		return "UNKNOWN"
+	}
+	indicators := p.latestIndicators
+	lastPrice := p.latestLastPrice
+	p.indicatorMu.RUnlock()
+	res := p.stanceResolver.Resolve(ctx, indicators, lastPrice)
+	return string(res.Stance)
+}
+
 // liveIntervalToDuration mirrors live.parseInterval but kept private here
 // so cmd doesn't reach into the live package's unexported helpers.
 func liveIntervalToDuration(s string) time.Duration {
@@ -543,11 +618,21 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	}
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
 
+	// indicator tap: caches every IndicatorEvent so the recorder's
+	// StanceProvider (and the tick-driven order rows) can re-resolve the
+	// current stance without reaching back through the strategy. Priority
+	// 25 places this between the StrategyHandler (20) and the recorder
+	// (99) so the recorder sees the snapshot it's about to persist.
+	bus.Register(entity.EventTypeIndicator, 25, &indicatorEventTap{pipeline: p})
+
 	if p.decisionLogRepo != nil {
 		recorder := decisionlog.NewRecorder(p.decisionLogRepo, decisionlog.RecorderConfig{
 			SymbolID:        snap.symbolID,
 			CurrencyPair:    p.currencyPair,
 			PrimaryInterval: "PT15M",
+			StanceProvider: func() string {
+				return p.currentStance(ctx)
+			},
 		})
 		bus.Register(entity.EventTypeIndicator, 99, recorder)
 		bus.Register(entity.EventTypeSignal, 99, recorder)
@@ -555,7 +640,8 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		bus.Register(entity.EventTypeRejected, 99, recorder)
 		bus.Register(entity.EventTypeOrder, 99, recorder)
 		slog.Info("event-pipeline: decision recorder attached",
-			"symbolID", snap.symbolID, "currencyPair", p.currencyPair)
+			"symbolID", snap.symbolID, "currencyPair", p.currencyPair,
+			"stanceResolverWired", p.stanceResolver != nil)
 	}
 
 	engine := eventengine.NewEventEngine(bus)

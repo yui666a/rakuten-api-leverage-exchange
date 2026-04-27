@@ -171,6 +171,7 @@ func main() {
 			BBSqueezeLookback:  liveProfileBBSqueezeLookback(liveProfile),
 			DecisionLogRepo:    decisionLogRepo,
 			CandlestickFetcher: restClient,
+			StanceResolver:     stanceResolver,
 		},
 		restClient,
 		restClient, // SymbolFetcher
