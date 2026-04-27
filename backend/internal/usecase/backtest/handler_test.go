@@ -483,3 +483,96 @@ func TestIndicatorHandler_NilBookSourceLeavesFieldsUnset(t *testing.T) {
 			indEv.Primary.Microprice, indEv.Primary.OFIShort, indEv.Primary.OFILong)
 	}
 }
+
+// TestIndicatorHandler_SeedPrimary_FillsIndicatorsOnFirstLiveCandle pins down
+// the live-restart fix: after SeedPrimary primes enough historical PT15M
+// bars (defaults need 52 for Ichimoku Senkou B, the slowest period), the
+// very first CandleEvent emitted by the live source must already produce an
+// IndicatorSet with SMA/RSI/MACD populated, instead of the all-nil
+// indicators that previously stranded every bar at HOLD for hours.
+func TestIndicatorHandler_SeedPrimary_FillsIndicatorsOnFirstLiveCandle(t *testing.T) {
+	h := NewIndicatorHandler("PT15M", "", 500)
+
+	const symbolID int64 = 10
+	const seedCount = 60 // > Ichimoku SenkouB (52) so every default-period indicator can resolve
+	const intervalMs int64 = 15 * 60 * 1000
+	startMs := int64(1_700_000_000_000)
+
+	seed := make([]entity.Candle, seedCount)
+	for i := 0; i < seedCount; i++ {
+		// Slight upward drift so SMAShort != SMALong and the resolver can
+		// classify TREND_FOLLOW; values themselves don't matter, only that
+		// the indicator math has enough samples to produce non-nil output.
+		price := 8000.0 + float64(i)*1.5
+		seed[i] = entity.Candle{
+			Open:   price,
+			High:   price + 5,
+			Low:    price - 5,
+			Close:  price + 1,
+			Volume: 1,
+			Time:   startMs + int64(i)*intervalMs,
+		}
+	}
+	h.SeedPrimary(symbolID, seed)
+
+	live := entity.Candle{
+		Open: 8050, High: 8060, Low: 8045, Close: 8055,
+		Volume: 1,
+		Time:   startMs + int64(seedCount)*intervalMs,
+	}
+	out, err := h.Handle(context.Background(), entity.CandleEvent{
+		SymbolID:  symbolID,
+		Interval:  "PT15M",
+		Candle:    live,
+		Timestamp: live.Time,
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 indicator event, got %d", len(out))
+	}
+	indEv := out[0].(entity.IndicatorEvent)
+	if indEv.Primary.SMAShort == nil {
+		t.Error("SMAShort must be non-nil after seeding ~30 bars (was nil)")
+	}
+	if indEv.Primary.SMALong == nil {
+		t.Error("SMALong must be non-nil after seeding ~30 bars (was nil)")
+	}
+	if indEv.Primary.RSI == nil {
+		t.Error("RSI must be non-nil after seeding ~30 bars (was nil)")
+	}
+	if indEv.Primary.MACDLine == nil {
+		t.Error("MACDLine must be non-nil after seeding ~30 bars (was nil)")
+	}
+	if indEv.Primary.BBUpper == nil {
+		t.Error("BBUpper must be non-nil after seeding ~30 bars (was nil)")
+	}
+	if indEv.Primary.ATR == nil {
+		t.Error("ATR must be non-nil after seeding ~30 bars (was nil)")
+	}
+}
+
+// TestIndicatorHandler_SeedPrimary_NopOnEmpty guards against a no-op call
+// path corrupting the buffer state.
+func TestIndicatorHandler_SeedPrimary_NopOnEmpty(t *testing.T) {
+	h := NewIndicatorHandler("PT15M", "", 500)
+	h.SeedPrimary(7, nil)
+	h.SeedPrimary(7, []entity.Candle{})
+
+	out, err := h.Handle(context.Background(), entity.CandleEvent{
+		SymbolID: 7, Interval: "PT15M",
+		Candle:    entity.Candle{Open: 100, High: 101, Low: 99, Close: 100, Time: 1_000, Volume: 1},
+		Timestamp: 1_000,
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 indicator event, got %d", len(out))
+	}
+	indEv := out[0].(entity.IndicatorEvent)
+	if indEv.Primary.SMAShort != nil {
+		t.Errorf("SMAShort should still be nil after no-op seed + 1 candle, got %v", *indEv.Primary.SMAShort)
+	}
+}

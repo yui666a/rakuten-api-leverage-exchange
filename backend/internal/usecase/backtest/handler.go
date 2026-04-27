@@ -195,6 +195,39 @@ func NewIndicatorHandler(primaryInterval, higherTFInterval string, bufferSize in
 	}
 }
 
+// SeedPrimary primes the primary-interval candle buffer for symbolID with
+// historical bars. Live mode uses this at pipeline start so the very first
+// CandleEvent emitted from the WebSocket already has enough history to
+// compute SMA / RSI / MACD / BB / ATR — without it, those indicators stay
+// nil for ~20-26 bars and every decision logs as HOLD.
+//
+// candles must be PT-PrimaryInterval bars ordered oldest-first. Bars are
+// appended in order and capped at BufferSize. Calling SeedPrimary after
+// CandleEvents have already arrived is allowed but unusual; it appends as if
+// the seeded bars came in next, which would corrupt indicator paths — so
+// callers should seed before subscribing to live ticks.
+//
+// SeedHigherTF mirrors this for the higher-TF buffer.
+func (h *IndicatorHandler) SeedPrimary(symbolID int64, candles []entity.Candle) {
+	if len(candles) == 0 {
+		return
+	}
+	for _, c := range candles {
+		h.primaryCandles[symbolID] = appendCapped(h.primaryCandles[symbolID], c, h.BufferSize)
+	}
+}
+
+// SeedHigherTF primes the higher-TF candle buffer for symbolID. See
+// SeedPrimary for the contract.
+func (h *IndicatorHandler) SeedHigherTF(symbolID int64, candles []entity.Candle) {
+	if len(candles) == 0 {
+		return
+	}
+	for _, c := range candles {
+		h.higherCandles[symbolID] = appendCapped(h.higherCandles[symbolID], c, h.BufferSize)
+	}
+}
+
 // SetIndicatorPeriods overrides every indicator lookback used inside
 // calculateIndicatorSet — SMA / EMA / RSI / MACD / BB / ATR / VolumeSMA /
 // ADX / Stochastics / StochRSI / Donchian / OBVSlope / CMF / Ichimoku.
