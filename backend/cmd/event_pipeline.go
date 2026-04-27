@@ -310,6 +310,81 @@ func (p *EventDrivenPipeline) seedCandleBuilderFromMinutes(ctx context.Context, 
 	}
 }
 
+// seedIndicatorHistory pulls historical primary-interval candles and folds
+// them into the IndicatorHandler's buffer so the very first CandleEvent
+// emitted from the WebSocket already produces a fully-populated
+// IndicatorSet. Without this, SMA(50) / Ichimoku(52) / MACD signal stay nil
+// for many bars after every restart and the strategy is forced into HOLD —
+// which is exactly the failure mode the decision_log table surfaced
+// (every row UNKNOWN/HOLD/SKIPPED/NOOP).
+//
+// Best-effort: any error path leaves the buffer empty and falls back to
+// "fill indicators as live bars close" (the legacy behaviour).
+//
+// barsToSeed should comfortably exceed the slowest indicator period in use.
+// 64 covers Ichimoku Senkou B (52) + MACD signal warm-up (~9) with margin.
+func (p *EventDrivenPipeline) seedIndicatorHistory(
+	ctx context.Context,
+	symbolID int64,
+	primaryInterval string,
+	indicatorHandler *backtest.IndicatorHandler,
+	barsToSeed int,
+) {
+	if p.candlestickFetcher == nil || indicatorHandler == nil || barsToSeed <= 0 {
+		return
+	}
+	intervalDur := liveIntervalToDuration(primaryInterval)
+	if intervalDur <= 0 {
+		return
+	}
+	now := time.Now().UTC()
+	periodStart := now.Truncate(intervalDur)
+	from := periodStart.Add(-time.Duration(barsToSeed) * intervalDur).UnixMilli()
+	// Stop one millisecond before the *current* bar start so we never feed
+	// the in-progress bar twice (the live source will close it from ticks).
+	to := periodStart.UnixMilli() - 1
+	resp, err := p.candlestickFetcher.GetCandlestick(ctx, symbolID, primaryInterval, &from, &to)
+	if err != nil {
+		slog.Warn("event-pipeline: indicator history fetch failed; first bar will see all-nil indicators",
+			"symbolID", symbolID, "interval", primaryInterval, "error", err)
+		return
+	}
+	if resp == nil || len(resp.Candlesticks) == 0 {
+		return
+	}
+	indicatorHandler.SeedPrimary(symbolID, resp.Candlesticks)
+	slog.Info("event-pipeline: seeded indicator history",
+		"symbolID", symbolID,
+		"interval", primaryInterval,
+		"bars", len(resp.Candlesticks),
+		"oldestTime", resp.Candlesticks[0].Time,
+		"newestTime", resp.Candlesticks[len(resp.Candlesticks)-1].Time,
+	)
+}
+
+// liveIntervalToDuration mirrors live.parseInterval but kept private here
+// so cmd doesn't reach into the live package's unexported helpers.
+func liveIntervalToDuration(s string) time.Duration {
+	switch s {
+	case "PT1M":
+		return time.Minute
+	case "PT5M":
+		return 5 * time.Minute
+	case "PT15M":
+		return 15 * time.Minute
+	case "PT30M":
+		return 30 * time.Minute
+	case "PT1H":
+		return time.Hour
+	case "PT4H":
+		return 4 * time.Hour
+	case "P1D":
+		return 24 * time.Hour
+	default:
+		return 0
+	}
+}
+
 // loadSymbolMeta fetches baseStepAmount / minOrderAmount from the API.
 // Must be called with mu held.
 func (p *EventDrivenPipeline) loadSymbolMeta(ctx context.Context, symbolID int64) {
@@ -431,6 +506,11 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		// PR-J: feed Microprice / OFI from the live in-memory book cache.
 		indicatorHandler.SetBookSource(p.marketDataSvc, 10_000, 60_000, 5)
 	}
+	// Prime the candle history before subscribing to the WS so the very
+	// first live bar already has SMA/RSI/MACD/BB/ATR populated. Defaults
+	// need 52 bars (Ichimoku Senkou B); 64 gives margin without making the
+	// API call expensive.
+	p.seedIndicatorHistory(ctx, snap.symbolID, "PT15M", indicatorHandler, 64)
 	bus.Register(entity.EventTypeCandle, 10, indicatorHandler)
 
 	// StrategyHandler: signal generation from indicators (priority 20).
