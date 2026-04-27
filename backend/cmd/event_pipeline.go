@@ -10,6 +10,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/risk"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/live"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
@@ -61,10 +62,15 @@ type EventDrivenPipeline struct {
 	minOrderAmount    float64
 	minConfidence     float64
 	stateSyncInterval time.Duration
-	stopLossPercent       float64
-	takeProfitPercent     float64
-	stopLossATRMultiplier float64
-	trailingATRMultiplier float64
+	// riskPolicy is the single source of truth for SL / TP / trailing
+	// distance behaviour. Built from the strategy profile (or the env
+	// fallback) by risk.FromProfile and validated at startup, so a
+	// missing or misconfigured profile fails before runEventLoop subscribes
+	// to ticks. The legacy float64 fields (stopLossPercent etc.) and the
+	// SetATRMultipliers setter that used to glue them together are gone —
+	// the policy is locked at construction so "live forgot to call
+	// SetX" is no longer possible.
+	riskPolicy           risk.RiskPolicy
 	sorConfig            sor.Config
 	circuitBreakerConfig circuitbreaker.Config
 	staleCheckIntervalMs int64
@@ -130,18 +136,13 @@ type EventDrivenPipelineConfig struct {
 	StateSyncInterval    time.Duration
 	TradeAmount          float64
 	MinConfidence        float64
-	StopLossPercent      float64
-	TakeProfitPercent    float64
-	// StopLossATRMultiplier mirrors profile.Risk.StopLossATRMultiplier so the
-	// live TickRiskHandler computes the SL distance the same way the backtest
-	// runner does (max of percent- and ATR-derived distances). 0 keeps the
-	// legacy percent-only behaviour.
-	StopLossATRMultiplier float64
-	// TrailingATRMultiplier mirrors profile.Risk.TrailingATRMultiplier so the
-	// live trailing distance matches the value the strategy was tuned with.
-	// 0 keeps the legacy percent-only behaviour. Wiring this through closes
-	// the gap that was silently disabling profile-driven trailing in live.
-	TrailingATRMultiplier float64
+	// RiskPolicy is the strategy-level SL / TP / trailing policy. Build
+	// it via risk.FromProfile(profile, envSL, envTP) and call
+	// policy.Validate() at startup so a misconfigured profile fails fast
+	// instead of producing silent HOLD-only behaviour. The constructor
+	// asserts the policy is non-zero (StopLoss.Percent > 0) so callers
+	// cannot wire an empty zero-value by accident.
+	RiskPolicy           risk.RiskPolicy
 	SOR                  sor.Config
 	CircuitBreaker       circuitbreaker.Config
 	StaleCheckIntervalMs int64
@@ -218,10 +219,7 @@ func NewEventDrivenPipeline(
 		tradeAmount:       cfg.TradeAmount,
 		minConfidence:     cfg.MinConfidence,
 		stateSyncInterval: cfg.StateSyncInterval,
-		stopLossPercent:       cfg.StopLossPercent,
-		takeProfitPercent:     cfg.TakeProfitPercent,
-		stopLossATRMultiplier: cfg.StopLossATRMultiplier,
-		trailingATRMultiplier: cfg.TrailingATRMultiplier,
+		riskPolicy:           cfg.RiskPolicy,
 		sorConfig:            cfg.SOR,
 		circuitBreakerConfig: cfg.CircuitBreaker,
 		staleCheckIntervalMs: cfg.StaleCheckIntervalMs,
@@ -243,6 +241,28 @@ func NewEventDrivenPipeline(
 		higherTFInterval:   higherTFIntervalOrDefault(cfg.HigherTFInterval),
 		positionSizing:     cfg.PositionSizing,
 		initialBalance:     cfg.InitialBalance,
+	}
+}
+
+// policyView translates a risk.RiskPolicy into the flat, package-private
+// view backtest.NewTickRiskHandlerWithPolicy consumes. It lives here
+// (in cmd/) rather than in usecase/backtest so the latter can stay free
+// of the domain/risk import — keeping the dependency direction
+// domain ← usecase ← cmd as Clean Architecture demands.
+func policyView(p risk.RiskPolicy) backtest.PolicyView {
+	mode := backtest.TrailingModeDisabled
+	switch p.Trailing.Mode {
+	case risk.TrailingModeATR:
+		mode = backtest.TrailingModeATR
+	case risk.TrailingModePercent:
+		mode = backtest.TrailingModePercent
+	}
+	return backtest.PolicyView{
+		StopLossPercent:       p.StopLoss.Percent,
+		StopLossATRMultiplier: p.StopLoss.ATRMultiplier,
+		TakeProfitPercent:     p.TakeProfit.Percent,
+		TrailingMode:          mode,
+		TrailingATRMultiplier: p.Trailing.ATRMultiplier,
 	}
 }
 
@@ -578,28 +598,22 @@ func (p *EventDrivenPipeline) loadSymbolMeta(ctx context.Context, symbolID int64
 
 // eventSnapshot is a copy of config fields taken under lock.
 type eventSnapshot struct {
-	symbolID              int64
-	tradeAmount           float64
-	baseStepAmount        float64
-	minOrderAmount        float64
-	minConfidence         float64
-	stopLossPercent       float64
-	takeProfitPercent     float64
-	stopLossATRMultiplier float64
-	trailingATRMultiplier float64
+	symbolID       int64
+	tradeAmount    float64
+	baseStepAmount float64
+	minOrderAmount float64
+	minConfidence  float64
+	riskPolicy     risk.RiskPolicy
 }
 
 func (p *EventDrivenPipeline) snapshotLocked() eventSnapshot {
 	return eventSnapshot{
-		symbolID:              p.symbolID,
-		tradeAmount:           p.tradeAmount,
-		baseStepAmount:        p.baseStepAmount,
-		minOrderAmount:        p.minOrderAmount,
-		minConfidence:         p.minConfidence,
-		stopLossPercent:       p.stopLossPercent,
-		takeProfitPercent:     p.takeProfitPercent,
-		stopLossATRMultiplier: p.stopLossATRMultiplier,
-		trailingATRMultiplier: p.trailingATRMultiplier,
+		symbolID:       p.symbolID,
+		tradeAmount:    p.tradeAmount,
+		baseStepAmount: p.baseStepAmount,
+		minOrderAmount: p.minOrderAmount,
+		minConfidence:  p.minConfidence,
+		riskPolicy:     p.riskPolicy,
 	}
 }
 
@@ -651,21 +665,17 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus := eventengine.NewEventBus()
 
 	// TickRiskHandler: SL/TP on every tick (priority 15).
-	tickRiskHandler := backtest.NewTickRiskHandler(
+	//
+	// The handler is constructed with the policy locked in, so there is
+	// no follow-up SetX call the live wiring could forget. Compare with
+	// the previous PR (#TBD) which had to add SetATRMultipliers to fix a
+	// silent gap — the constructor signature now makes that gap a
+	// compile error.
+	tickRiskHandler := backtest.NewTickRiskHandlerWithPolicy(
 		p.primaryInterval,
 		executor,
-		snap.stopLossPercent,
-		snap.takeProfitPercent,
+		policyView(snap.riskPolicy),
 	)
-	// Mirror the backtest runner's SetATRMultipliers wiring (runner.go:210)
-	// so profile.Risk.{StopLossATRMultiplier,TrailingATRMultiplier} actually
-	// shape live exits. Skipping this call left the strategy's ATR-based
-	// trailing distance silently ignored — every live trailing decision fell
-	// back to the percent path even when the profile asked for ATR. Profiles
-	// with multiplier == 0 retain the legacy percent-only behaviour because
-	// SetATRMultipliers stores the values verbatim and trailingDistance only
-	// engages the ATR branch when multiplier > 0 and currentATR > 0.
-	tickRiskHandler.SetATRMultipliers(snap.stopLossATRMultiplier, snap.trailingATRMultiplier)
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
@@ -705,7 +715,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	riskHandler := &backtest.RiskHandler{
 		RiskManager:     p.riskMgr,
 		TradeAmount:     snap.tradeAmount,
-		StopLossPercent: snap.stopLossPercent,
+		StopLossPercent: snap.riskPolicy.StopLoss.Percent,
 		MinConfidence:   snap.minConfidence,
 	}
 	if ps := p.positionSizing; ps != nil && ps.Mode != "" && ps.Mode != "fixed" {

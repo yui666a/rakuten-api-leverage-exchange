@@ -24,13 +24,26 @@ type Position struct {
 	Leverage        float64        `json:"leverage"`
 	FloatingProfit  float64        `json:"floatingProfit"`
 	Profit          float64        `json:"profit"`
-	BestPrice       float64        `json:"bestPrice"`
 	OrderID         int64          `json:"orderId"`
 	CreatedAt       int64          `json:"createdAt"`
 }
 
+// Note on the dropped BestPrice field:
+//
+// Earlier versions exposed the venue-side "bestPrice" the Rakuten API
+// includes on every position. It was a pure pass-through — no part of
+// the trading engine read it — and the field caused real harm: it sat
+// next to the Price/EntryPrice fields and looked like an authoritative
+// trailing-stop reference, but the actual high-water-mark used for
+// trailing exits is tracked entirely inside TickRiskHandler. Removing
+// the field removes the ambiguity. The Rakuten REST response is parsed
+// loosely enough (UnmarshalJSON below) that ignoring "bestPrice" does
+// not break decoding.
+
 // Rakuten API may return numeric fields as JSON strings (e.g. "8698.2") for some symbols.
-// Accept both string and number forms.
+// Accept both string and number forms. The "bestPrice" field that the
+// venue includes is intentionally not decoded — see the type-level
+// comment above.
 func (p *Position) UnmarshalJSON(data []byte) error {
 	type raw struct {
 		ID              int64          `json:"id"`
@@ -43,7 +56,6 @@ func (p *Position) UnmarshalJSON(data []byte) error {
 		Leverage        flexFloat      `json:"leverage"`
 		FloatingProfit  flexFloat      `json:"floatingProfit"`
 		Profit          flexFloat      `json:"profit"`
-		BestPrice       flexFloat      `json:"bestPrice"`
 		OrderID         int64          `json:"orderId"`
 		CreatedAt       int64          `json:"createdAt"`
 	}
@@ -62,7 +74,6 @@ func (p *Position) UnmarshalJSON(data []byte) error {
 		Leverage:        float64(r.Leverage),
 		FloatingProfit:  float64(r.FloatingProfit),
 		Profit:          float64(r.Profit),
-		BestPrice:       float64(r.BestPrice),
 		OrderID:         r.OrderID,
 		CreatedAt:       r.CreatedAt,
 	}
