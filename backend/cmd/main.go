@@ -172,6 +172,8 @@ func main() {
 			DecisionLogRepo:    decisionLogRepo,
 			CandlestickFetcher: restClient,
 			StanceResolver:     stanceResolver,
+			PrimaryInterval:    livePrimaryIntervalFromEnv(),
+			HigherTFInterval:   liveHigherTFIntervalFromEnv(),
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -459,6 +461,26 @@ func liveProfileBBSqueezeLookback(p *entity.StrategyProfile) int {
 		return 0
 	}
 	return p.StanceRules.BBSqueezeLookback
+}
+
+// livePrimaryIntervalFromEnv reads $LIVE_PRIMARY_INTERVAL with a PT15M
+// fallback. Until profile JSONs declare their primary timeframe natively,
+// an env var is the smallest knob that lets a PT5M-tuned profile run the
+// live pipeline on PT5M without a code change.
+func livePrimaryIntervalFromEnv() string {
+	if v := strings.TrimSpace(os.Getenv("LIVE_PRIMARY_INTERVAL")); v != "" {
+		return v
+	}
+	return "" // empty → pipeline applies the PT15M legacy default
+}
+
+// liveHigherTFIntervalFromEnv mirrors livePrimaryIntervalFromEnv for the
+// optional confirmation timeframe, defaulting to PT1H via the pipeline.
+func liveHigherTFIntervalFromEnv() string {
+	if v := strings.TrimSpace(os.Getenv("LIVE_HIGHER_TF_INTERVAL")); v != "" {
+		return v
+	}
+	return ""
 }
 
 func startMarketRelay(
