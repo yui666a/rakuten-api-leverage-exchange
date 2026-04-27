@@ -1,8 +1,27 @@
 import { useState } from 'react'
 import type { DecisionLogItem } from '../lib/api'
+import { translateReason } from '../lib/decisionReasonI18n'
 import { DecisionDetailPanel } from './DecisionDetailPanel'
 
 type Props = { decisions: DecisionLogItem[] }
+
+const RISK_LABEL: Record<DecisionLogItem['risk']['outcome'], string> = {
+  APPROVED: '承認',
+  REJECTED: '却下',
+  SKIPPED: '対象外',
+}
+
+const BOOK_GATE_LABEL: Record<DecisionLogItem['bookGate']['outcome'], string> = {
+  ALLOWED: '通過',
+  VETOED: '拒否',
+  SKIPPED: '対象外',
+}
+
+const ORDER_LABEL: Record<DecisionLogItem['order']['outcome'], string> = {
+  FILLED: '約定',
+  FAILED: '失敗',
+  NOOP: '発注なし',
+}
 
 export function DecisionLogTable({ decisions }: Props) {
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -55,8 +74,9 @@ function Row({
   onClick: () => void
 }) {
   const bg = rowBackground(item)
-  const reason =
+  const rawReason =
     item.signal.reason || item.risk.reason || item.bookGate.reason || item.order.error || '—'
+  const reason = translateReason(rawReason)
   return (
     <>
       <tr className={`cursor-pointer border-t border-white/8 ${bg}`} onClick={onClick}>
@@ -67,17 +87,23 @@ function Row({
         <td className="px-4 py-3">{item.stance || '—'}</td>
         <td className="px-4 py-3 font-medium">{item.signal.action}</td>
         <td className="px-4 py-3 text-right">
-          {item.signal.action === 'HOLD' ? '—' : item.signal.confidence.toFixed(2)}
+          {item.signal.action === 'HOLD'
+            ? '—'
+            : `${(item.signal.confidence * 100).toFixed(1)}%`}
         </td>
-        <td className="px-4 py-3">{item.risk.outcome}</td>
-        <td className="px-4 py-3">{item.bookGate.outcome}</td>
-        <td className="px-4 py-3">{item.order.outcome}</td>
+        <td className="px-4 py-3">{RISK_LABEL[item.risk.outcome] ?? item.risk.outcome}</td>
+        <td className="px-4 py-3">
+          {BOOK_GATE_LABEL[item.bookGate.outcome] ?? item.bookGate.outcome}
+        </td>
+        <td className="px-4 py-3">{ORDER_LABEL[item.order.outcome] ?? item.order.outcome}</td>
         <td className="px-4 py-3 text-right">
           {item.order.outcome === 'NOOP'
             ? '—'
             : `${item.order.amount} @ ${item.order.price.toLocaleString('ja-JP')}`}
         </td>
-        <td className="max-w-[24rem] truncate px-4 py-3">{reason}</td>
+        <td className="max-w-[24rem] truncate px-4 py-3" title={rawReason}>
+          {reason}
+        </td>
       </tr>
       {expanded && (
         <tr className="border-t border-white/8 bg-white/3">
