@@ -576,24 +576,29 @@ type TickRiskExecutor interface {
 
 // TickRiskHandler evaluates SL/TP/TrailingStop on synthetic ticks.
 //
-// Trailing distance policy (PR-12):
-//   - TrailingATRMultiplier > 0 かつ currentATR > 0 → ATR × multiplier
-//   - それ以外 → EntryPrice × StopLossPercent / 100 （従来挙動）
-//   - 両方に値があるときは「より大きい距離（保守的＝早期決済を抑える）」を採用
+// Distance policy (driven by risk.RiskPolicy):
+//   - SL: max(entry × policy.StopLoss.Percent / 100, currentATR × policy.StopLoss.ATRMultiplier).
+//     The ATR branch only engages when the multiplier is > 0 and ATR is known.
+//   - TP: entry × policy.TakeProfit.Percent / 100.
+//   - Trailing: depends on policy.Trailing.Mode —
+//     Disabled → trailing path is skipped (no high-water-mark tracking, no
+//     trailing-driven exit);
+//     Percent → entry × policy.StopLoss.Percent / 100, identical to the legacy
+//     percent-only behaviour;
+//     ATR     → max(percent fallback, currentATR × Trailing.ATRMultiplier)
+//     so a stale / zero ATR cannot collapse the trailing distance to 0.
 //
-// StopLossATRMultiplier はエントリー時の静的 SL に反映される。TP/SL 判定に
-// 使うハード SL 価格をエントリー価格からの距離で計算する calcSLTP に
-// 流し込む設計にするため、現行の SL 計算も同等のポリシー（percent
-// フォールバック＋ ATR 上書き）で扱う。
+// The handler holds the policy by value (not pointer) so callers cannot
+// reach in and mutate distance knobs after construction — the only way a
+// distance changes is through ATR updates, which are scoped to the ATR
+// branch alone.
 type TickRiskHandler struct {
-	PrimaryInterval       string
-	Executor              TickRiskExecutor
-	StopLossPercent       float64
-	StopLossATRMultiplier float64 // >0 なら ATR×mult の大きい方を SL 距離として採用
-	TrailingATRMultiplier float64 // >0 ならトレイリング距離も ATR ベース
-	TakeProfitPercent     float64
-	highWaterMarks        map[int64]float64
-	currentATR            float64
+	PrimaryInterval string
+	Executor        TickRiskExecutor
+	policy          riskPolicy
+
+	highWaterMarks map[int64]float64
+	currentATR     float64
 	// ThinBookSkips counts SL/TP/trailing exits the simulator could not fill
 	// because the orderbook side did not have enough depth (orderbook-replay
 	// slippage model only). Surfaced for logging — the position stays open in
@@ -601,22 +606,104 @@ type TickRiskHandler struct {
 	ThinBookSkips int
 }
 
+// riskPolicy is a flattened view of risk.RiskPolicy private to this
+// package. It exists so usecase/backtest does not pull domain/risk into
+// its public API surface (handler tests already construct the handler
+// with raw float64s and we want that path to keep working).
+type riskPolicy struct {
+	stopLossPercent       float64
+	stopLossATRMultiplier float64
+	takeProfitPercent     float64
+	trailingMode          int // 0=Disabled, 1=Percent, 2=ATR — must match risk.TrailingMode*
+	trailingATRMultiplier float64
+}
+
+const (
+	trailingModeDisabled = 0
+	trailingModePercent  = 1
+	trailingModeATR      = 2
+)
+
+// Public mirrors of the package-private trailing mode constants. cmd/
+// callers reference these when populating PolicyView so the int values
+// in PolicyView are not magic numbers.
+const (
+	TrailingModeDisabled = trailingModeDisabled
+	TrailingModePercent  = trailingModePercent
+	TrailingModeATR      = trailingModeATR
+)
+
+// NewTickRiskHandler is the legacy constructor: callers pass percent SL
+// / TP only and the handler defaults to TrailingModePercent (the
+// pre-RiskPolicy behaviour). New callers should prefer
+// NewTickRiskHandlerWithPolicy.
 func NewTickRiskHandler(primaryInterval string, executor TickRiskExecutor, stopLossPercent, takeProfitPercent float64) *TickRiskHandler {
 	return &TickRiskHandler{
-		PrimaryInterval:   primaryInterval,
-		Executor:          executor,
-		StopLossPercent:   stopLossPercent,
-		TakeProfitPercent: takeProfitPercent,
-		highWaterMarks:    make(map[int64]float64),
+		PrimaryInterval: primaryInterval,
+		Executor:        executor,
+		policy: riskPolicy{
+			stopLossPercent:   stopLossPercent,
+			takeProfitPercent: takeProfitPercent,
+			trailingMode:      trailingModePercent,
+		},
+		highWaterMarks: make(map[int64]float64),
 	}
 }
 
-// SetATRMultipliers configures the ATR-based stop-loss and trailing-stop
-// multipliers after construction. Zero multipliers keep the handler on its
-// legacy percent-based behaviour.
+// PolicyView is the package-public projection of risk.RiskPolicy used by
+// callers that already imported domain/risk to build the handler. The
+// fields mirror risk.RiskPolicy.* but are flat float64 / int so this
+// package can stay free of the domain/risk import (avoiding a cycle if
+// risk ever needs to import backtest types for any reason). Wire from
+// risk.RiskPolicy via PolicyFromRiskPolicy in cmd/.
+type PolicyView struct {
+	StopLossPercent       float64
+	StopLossATRMultiplier float64
+	TakeProfitPercent     float64
+	TrailingMode          int // 0=Disabled, 1=Percent, 2=ATR
+	TrailingATRMultiplier float64
+}
+
+// NewTickRiskHandlerWithPolicy is the policy-driven constructor. It is
+// the only entry point that lets the trailing path be disabled or run
+// in ATR mode. SetATRMultipliers and direct field mutation are not
+// supported on the result — the policy is locked in at construction.
+func NewTickRiskHandlerWithPolicy(primaryInterval string, executor TickRiskExecutor, view PolicyView) *TickRiskHandler {
+	return &TickRiskHandler{
+		PrimaryInterval: primaryInterval,
+		Executor:        executor,
+		policy: riskPolicy{
+			stopLossPercent:       view.StopLossPercent,
+			stopLossATRMultiplier: view.StopLossATRMultiplier,
+			takeProfitPercent:     view.TakeProfitPercent,
+			trailingMode:          view.TrailingMode,
+			trailingATRMultiplier: view.TrailingATRMultiplier,
+		},
+		highWaterMarks: make(map[int64]float64),
+	}
+}
+
+// StopLossPercent returns the configured SL percent (read-only). Tests
+// that asserted on the previous public field still need to inspect the
+// value; callers that previously mutated the field must move to the
+// PolicyView constructor.
+func (h *TickRiskHandler) StopLossPercent() float64 { return h.policy.stopLossPercent }
+
+// TakeProfitPercent mirrors StopLossPercent for symmetric inspection.
+func (h *TickRiskHandler) TakeProfitPercent() float64 { return h.policy.takeProfitPercent }
+
+// SetATRMultipliers is retained for the legacy NewTickRiskHandler path.
+// It mutates the SL ATR multiplier and (when called with a positive
+// trailing multiplier) flips the trailing mode to ATR. New code should
+// not call this — pass a PolicyView at construction instead. The setter
+// stays in place because backtest runner-level tests rely on it; the
+// live pipeline no longer calls it after this PR.
 func (h *TickRiskHandler) SetATRMultipliers(stopLossATR, trailingATR float64) {
-	h.StopLossATRMultiplier = stopLossATR
-	h.TrailingATRMultiplier = trailingATR
+	h.policy.stopLossATRMultiplier = stopLossATR
+	h.policy.trailingATRMultiplier = trailingATR
+	if trailingATR > 0 {
+		h.policy.trailingMode = trailingModeATR
+	}
 }
 
 // UpdateATR is called by the IndicatorHandler (or a test fixture) whenever a
@@ -641,10 +728,10 @@ func (h *TickRiskHandler) UpdateATR(atr float64) {
 // an ATR SL are active, the farther (more conservative) one wins so a
 // volatile tick cannot immediately stop the position out.
 func (h *TickRiskHandler) stopLossDistance(entryPrice float64) float64 {
-	percentDist := entryPrice * h.StopLossPercent / 100.0
+	percentDist := entryPrice * h.policy.stopLossPercent / 100.0
 	atrDist := 0.0
-	if h.StopLossATRMultiplier > 0 && h.currentATR > 0 {
-		atrDist = h.currentATR * h.StopLossATRMultiplier
+	if h.policy.stopLossATRMultiplier > 0 && h.currentATR > 0 {
+		atrDist = h.currentATR * h.policy.stopLossATRMultiplier
 	}
 	if atrDist > percentDist {
 		return atrDist
@@ -652,19 +739,28 @@ func (h *TickRiskHandler) stopLossDistance(entryPrice float64) float64 {
 	return percentDist
 }
 
-// trailingDistance applies the same policy for the trailing reversal: ATR
-// when configured and known, otherwise fall back to the percent-derived
-// distance; take the bigger of the two when both are active.
+// trailingDistance returns the trailing reversal distance for the
+// configured TrailingMode. Disabled returns 0 so the caller skips the
+// trailing path entirely; Percent uses the StopLoss percent verbatim;
+// ATR returns max(percent fallback, currentATR × multiplier) so a stale
+// or zero ATR cannot collapse the trailing distance to 0.
 func (h *TickRiskHandler) trailingDistance(entryPrice float64) float64 {
-	percentDist := entryPrice * h.StopLossPercent / 100.0
-	atrDist := 0.0
-	if h.TrailingATRMultiplier > 0 && h.currentATR > 0 {
-		atrDist = h.currentATR * h.TrailingATRMultiplier
+	switch h.policy.trailingMode {
+	case trailingModeDisabled:
+		return 0
+	case trailingModeATR:
+		percentDist := entryPrice * h.policy.stopLossPercent / 100.0
+		atrDist := 0.0
+		if h.policy.trailingATRMultiplier > 0 && h.currentATR > 0 {
+			atrDist = h.currentATR * h.policy.trailingATRMultiplier
+		}
+		if atrDist > percentDist {
+			return atrDist
+		}
+		return percentDist
+	default: // trailingModePercent
+		return entryPrice * h.policy.stopLossPercent / 100.0
 	}
-	if atrDist > percentDist {
-		return atrDist
-	}
-	return percentDist
 }
 
 func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entity.Event, error) {
@@ -700,9 +796,9 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 		active[pos.PositionID] = true
 
 		// TP/SL: decide with bar range and worst-case policy.
-		if h.StopLossPercent > 0 && h.TakeProfitPercent > 0 {
+		if h.policy.stopLossPercent > 0 && h.policy.takeProfitPercent > 0 {
 			slDistance := h.stopLossDistance(pos.EntryPrice)
-			tpDistance := pos.EntryPrice * h.TakeProfitPercent / 100.0
+			tpDistance := pos.EntryPrice * h.policy.takeProfitPercent / 100.0
 			stopLossPrice, takeProfitPrice := calcSLTPFromDistances(pos, slDistance, tpDistance)
 			exitPrice, reason, hit := h.Executor.SelectSLTPExit(
 				pos.Side,
@@ -729,7 +825,13 @@ func (h *TickRiskHandler) Handle(_ context.Context, event entity.Event) ([]entit
 			}
 		}
 
-		// Trailing stop: use stop-loss distance for reversal distance.
+		// Trailing stop: skip the entire branch when policy disables it
+		// so the high-water-mark map stays empty for Disabled trailing —
+		// the prior implementation wrote to the map even when trailing
+		// was off, which leaked memory in long-running live processes.
+		if h.policy.trailingMode == trailingModeDisabled {
+			continue
+		}
 		best, ok := h.highWaterMarks[pos.PositionID]
 		if !ok {
 			best = pos.EntryPrice

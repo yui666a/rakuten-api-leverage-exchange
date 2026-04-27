@@ -201,17 +201,26 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	simAdapter := &simExecutorAdapter{sim: sim}
 
 	tickGenerator := &TickGeneratorHandler{PrimaryInterval: input.Config.PrimaryInterval}
-	tickRiskHandler := NewTickRiskHandler(
+	// Build the policy view directly from the run's RiskConfig so the
+	// runner shares the same handler constructor the live pipeline uses.
+	// trailingATR > 0 selects ATR mode (matching pre-RiskPolicy behaviour
+	// where SetATRMultipliers with a positive trailing value flipped the
+	// distance source to ATR); 0 keeps the legacy percent-only trailing.
+	trailingMode := TrailingModePercent
+	if riskCfg.TrailingATRMultiplier > 0 {
+		trailingMode = TrailingModeATR
+	}
+	tickRiskHandler := NewTickRiskHandlerWithPolicy(
 		input.Config.PrimaryInterval,
 		simAdapter,
-		riskCfg.StopLossPercent,
-		riskCfg.TakeProfitPercent,
+		PolicyView{
+			StopLossPercent:       riskCfg.StopLossPercent,
+			StopLossATRMultiplier: riskCfg.StopLossATRMultiplier,
+			TakeProfitPercent:     riskCfg.TakeProfitPercent,
+			TrailingMode:          trailingMode,
+			TrailingATRMultiplier: riskCfg.TrailingATRMultiplier,
+		},
 	)
-	// PR-12: propagate ATR-based SL / trailing multipliers from the run's
-	// RiskConfig so profile-driven ATR settings actually reach the tick
-	// risk loop. Without this, the legacy percent path stays in effect
-	// regardless of what the profile says.
-	tickRiskHandler.SetATRMultipliers(riskCfg.StopLossATRMultiplier, riskCfg.TrailingATRMultiplier)
 	indicatorHandler := NewIndicatorHandler(input.Config.PrimaryInterval, input.Config.HigherTFInterval, 500)
 	// cycle44: honour the profile's bb_squeeze_lookback by overriding the
 	// legacy default. Zero keeps the legacy 5 so DefaultStrategy runs (no
