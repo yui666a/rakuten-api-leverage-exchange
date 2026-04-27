@@ -146,8 +146,8 @@ func main() {
 			StateSyncInterval:    time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
 			TradeAmount:          tradeAmount,
 			MinConfidence:        cfg.Trading.MinConfidence,
-			StopLossPercent:      cfg.Risk.StopLossPercent,
-			TakeProfitPercent:    cfg.Risk.TakeProfitPercent,
+			StopLossPercent:      liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
+			TakeProfitPercent:    liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
 			SOR:                  loadSORConfig(),
 			CircuitBreaker:       circuitbreaker.Config{
 				AbnormalSpreadPct:    cfg.CircuitBreaker.AbnormalSpreadPct,
@@ -304,7 +304,7 @@ func main() {
 	slog.Info("Trading Engine started",
 		"maxPosition", cfg.Risk.MaxPositionAmount,
 		"maxDailyLoss", cfg.Risk.MaxDailyLoss,
-		"stopLoss", cfg.Risk.StopLossPercent,
+		"stopLoss", liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
 		"capital", cfg.Risk.InitialCapital,
 	)
 
@@ -480,6 +480,32 @@ func liveProfileBBSqueezeLookback(p *entity.StrategyProfile) int {
 		return 0
 	}
 	return p.StanceRules.BBSqueezeLookback
+}
+
+// liveStopLossPercent picks the strategy SL the live pipeline should run
+// against. Profile values win over env so a profile tuned for sl=14% (e.g.
+// production_ltc_60k) is honoured even when the operator left
+// RISK_STOP_LOSS_PERCENT=0 — the same precedence the backtest CLI applies
+// (cmd/backtest/main.go:664). envValue is the legacy fallback when the
+// profile leaves the field unset (== 0).
+//
+// This is critical for position sizing: positionsize.Sizer rejects with
+// "invalid input: sl=0" when StopLossPercent reaches it as 0, which would
+// otherwise leave the live pipeline silently HOLD-only.
+func liveStopLossPercent(p *entity.StrategyProfile, envValue float64) float64 {
+	if p != nil && p.Risk.StopLossPercent > 0 {
+		return p.Risk.StopLossPercent
+	}
+	return envValue
+}
+
+// liveTakeProfitPercent mirrors liveStopLossPercent for the TP knob so the
+// live tick path uses the same TP distance the strategy was tuned with.
+func liveTakeProfitPercent(p *entity.StrategyProfile, envValue float64) float64 {
+	if p != nil && p.Risk.TakeProfitPercent > 0 {
+		return p.Risk.TakeProfitPercent
+	}
+	return envValue
 }
 
 // liveProfilePositionSizing returns profile.Risk.PositionSizing or nil when
