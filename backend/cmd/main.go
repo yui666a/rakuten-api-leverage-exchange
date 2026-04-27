@@ -146,8 +146,10 @@ func main() {
 			StateSyncInterval:    time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
 			TradeAmount:          tradeAmount,
 			MinConfidence:        cfg.Trading.MinConfidence,
-			StopLossPercent:      liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
-			TakeProfitPercent:    liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
+			StopLossPercent:       liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
+			TakeProfitPercent:     liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
+			StopLossATRMultiplier: liveStopLossATRMultiplier(liveProfile),
+			TrailingATRMultiplier: liveTrailingATRMultiplier(liveProfile),
 			SOR:                  loadSORConfig(),
 			CircuitBreaker:       circuitbreaker.Config{
 				AbnormalSpreadPct:    cfg.CircuitBreaker.AbnormalSpreadPct,
@@ -305,6 +307,9 @@ func main() {
 		"maxPosition", cfg.Risk.MaxPositionAmount,
 		"maxDailyLoss", cfg.Risk.MaxDailyLoss,
 		"stopLoss", liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
+		"takeProfit", liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
+		"stopLossATR", liveStopLossATRMultiplier(liveProfile),
+		"trailingATR", liveTrailingATRMultiplier(liveProfile),
 		"capital", cfg.Risk.InitialCapital,
 	)
 
@@ -506,6 +511,30 @@ func liveTakeProfitPercent(p *entity.StrategyProfile, envValue float64) float64 
 		return p.Risk.TakeProfitPercent
 	}
 	return envValue
+}
+
+// liveStopLossATRMultiplier returns profile.Risk.StopLossATRMultiplier or 0
+// when the profile is missing / unset. The TickRiskHandler interprets 0 as
+// "fall back to percent SL only", which is the legacy live behaviour, so
+// profiles that opt out of ATR-scaled SL stay bit-identical.
+func liveStopLossATRMultiplier(p *entity.StrategyProfile) float64 {
+	if p == nil {
+		return 0
+	}
+	return p.Risk.StopLossATRMultiplier
+}
+
+// liveTrailingATRMultiplier returns profile.Risk.TrailingATRMultiplier or 0
+// when the profile is missing / unset. Wiring this through the live pipeline
+// closes the gap that previously left every promoted profile's trailing
+// distance silently overridden by the SL percent — backtests honoured the
+// ATR multiplier (runner.go:210) but live ignored it, breaking the PDCA
+// promotion contract. 0 retains the legacy percent-only trailing.
+func liveTrailingATRMultiplier(p *entity.StrategyProfile) float64 {
+	if p == nil {
+		return 0
+	}
+	return p.Risk.TrailingATRMultiplier
 }
 
 // liveProfilePositionSizing returns profile.Risk.PositionSizing or nil when

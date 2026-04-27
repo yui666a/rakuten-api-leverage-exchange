@@ -61,8 +61,10 @@ type EventDrivenPipeline struct {
 	minOrderAmount    float64
 	minConfidence     float64
 	stateSyncInterval time.Duration
-	stopLossPercent      float64
-	takeProfitPercent    float64
+	stopLossPercent       float64
+	takeProfitPercent     float64
+	stopLossATRMultiplier float64
+	trailingATRMultiplier float64
 	sorConfig            sor.Config
 	circuitBreakerConfig circuitbreaker.Config
 	staleCheckIntervalMs int64
@@ -130,6 +132,16 @@ type EventDrivenPipelineConfig struct {
 	MinConfidence        float64
 	StopLossPercent      float64
 	TakeProfitPercent    float64
+	// StopLossATRMultiplier mirrors profile.Risk.StopLossATRMultiplier so the
+	// live TickRiskHandler computes the SL distance the same way the backtest
+	// runner does (max of percent- and ATR-derived distances). 0 keeps the
+	// legacy percent-only behaviour.
+	StopLossATRMultiplier float64
+	// TrailingATRMultiplier mirrors profile.Risk.TrailingATRMultiplier so the
+	// live trailing distance matches the value the strategy was tuned with.
+	// 0 keeps the legacy percent-only behaviour. Wiring this through closes
+	// the gap that was silently disabling profile-driven trailing in live.
+	TrailingATRMultiplier float64
 	SOR                  sor.Config
 	CircuitBreaker       circuitbreaker.Config
 	StaleCheckIntervalMs int64
@@ -206,8 +218,10 @@ func NewEventDrivenPipeline(
 		tradeAmount:       cfg.TradeAmount,
 		minConfidence:     cfg.MinConfidence,
 		stateSyncInterval: cfg.StateSyncInterval,
-		stopLossPercent:      cfg.StopLossPercent,
-		takeProfitPercent:    cfg.TakeProfitPercent,
+		stopLossPercent:       cfg.StopLossPercent,
+		takeProfitPercent:     cfg.TakeProfitPercent,
+		stopLossATRMultiplier: cfg.StopLossATRMultiplier,
+		trailingATRMultiplier: cfg.TrailingATRMultiplier,
 		sorConfig:            cfg.SOR,
 		circuitBreakerConfig: cfg.CircuitBreaker,
 		staleCheckIntervalMs: cfg.StaleCheckIntervalMs,
@@ -564,24 +578,28 @@ func (p *EventDrivenPipeline) loadSymbolMeta(ctx context.Context, symbolID int64
 
 // eventSnapshot is a copy of config fields taken under lock.
 type eventSnapshot struct {
-	symbolID          int64
-	tradeAmount       float64
-	baseStepAmount    float64
-	minOrderAmount    float64
-	minConfidence     float64
-	stopLossPercent   float64
-	takeProfitPercent float64
+	symbolID              int64
+	tradeAmount           float64
+	baseStepAmount        float64
+	minOrderAmount        float64
+	minConfidence         float64
+	stopLossPercent       float64
+	takeProfitPercent     float64
+	stopLossATRMultiplier float64
+	trailingATRMultiplier float64
 }
 
 func (p *EventDrivenPipeline) snapshotLocked() eventSnapshot {
 	return eventSnapshot{
-		symbolID:          p.symbolID,
-		tradeAmount:       p.tradeAmount,
-		baseStepAmount:    p.baseStepAmount,
-		minOrderAmount:    p.minOrderAmount,
-		minConfidence:     p.minConfidence,
-		stopLossPercent:   p.stopLossPercent,
-		takeProfitPercent: p.takeProfitPercent,
+		symbolID:              p.symbolID,
+		tradeAmount:           p.tradeAmount,
+		baseStepAmount:        p.baseStepAmount,
+		minOrderAmount:        p.minOrderAmount,
+		minConfidence:         p.minConfidence,
+		stopLossPercent:       p.stopLossPercent,
+		takeProfitPercent:     p.takeProfitPercent,
+		stopLossATRMultiplier: p.stopLossATRMultiplier,
+		trailingATRMultiplier: p.trailingATRMultiplier,
 	}
 }
 
@@ -639,6 +657,15 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		snap.stopLossPercent,
 		snap.takeProfitPercent,
 	)
+	// Mirror the backtest runner's SetATRMultipliers wiring (runner.go:210)
+	// so profile.Risk.{StopLossATRMultiplier,TrailingATRMultiplier} actually
+	// shape live exits. Skipping this call left the strategy's ATR-based
+	// trailing distance silently ignored — every live trailing decision fell
+	// back to the percent path even when the profile asked for ATR. Profiles
+	// with multiplier == 0 retain the legacy percent-only behaviour because
+	// SetATRMultipliers stores the values verbatim and trailingDistance only
+	// engages the ATR branch when multiplier > 0 and currentATR > 0.
+	tickRiskHandler.SetATRMultipliers(snap.stopLossATRMultiplier, snap.trailingATRMultiplier)
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
