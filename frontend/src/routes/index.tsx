@@ -35,26 +35,50 @@ function Dashboard() {
   const { ticker, orderbook, connectionState } =
     useMarketTickerStream(symbolId);
 
-  const statusLabel = status?.tradingHalted
-    ? "リスク停止"
-    : status?.manuallyStopped
-      ? "手動停止"
-      : status?.status === "running"
-        ? "稼働中"
-        : "\u2014";
-
   const dailyPnlTotal = pnl?.dailyPnl?.total ?? null;
   const dailyPnlStale = pnl?.dailyPnl?.stale ?? false;
   const dailyPnlLabel =
     dailyPnlTotal === null
-      ? "\u2014"
+      ? "—"
       : `${dailyPnlTotal < 0 ? "-" : ""}¥${Math.abs(dailyPnlTotal).toLocaleString()}${dailyPnlStale ? "*" : ""}`;
+
+  const balance = pnl?.balance ?? null;
+  const positionValue = pnl?.totalPosition ?? null;
+  const floatingPnl =
+    positions?.reduce((sum, p) => sum + p.floatingProfit, 0) ?? null;
+  const totalEquity =
+    balance !== null && floatingPnl !== null ? balance + floatingPnl : null;
+  const freeBalance =
+    balance !== null && positionValue !== null
+      ? balance - positionValue
+      : null;
+
+  const formatYen = (v: number | null) =>
+    v === null
+      ? "—"
+      : `${v < 0 ? "-" : ""}¥${Math.abs(Math.round(v)).toLocaleString()}`;
+  const formatSignedYen = (v: number | null) =>
+    v === null
+      ? "—"
+      : `${v < 0 ? "-" : "+"}¥${Math.abs(Math.round(v)).toLocaleString()}`;
 
   const reasoningLabel = strategy?.reasoning
     ? strategy.reasoning === "insufficient indicator data"
       ? "指標データが不足しています"
       : strategy.reasoning
     : "戦略コメントはまだ生成されていません。";
+
+  const stance = strategy?.stance ?? null;
+  const stanceColorClass =
+    stance === "TREND_FOLLOW"
+      ? "text-accent-green"
+      : stance === "CONTRARIAN"
+        ? "text-amber-300"
+        : stance === "BREAKOUT"
+          ? "text-fuchsia-300"
+          : stance === "HOLD"
+            ? "text-cyan-200"
+            : "text-text-secondary";
 
   return (
     <AppFrame
@@ -67,40 +91,55 @@ function Dashboard() {
         tradingHalted={status?.tradingHalted}
       />
 
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <KpiCard
-          label="残高"
-          value={pnl ? `¥${pnl.balance.toLocaleString()}` : "\u2014"}
-          color="text-accent-green"
-        />
-        <KpiCard
-          label="日次損益"
-          value={dailyPnlLabel}
-          color={
-            dailyPnlTotal !== null && dailyPnlTotal < 0
-              ? "text-accent-red"
-              : "text-accent-green"
-          }
-        />
-        <div className="relative">
+      <div className="mt-3 flex items-center gap-4 rounded-3xl border border-white/8 bg-bg-card/90 px-5 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
+        <p className="text-[0.65rem] uppercase tracking-[0.32em] text-text-secondary">
+          戦略方針
+        </p>
+        <p className={`text-3xl font-bold tracking-wide ${stanceColorClass}`}>
+          {stance ?? "—"}
+        </p>
+        <StanceLegendPopover />
+      </div>
+
+      <div className="mt-4">
+        <p className="mb-2 text-[0.65rem] uppercase tracking-[0.32em] text-text-secondary">
+          資金状況
+        </p>
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-3 xl:grid-cols-5">
           <KpiCard
-            label="戦略方針"
-            value={strategy?.stance ?? "\u2014"}
+            label="総資産"
+            value={formatYen(totalEquity)}
+            color="text-accent-green"
+          />
+          <KpiCard
+            label="建玉評価額"
+            value={formatYen(positionValue)}
+            color="text-text-primary"
+          />
+          <KpiCard
+            label="拘束外残高"
+            value={formatYen(freeBalance)}
             color="text-cyan-200"
           />
-          <div className="absolute right-3 top-3">
-            <StanceLegendPopover />
-          </div>
+          <KpiCard
+            label="含み損益"
+            value={formatSignedYen(floatingPnl)}
+            color={
+              floatingPnl !== null && floatingPnl < 0
+                ? "text-accent-red"
+                : "text-accent-green"
+            }
+          />
+          <KpiCard
+            label="日次損益"
+            value={dailyPnlLabel}
+            color={
+              dailyPnlTotal !== null && dailyPnlTotal < 0
+                ? "text-accent-red"
+                : "text-accent-green"
+            }
+          />
         </div>
-        <KpiCard
-          label="ステータス"
-          value={statusLabel}
-          color={
-            status?.tradingHalted || status?.manuallyStopped
-              ? "text-accent-red"
-              : "text-accent-green"
-          }
-        />
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
