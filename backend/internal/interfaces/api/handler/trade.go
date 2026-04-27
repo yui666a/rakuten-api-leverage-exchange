@@ -46,8 +46,10 @@ type allTradesEntry struct {
 }
 
 // GetAllTrades は楽天の取引可能な全シンボルについて約定履歴をまとめて返す。
-// 楽天 API 側に bulk エンドポイントが無いため内部でシンボルごとに直列ループするが、
-// RESTClient 側の 220ms スロットラーが直列化を保証するため code 20010 は構造的に発生しない。
+// 楽天 API 側に bulk エンドポイントが無いため内部でシンボルごとに直列ループする。
+// RESTClient の dispatchLoop が「直前ジョブの応答完了 → 220ms → 次ジョブ発射」で
+// 全リクエストを直列化しており、楽天視点の受信間隔は構造的に 200ms を超えるため
+// 20010 (TOO_MANY_REQUESTS) は本ハンドラ単体では発生しない前提。
 func (h *TradeHandler) GetAllTrades(c *gin.Context) {
 	if h.restClient == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "rest client not configured"})
