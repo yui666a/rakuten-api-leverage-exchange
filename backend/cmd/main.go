@@ -15,6 +15,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/risk"
 	backtestinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/database"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/rakuten"
@@ -139,6 +140,24 @@ func main() {
 	restoreRiskState(context.Background(), riskStateRepo, riskMgr)
 	runBacktestRetentionCleanup(context.Background(), backtestResultRepo, cfg.Backtest.RetentionDays)
 
+	// Build the strategy risk policy from the loaded profile, falling
+	// back to env values when the profile leaves a knob unset. Validate
+	// up front so a misconfigured policy fails before the pipeline
+	// subscribes to ticks — the previous behaviour silently HOLD-only'd
+	// when stop_loss_percent reached the sizer as 0.
+	livePolicy, policyErr := risk.FromProfile(liveProfile, cfg.Risk.StopLossPercent, cfg.Risk.TakeProfitPercent)
+	if policyErr != nil && liveProfile != nil {
+		// Only fatal on real configuration errors; ErrEmptyPolicy is the
+		// nil-profile signal and is handled by the env-fallback path
+		// inside FromProfile.
+		slog.Error("invalid live risk policy", "error", policyErr)
+		os.Exit(1)
+	}
+	if err := livePolicy.Validate(); err != nil {
+		slog.Error("invalid live risk policy", "error", err)
+		os.Exit(1)
+	}
+
 	// --- Trading Pipeline (Event-Driven) ---
 	pipeline := NewEventDrivenPipeline(
 		EventDrivenPipelineConfig{
@@ -146,10 +165,7 @@ func main() {
 			StateSyncInterval:    time.Duration(cfg.Trading.StateSyncIntervalSec) * time.Second,
 			TradeAmount:          tradeAmount,
 			MinConfidence:        cfg.Trading.MinConfidence,
-			StopLossPercent:       liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
-			TakeProfitPercent:     liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
-			StopLossATRMultiplier: liveStopLossATRMultiplier(liveProfile),
-			TrailingATRMultiplier: liveTrailingATRMultiplier(liveProfile),
+			RiskPolicy:           livePolicy,
 			SOR:                  loadSORConfig(),
 			CircuitBreaker:       circuitbreaker.Config{
 				AbnormalSpreadPct:    cfg.CircuitBreaker.AbnormalSpreadPct,
@@ -306,10 +322,11 @@ func main() {
 	slog.Info("Trading Engine started",
 		"maxPosition", cfg.Risk.MaxPositionAmount,
 		"maxDailyLoss", cfg.Risk.MaxDailyLoss,
-		"stopLoss", liveStopLossPercent(liveProfile, cfg.Risk.StopLossPercent),
-		"takeProfit", liveTakeProfitPercent(liveProfile, cfg.Risk.TakeProfitPercent),
-		"stopLossATR", liveStopLossATRMultiplier(liveProfile),
-		"trailingATR", liveTrailingATRMultiplier(liveProfile),
+		"stopLoss", livePolicy.StopLoss.Percent,
+		"takeProfit", livePolicy.TakeProfit.Percent,
+		"stopLossATR", livePolicy.StopLoss.ATRMultiplier,
+		"trailingMode", livePolicy.Trailing.Mode,
+		"trailingATR", livePolicy.Trailing.ATRMultiplier,
 		"capital", cfg.Risk.InitialCapital,
 	)
 
@@ -485,56 +502,6 @@ func liveProfileBBSqueezeLookback(p *entity.StrategyProfile) int {
 		return 0
 	}
 	return p.StanceRules.BBSqueezeLookback
-}
-
-// liveStopLossPercent picks the strategy SL the live pipeline should run
-// against. Profile values win over env so a profile tuned for sl=14% (e.g.
-// production_ltc_60k) is honoured even when the operator left
-// RISK_STOP_LOSS_PERCENT=0 — the same precedence the backtest CLI applies
-// (cmd/backtest/main.go:664). envValue is the legacy fallback when the
-// profile leaves the field unset (== 0).
-//
-// This is critical for position sizing: positionsize.Sizer rejects with
-// "invalid input: sl=0" when StopLossPercent reaches it as 0, which would
-// otherwise leave the live pipeline silently HOLD-only.
-func liveStopLossPercent(p *entity.StrategyProfile, envValue float64) float64 {
-	if p != nil && p.Risk.StopLossPercent > 0 {
-		return p.Risk.StopLossPercent
-	}
-	return envValue
-}
-
-// liveTakeProfitPercent mirrors liveStopLossPercent for the TP knob so the
-// live tick path uses the same TP distance the strategy was tuned with.
-func liveTakeProfitPercent(p *entity.StrategyProfile, envValue float64) float64 {
-	if p != nil && p.Risk.TakeProfitPercent > 0 {
-		return p.Risk.TakeProfitPercent
-	}
-	return envValue
-}
-
-// liveStopLossATRMultiplier returns profile.Risk.StopLossATRMultiplier or 0
-// when the profile is missing / unset. The TickRiskHandler interprets 0 as
-// "fall back to percent SL only", which is the legacy live behaviour, so
-// profiles that opt out of ATR-scaled SL stay bit-identical.
-func liveStopLossATRMultiplier(p *entity.StrategyProfile) float64 {
-	if p == nil {
-		return 0
-	}
-	return p.Risk.StopLossATRMultiplier
-}
-
-// liveTrailingATRMultiplier returns profile.Risk.TrailingATRMultiplier or 0
-// when the profile is missing / unset. Wiring this through the live pipeline
-// closes the gap that previously left every promoted profile's trailing
-// distance silently overridden by the SL percent — backtests honoured the
-// ATR multiplier (runner.go:210) but live ignored it, breaking the PDCA
-// promotion contract. 0 retains the legacy percent-only trailing.
-func liveTrailingATRMultiplier(p *entity.StrategyProfile) float64 {
-	if p == nil {
-		return 0
-	}
-	return p.Risk.TrailingATRMultiplier
 }
 
 // liveProfilePositionSizing returns profile.Risk.PositionSizing or nil when
