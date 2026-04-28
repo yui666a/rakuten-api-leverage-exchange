@@ -9,13 +9,19 @@ type AppFrameProps = {
   children: ReactNode
 }
 
+// ナビは「目的別 4 セクション」に集約する:
+//   監視 (Live)     ... ライブの状況把握
+//   分析 (Analysis) ... 過去データに対するバックテスト・WFO・マルチ期間
+//   運用 (Operations) ... ボット制御・リスク設定・通知設定
+//   履歴 (Journal)  ... 取引と判断の証跡
+//
+// 「分析」リンクは現状 /backtest を指している。バックテスト系 3 画面の
+// 統合は後続 PR で /analysis ルートに移し替え予定。
 const navItems = [
-  { to: '/', label: 'ダッシュボード' },
-  { to: '/settings', label: '設定' },
+  { to: '/', label: '監視' },
+  { to: '/backtest', label: '分析' },
+  { to: '/operations', label: '運用' },
   { to: '/history', label: '履歴' },
-  { to: '/backtest', label: 'バックテスト' },
-  { to: '/backtest-multi', label: 'マルチ期間' },
-  { to: '/walk-forward', label: 'WFO' },
 ] as const
 
 export function AppFrame({ title, subtitle, children }: AppFrameProps) {
