@@ -24,6 +24,17 @@ import { formatAmount } from '../lib/format'
 
 export const Route = createFileRoute('/backtest')({ component: BacktestPage })
 
+function BacktestPage() {
+  return (
+    <AppFrame
+      title="Backtest Results"
+      subtitle="過去のバックテスト結果の一覧と詳細を確認できます。"
+    >
+      <BacktestBody />
+    </AppFrame>
+  )
+}
+
 type BacktestRunForm = {
   data: string
   dataHtf: string
@@ -167,7 +178,7 @@ function getErrorMessage(error: unknown): string {
   return 'バックテスト実行に失敗しました。'
 }
 
-function BacktestPage() {
+export function BacktestBody() {
   const { data: symbols } = useSymbols()
   const pairOptions = useMemo(() => {
     const values = [...fallbackBacktestPairs]
@@ -328,10 +339,7 @@ function BacktestPage() {
   }
 
   return (
-    <AppFrame
-      title="Backtest Results"
-      subtitle="過去のバックテスト結果の一覧と詳細を確認できます。"
-    >
+    <>
       {isError && (
         <div className="mb-4 rounded-2xl border border-accent-red/40 bg-accent-red/10 px-5 py-3 text-sm text-accent-red">
           バックテスト結果の取得に失敗しました。
@@ -687,7 +695,7 @@ function BacktestPage() {
           )}
         </section>
       )}
-    </AppFrame>
+    </>
   )
 }
 

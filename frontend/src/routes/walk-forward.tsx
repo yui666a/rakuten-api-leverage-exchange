@@ -15,6 +15,18 @@ export const Route = createFileRoute('/walk-forward')({
 })
 
 function WalkForwardPage() {
+  return (
+    <AppFrame
+      title="ウォークフォワード最適化"
+      subtitle="/backtest/walk-forward の envelope を参照。窓別 OOS リターンと Best パラメータ頻度を表示"
+    >
+      <WalkForwardBody />
+    </AppFrame>
+  )
+}
+
+// Body without AppFrame — usable by /analysis tabbed view.
+export function WalkForwardBody() {
   const [profileFilter, setProfileFilter] = useState('')
   const [pdcaFilter, setPdcaFilter] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -39,10 +51,7 @@ function WalkForwardPage() {
   }, [data])
 
   return (
-    <AppFrame
-      title="ウォークフォワード最適化"
-      subtitle="/backtest/walk-forward の envelope を参照。窓別 OOS リターンと Best パラメータ頻度を表示"
-    >
+    <>
       <section className="rounded-3xl border border-white/8 bg-bg-card p-5 sm:p-6">
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <label className="flex flex-col gap-1 text-xs text-text-secondary">
@@ -88,7 +97,7 @@ function WalkForwardPage() {
           {detail && <WalkForwardDetail env={detail} />}
         </section>
       )}
-    </AppFrame>
+    </>
   )
 }
 
