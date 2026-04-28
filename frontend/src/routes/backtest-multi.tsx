@@ -1,26 +1,18 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
-import { AppFrame } from '../components/AppFrame'
 import {
   useMultiPeriodResult,
   useMultiPeriodResults,
 } from '../hooks/useMultiPeriod'
 import type { LabeledBacktestResult, MultiPeriodResult } from '../lib/api'
 
+// /backtest-multi は /analysis?view=multi に統合された。本体ロジックは
+// BacktestMultiBody として export しており、新ルートから再利用される。
 export const Route = createFileRoute('/backtest-multi')({
-  component: BacktestMultiPage,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/analysis', search: { ...search, view: 'multi' } })
+  },
 })
-
-function BacktestMultiPage() {
-  return (
-    <AppFrame
-      title="マルチ期間バックテスト"
-      subtitle="`/backtest/run-multi` で保存された envelope を RobustnessScore でランキング表示"
-    >
-      <BacktestMultiBody />
-    </AppFrame>
-  )
-}
 
 // Body without AppFrame — usable by /analysis tabbed view.
 export function BacktestMultiBody() {

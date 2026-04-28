@@ -1,6 +1,5 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 import { useMemo, useState } from 'react'
-import { AppFrame } from '../components/AppFrame'
 import {
   useWalkForwardResult,
   useWalkForwardResults,
@@ -10,20 +9,13 @@ import type {
   WalkForwardWindowResult,
 } from '../lib/api'
 
+// /walk-forward は /analysis?view=wfo に統合された。本体ロジックは
+// WalkForwardBody として export しており、新ルートから再利用される。
 export const Route = createFileRoute('/walk-forward')({
-  component: WalkForwardPage,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/analysis', search: { ...search, view: 'wfo' } })
+  },
 })
-
-function WalkForwardPage() {
-  return (
-    <AppFrame
-      title="ウォークフォワード最適化"
-      subtitle="/backtest/walk-forward の envelope を参照。窓別 OOS リターンと Best パラメータ頻度を表示"
-    >
-      <WalkForwardBody />
-    </AppFrame>
-  )
-}
 
 // Body without AppFrame — usable by /analysis tabbed view.
 export function WalkForwardBody() {

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, redirect } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AppFrame } from '../components/AppFrame'
 import {
   useBacktestCSVMeta,
   useBacktestResults,
@@ -22,18 +21,14 @@ import type {
 } from '../lib/api'
 import { formatAmount } from '../lib/format'
 
-export const Route = createFileRoute('/backtest')({ component: BacktestPage })
-
-function BacktestPage() {
-  return (
-    <AppFrame
-      title="Backtest Results"
-      subtitle="過去のバックテスト結果の一覧と詳細を確認できます。"
-    >
-      <BacktestBody />
-    </AppFrame>
-  )
-}
+// /backtest は /analysis?view=runs に統合された。本体ロジックは
+// BacktestBody として export しており、新ルート (/analysis) から再
+// 利用される。直アクセスはハブ画面へ恒久 redirect する。
+export const Route = createFileRoute('/backtest')({
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/analysis', search })
+  },
+})
 
 type BacktestRunForm = {
   data: string
