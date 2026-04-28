@@ -75,13 +75,13 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	v1 := r.Group("/api/v1")
 
-	statusHandler := handler.NewStatusHandler(deps.RiskManager)
+	statusHandler := handler.NewStatusHandler(deps.RiskManager, deps.Pipeline)
 	v1.GET("/status", statusHandler.GetStatus)
 	botHandler := handler.NewBotHandler(deps.RiskManager, deps.RealtimeHub, deps.Pipeline)
 	v1.POST("/start", botHandler.Start)
 	v1.POST("/stop", botHandler.Stop)
 
-	riskHandler := handler.NewRiskHandler(deps.RiskManager, deps.RealtimeHub, deps.DailyPnLCalculator)
+	riskHandler := handler.NewRiskHandler(deps.RiskManager, deps.RealtimeHub, deps.DailyPnLCalculator, deps.Pipeline)
 	v1.GET("/config", riskHandler.GetConfig)
 	v1.PUT("/config", riskHandler.UpdateConfig)
 	v1.GET("/pnl", riskHandler.GetPnL)
@@ -106,7 +106,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		candleHandler := handler.NewCandleHandler(deps.MarketDataService, deps.RESTClient)
 		v1.GET("/candles/:symbol", candleHandler.GetCandles)
 
-		realtimeHandler := handler.NewRealtimeHandler(deps.MarketDataService, deps.RiskManager, deps.RealtimeHub)
+		realtimeHandler := handler.NewRealtimeHandler(deps.MarketDataService, deps.RiskManager, deps.RealtimeHub, deps.Pipeline)
 		v1.GET("/ws", realtimeHandler.Stream)
 	}
 

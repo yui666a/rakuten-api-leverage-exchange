@@ -344,7 +344,17 @@ func main() {
 		"intervalSec", cfg.Trading.PipelineIntervalSec,
 		"stateSyncIntervalSec", cfg.Trading.StateSyncIntervalSec,
 	)
-	slog.Info("Trading pipeline ready. Use POST /api/v1/start to begin auto-trading.")
+
+	// 再起動後の自動再開: ユーザが明示的に /api/v1/stop を押していない限り、
+	// プロセス起動時に pipeline を自動で立ち上げる。これがないと、コード変更や
+	// docker compose up での再起動のたびに手動で /start を叩かないと判定が
+	// 走らず、画面 running 表示と実体の食い違いが起きる (2026-04-28 の事故)。
+	if !riskMgr.GetStatus().ManuallyStopped {
+		pipeline.Start()
+		slog.Info("auto-trading resumed automatically (manuallyStopped=false)")
+	} else {
+		slog.Info("auto-trading paused: manuallyStopped=true. Use POST /api/v1/start to resume.")
+	}
 
 	// シグナル待機
 	select {

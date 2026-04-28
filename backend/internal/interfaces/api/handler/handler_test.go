@@ -171,7 +171,8 @@ func newRiskManager() *usecase.RiskManager {
 
 func TestStatusHandler_GetStatus(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewStatusHandler(riskMgr)
+	pipeline := &mockPipeline{running: true}
+	h := NewStatusHandler(riskMgr, pipeline)
 
 	w := doRequest(h.GetStatus, http.MethodGet, "/status", nil)
 	if w.Code != http.StatusOK {
@@ -185,12 +186,16 @@ func TestStatusHandler_GetStatus(t *testing.T) {
 	if body["manuallyStopped"] != false {
 		t.Fatalf("expected manuallyStopped false, got %v", body["manuallyStopped"])
 	}
+	if body["pipelineRunning"] != true {
+		t.Fatalf("expected pipelineRunning true, got %v", body["pipelineRunning"])
+	}
 }
 
 func TestStatusHandler_GetStatus_Stopped(t *testing.T) {
 	riskMgr := newRiskManager()
 	riskMgr.StopTrading()
-	h := NewStatusHandler(riskMgr)
+	pipeline := &mockPipeline{running: false}
+	h := NewStatusHandler(riskMgr, pipeline)
 
 	w := doRequest(h.GetStatus, http.MethodGet, "/status", nil)
 	if w.Code != http.StatusOK {
@@ -203,6 +208,51 @@ func TestStatusHandler_GetStatus_Stopped(t *testing.T) {
 	}
 	if body["manuallyStopped"] != true {
 		t.Fatalf("expected manuallyStopped true, got %v", body["manuallyStopped"])
+	}
+}
+
+// 再起動直後など、manuallyStopped=false でも pipeline goroutine が動いていない
+// 状態を "running" と詐称してはならない。"stopped" を返し、pipelineRunning=false
+// で実体を表現する。
+func TestStatusHandler_GetStatus_PipelineNotRunning(t *testing.T) {
+	riskMgr := newRiskManager()
+	pipeline := &mockPipeline{running: false} // not started yet
+	h := NewStatusHandler(riskMgr, pipeline)
+
+	w := doRequest(h.GetStatus, http.MethodGet, "/status", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := decodeBody(t, w)
+	if body["status"] != "stopped" {
+		t.Fatalf("expected status 'stopped' when pipeline not running, got %v", body["status"])
+	}
+	if body["manuallyStopped"] != false {
+		t.Fatalf("expected manuallyStopped false, got %v", body["manuallyStopped"])
+	}
+	if body["pipelineRunning"] != false {
+		t.Fatalf("expected pipelineRunning false, got %v", body["pipelineRunning"])
+	}
+}
+
+// pipeline が nil (テスト用途・古い構成) でも /status は壊れず、
+// pipelineRunning=false を返す。
+func TestStatusHandler_GetStatus_NilPipeline(t *testing.T) {
+	riskMgr := newRiskManager()
+	h := NewStatusHandler(riskMgr, nil)
+
+	w := doRequest(h.GetStatus, http.MethodGet, "/status", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	body := decodeBody(t, w)
+	if body["pipelineRunning"] != false {
+		t.Fatalf("expected pipelineRunning false when pipeline is nil, got %v", body["pipelineRunning"])
+	}
+	if body["status"] != "stopped" {
+		t.Fatalf("expected status 'stopped' when pipeline is nil, got %v", body["status"])
 	}
 }
 
@@ -552,7 +602,7 @@ func TestPositionHandler_ClosePosition_IdempotencyDuplicate(t *testing.T) {
 
 func TestRiskHandler_GetConfig(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	w := doRequest(h.GetConfig, http.MethodGet, "/config", nil)
 	if w.Code != http.StatusOK {
@@ -573,7 +623,7 @@ func TestRiskHandler_GetConfig(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_OK(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount:    8000,
@@ -602,7 +652,7 @@ func TestRiskHandler_UpdateConfig_OK(t *testing.T) {
 func TestRiskHandler_UpdateConfig_WithRealtimeHub(t *testing.T) {
 	riskMgr := newRiskManager()
 	hub := usecase.NewRealtimeHub()
-	h := NewRiskHandler(riskMgr, hub, nil)
+	h := NewRiskHandler(riskMgr, hub, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount:    8000,
@@ -622,7 +672,7 @@ func TestRiskHandler_UpdateConfig_WithRealtimeHub(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_InvalidBody(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	w := doRequest(h.UpdateConfig, http.MethodPut, "/config", []byte("not-json"))
 	if w.Code != http.StatusBadRequest {
@@ -632,7 +682,7 @@ func TestRiskHandler_UpdateConfig_InvalidBody(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_ZeroMaxPositionAmount(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount: 0,
@@ -654,7 +704,7 @@ func TestRiskHandler_UpdateConfig_ZeroMaxPositionAmount(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_ZeroMaxDailyLoss(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount: 5000,
@@ -675,7 +725,7 @@ func TestRiskHandler_UpdateConfig_ZeroMaxDailyLoss(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_ZeroStopLoss(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount: 5000,
@@ -692,7 +742,7 @@ func TestRiskHandler_UpdateConfig_ZeroStopLoss(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_NegativeTakeProfit(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount: 5000,
@@ -714,7 +764,7 @@ func TestRiskHandler_UpdateConfig_NegativeTakeProfit(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_ZeroInitialCapital(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount: 5000,
@@ -736,7 +786,7 @@ func TestRiskHandler_UpdateConfig_ZeroInitialCapital(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_NegativeMaxConsecutiveLosses(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount:    5000,
@@ -759,7 +809,7 @@ func TestRiskHandler_UpdateConfig_NegativeMaxConsecutiveLosses(t *testing.T) {
 
 func TestRiskHandler_UpdateConfig_NegativeCooldownMinutes(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	body := jsonBody(entity.RiskConfig{
 		MaxPositionAmount:    5000,
@@ -783,7 +833,7 @@ func TestRiskHandler_UpdateConfig_NegativeCooldownMinutes(t *testing.T) {
 
 func TestRiskHandler_GetPnL_OK(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	w := doRequest(h.GetPnL, http.MethodGet, "/pnl", nil)
 	if w.Code != http.StatusOK {
@@ -801,7 +851,7 @@ func TestRiskHandler_GetPnL_OK(t *testing.T) {
 
 func TestRiskHandler_GetPnL_NoDailyPnlWhenCalculatorNil(t *testing.T) {
 	riskMgr := newRiskManager()
-	h := NewRiskHandler(riskMgr, nil, nil)
+	h := NewRiskHandler(riskMgr, nil, nil, nil)
 
 	w := doRequest(h.GetPnL, http.MethodGet, "/pnl", nil)
 	if w.Code != http.StatusOK {
@@ -1346,7 +1396,7 @@ func TestTradingConfigHandler_UpdateTradingConfig_NegativeTradeAmount(t *testing
 // ---------------------------------------------------------------------------
 
 func TestRealtimeHandler_Stream_NilHub(t *testing.T) {
-	h := NewRealtimeHandler(nil, nil, nil)
+	h := NewRealtimeHandler(nil, nil, nil, nil)
 
 	w := doRequest(h.Stream, http.MethodGet, "/ws", nil)
 	if w.Code != http.StatusServiceUnavailable {
@@ -1360,7 +1410,7 @@ func TestRealtimeHandler_Stream_NilHub(t *testing.T) {
 
 func TestRealtimeHandler_Stream_InvalidSymbolId(t *testing.T) {
 	hub := usecase.NewRealtimeHub()
-	h := NewRealtimeHandler(nil, nil, hub)
+	h := NewRealtimeHandler(nil, nil, hub, nil)
 
 	w := httptest.NewRecorder()
 	_, r := gin.CreateTestContext(w)
