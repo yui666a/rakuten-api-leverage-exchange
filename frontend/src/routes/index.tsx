@@ -133,11 +133,12 @@ function Dashboard() {
         </section>
 
         <aside className="space-y-4">
-          <BotControlCard
-            status={status}
-            onStart={() => startBot.mutate()}
-            onStop={() => stopBot.mutate()}
-            isPending={startBot.isPending || stopBot.isPending}
+          <PositionsAndTradeCard
+            symbolId={symbolId}
+            positions={positions}
+            currencyPair={currentSymbol?.currencyPair}
+            lotStep={currentSymbol?.baseStepAmount}
+            minLot={currentSymbol?.minOrderAmount}
           />
           <OrderbookPanel
             orderbook={orderbook}
@@ -146,16 +147,18 @@ function Dashboard() {
             ofiShort={indicators?.ofiShort ?? null}
             ofiLong={indicators?.ofiLong ?? null}
           />
-          <ExecutionQualityCard />
-          <PositionsAndTradeCard
-            symbolId={symbolId}
-            positions={positions}
-            currencyPair={currentSymbol?.currencyPair}
-            lotStep={currentSymbol?.baseStepAmount}
-            minLot={currentSymbol?.minOrderAmount}
-          />
           <IndicatorPanel indicators={indicators} />
         </aside>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <BotControlCard
+          status={status}
+          onStart={() => startBot.mutate()}
+          onStop={() => stopBot.mutate()}
+          isPending={startBot.isPending || stopBot.isPending}
+        />
+        <ExecutionQualityCard />
       </div>
     </AppFrame>
   );
