@@ -16,10 +16,21 @@ type RiskHandler struct {
 	riskMgr     *usecase.RiskManager
 	realtimeHub *usecase.RealtimeHub
 	pnlCalc     *usecase.DailyPnLCalculator
+	pipeline    PipelineController
 }
 
-func NewRiskHandler(riskMgr *usecase.RiskManager, realtimeHub *usecase.RealtimeHub, pnlCalc *usecase.DailyPnLCalculator) *RiskHandler {
-	return &RiskHandler{riskMgr: riskMgr, realtimeHub: realtimeHub, pnlCalc: pnlCalc}
+func NewRiskHandler(
+	riskMgr *usecase.RiskManager,
+	realtimeHub *usecase.RealtimeHub,
+	pnlCalc *usecase.DailyPnLCalculator,
+	pipeline PipelineController,
+) *RiskHandler {
+	return &RiskHandler{
+		riskMgr:     riskMgr,
+		realtimeHub: realtimeHub,
+		pnlCalc:     pnlCalc,
+		pipeline:    pipeline,
+	}
 }
 
 func (h *RiskHandler) GetConfig(c *gin.Context) {
@@ -66,10 +77,12 @@ func (h *RiskHandler) UpdateConfig(c *gin.Context) {
 	if h.realtimeHub != nil {
 		_ = h.realtimeHub.PublishData("config", 0, req)
 		status := h.riskMgr.GetStatus()
+		pipelineRunning := h.pipeline != nil && h.pipeline.Running()
 		_ = h.realtimeHub.PublishData("status", 0, gin.H{
-			"status":          statusLabel(status),
+			"status":          statusLabel(status, pipelineRunning),
 			"tradingHalted":   status.TradingHalted,
 			"manuallyStopped": status.ManuallyStopped,
+			"pipelineRunning": pipelineRunning,
 			"balance":         status.Balance,
 			"dailyLoss":       status.DailyLoss,
 			"totalPosition":   status.TotalPosition,

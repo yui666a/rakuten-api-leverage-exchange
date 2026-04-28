@@ -17,17 +17,20 @@ type RealtimeHandler struct {
 	marketDataSvc *usecase.MarketDataService
 	riskMgr       *usecase.RiskManager
 	realtimeHub   *usecase.RealtimeHub
+	pipeline      PipelineController
 }
 
 func NewRealtimeHandler(
 	marketDataSvc *usecase.MarketDataService,
 	riskMgr *usecase.RiskManager,
 	realtimeHub *usecase.RealtimeHub,
+	pipeline PipelineController,
 ) *RealtimeHandler {
 	return &RealtimeHandler{
 		marketDataSvc: marketDataSvc,
 		riskMgr:       riskMgr,
 		realtimeHub:   realtimeHub,
+		pipeline:      pipeline,
 	}
 }
 
@@ -87,11 +90,13 @@ func (h *RealtimeHandler) Stream(c *gin.Context) {
 
 func (h *RealtimeHandler) writeInitialSnapshot(ctx context.Context, conn *websocket.Conn, symbolID int64) error {
 	status := h.riskMgr.GetStatus()
+	pipelineRunning := h.pipeline != nil && h.pipeline.Running()
 	initialEvents := []usecase.RealtimeEvent{
 		mustRealtimeEvent("status", 0, gin.H{
-			"status":          statusLabel(status),
+			"status":          statusLabel(status, pipelineRunning),
 			"tradingHalted":   status.TradingHalted,
 			"manuallyStopped": status.ManuallyStopped,
+			"pipelineRunning": pipelineRunning,
 			"balance":         status.Balance,
 			"dailyLoss":       status.DailyLoss,
 			"totalPosition":   status.TotalPosition,

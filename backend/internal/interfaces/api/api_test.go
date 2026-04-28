@@ -99,8 +99,18 @@ func TestGetStatus(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if body["status"] != "running" {
-		t.Fatalf("expected status 'running', got %v", body["status"])
+	// Pipeline is nil in this test setup, so /status must report stopped
+	// even though manuallyStopped=false. This guards against the 2026-04-28
+	// regression where status only looked at the manuallyStopped flag and
+	// claimed running while no pipeline goroutine existed.
+	if body["status"] != "stopped" {
+		t.Fatalf("expected status 'stopped' (no pipeline), got %v", body["status"])
+	}
+	if body["manuallyStopped"] != false {
+		t.Fatalf("expected manuallyStopped false, got %v", body["manuallyStopped"])
+	}
+	if body["pipelineRunning"] != false {
+		t.Fatalf("expected pipelineRunning false, got %v", body["pipelineRunning"])
 	}
 }
 
