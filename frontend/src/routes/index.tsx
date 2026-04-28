@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
+import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { AppFrame } from "../components/AppFrame";
 import { KpiCard } from "../components/KpiCard";
 import { CandlestickChart } from "../components/CandlestickChart";
@@ -7,10 +7,10 @@ import { PositionPanel } from "../components/PositionPanel";
 import { BotControlCard } from "../components/BotControlCard";
 import { LiveTickerCard } from "../components/LiveTickerCard";
 import { ManualTradeCard } from "../components/ManualTradeCard";
-import { StanceLegendPopover } from "../components/StanceLegendPopover";
 import { OrderbookPanel } from "../components/OrderbookPanel";
 import { ExecutionQualityCard } from "../components/ExecutionQualityCard";
 import { HaltReasonBadge } from "../components/HaltReasonBadge";
+import { RecentDecisionsCard } from "../components/RecentDecisionsCard";
 import { useStatus } from "../hooks/useStatus";
 import { usePnl } from "../hooks/usePnl";
 import { useStrategy } from "../hooks/useStrategy";
@@ -62,24 +62,6 @@ function Dashboard() {
       ? "—"
       : `${v < 0 ? "-" : "+"}¥${Math.abs(Math.round(v)).toLocaleString()}`;
 
-  const reasoningLabel = strategy?.reasoning
-    ? strategy.reasoning === "insufficient indicator data"
-      ? "指標データが不足しています"
-      : strategy.reasoning
-    : "戦略コメントはまだ生成されていません。";
-
-  const stance = strategy?.stance ?? null;
-  const stanceColorClass =
-    stance === "TREND_FOLLOW"
-      ? "text-accent-green"
-      : stance === "CONTRARIAN"
-        ? "text-amber-300"
-        : stance === "BREAKOUT"
-          ? "text-fuchsia-300"
-          : stance === "HOLD"
-            ? "text-cyan-200"
-            : "text-text-secondary";
-
   return (
     <AppFrame
       title="トレーディングダッシュボード"
@@ -91,14 +73,12 @@ function Dashboard() {
         tradingHalted={status?.tradingHalted}
       />
 
-      <div className="mt-3 flex items-center gap-4 rounded-3xl border border-white/8 bg-bg-card/90 px-5 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
-        <p className="text-[0.65rem] uppercase tracking-[0.32em] text-text-secondary">
-          戦略方針
-        </p>
-        <p className={`text-3xl font-bold tracking-wide ${stanceColorClass}`}>
-          {stance ?? "—"}
-        </p>
-        <StanceLegendPopover />
+      <div className="mt-3">
+        <RecentDecisionsCard
+          symbolId={symbolId}
+          strategy={strategy}
+          rootSearch={rootSearch}
+        />
       </div>
 
       <div className="mt-4">
@@ -151,28 +131,6 @@ function Dashboard() {
             currencyPair={currentSymbol?.currencyPair?.replace("_", "/")}
           />
           <CandlestickChart symbolId={symbolId} />
-          <div className="rounded-3xl border border-white/8 bg-bg-card/90 p-5 shadow-[0_12px_40px_rgba(0,0,0,0.22)]">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.28em] text-text-secondary">
-                  戦略インサイト
-                </p>
-                <h2 className="mt-2 text-xl font-semibold text-white">
-                  LLM判断理由
-                </h2>
-              </div>
-              <Link
-                to="/history"
-                search={rootSearch}
-                className="text-sm text-cyan-200 transition hover:text-cyan-100"
-              >
-                履歴を見る
-              </Link>
-            </div>
-            <p className="mt-4 text-sm leading-7 text-slate-300">
-              {reasoningLabel}
-            </p>
-          </div>
         </section>
 
         <aside className="space-y-4">

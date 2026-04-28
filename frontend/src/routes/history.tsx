@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { useMemo } from 'react'
+import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
 import { AppFrame } from '../components/AppFrame'
 import { DecisionLogTable } from '../components/DecisionLogTable'
 import { TradeHistoryTable, type TradeHistoryRow } from '../components/TradeHistoryTable'
@@ -9,15 +9,39 @@ import { useAllTrades } from '../hooks/useAllTrades'
 import { useDecisionLog } from '../hooks/useDecisionLog'
 import { useSymbolContext } from '../contexts/SymbolContext'
 
-export const Route = createFileRoute('/history')({ component: HistoryPage })
-
 type TabKey = 'all' | 'single' | 'decisions'
+
+const TAB_KEYS: TabKey[] = ['all', 'single', 'decisions']
+
+type HistorySearch = {
+  symbol?: string
+  tab?: TabKey
+}
+
+export const Route = createFileRoute('/history')({
+  component: HistoryPage,
+  validateSearch: (search: Record<string, unknown>): HistorySearch => ({
+    symbol: typeof search.symbol === 'string' ? search.symbol : undefined,
+    tab:
+      typeof search.tab === 'string' && (TAB_KEYS as string[]).includes(search.tab)
+        ? (search.tab as TabKey)
+        : undefined,
+  }),
+})
 
 function HistoryPage() {
   const { symbolId, currentSymbol } = useSymbolContext()
   useMarketTickerStream(symbolId)
 
-  const [tab, setTab] = useState<TabKey>('all')
+  const search = useSearch({ from: '/history' })
+  const navigate = useNavigate({ from: '/history' })
+  const tab: TabKey = search.tab ?? 'all'
+  const setTab = (next: TabKey) => {
+    navigate({
+      search: (prev) => ({ ...prev, tab: next === 'all' ? undefined : next }),
+      replace: true,
+    })
+  }
 
   const { data: singleTrades } = useTradeHistory(symbolId)
   const { data: allTradesData } = useAllTrades()
