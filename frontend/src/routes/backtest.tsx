@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, redirect } from '@tanstack/react-router'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { AppFrame } from '../components/AppFrame'
 import {
   useBacktestCSVMeta,
   useBacktestResults,
@@ -22,7 +21,14 @@ import type {
 } from '../lib/api'
 import { formatAmount } from '../lib/format'
 
-export const Route = createFileRoute('/backtest')({ component: BacktestPage })
+// /backtest は /analysis?view=runs に統合された。本体ロジックは
+// BacktestBody として export しており、新ルート (/analysis) から再
+// 利用される。直アクセスはハブ画面へ恒久 redirect する。
+export const Route = createFileRoute('/backtest')({
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/analysis', search })
+  },
+})
 
 type BacktestRunForm = {
   data: string
@@ -167,7 +173,7 @@ function getErrorMessage(error: unknown): string {
   return 'バックテスト実行に失敗しました。'
 }
 
-function BacktestPage() {
+export function BacktestBody() {
   const { data: symbols } = useSymbols()
   const pairOptions = useMemo(() => {
     const values = [...fallbackBacktestPairs]
@@ -328,10 +334,7 @@ function BacktestPage() {
   }
 
   return (
-    <AppFrame
-      title="Backtest Results"
-      subtitle="過去のバックテスト結果の一覧と詳細を確認できます。"
-    >
+    <>
       {isError && (
         <div className="mb-4 rounded-2xl border border-accent-red/40 bg-accent-red/10 px-5 py-3 text-sm text-accent-red">
           バックテスト結果の取得に失敗しました。
@@ -687,7 +690,7 @@ function BacktestPage() {
           )}
         </section>
       )}
-    </AppFrame>
+    </>
   )
 }
 
