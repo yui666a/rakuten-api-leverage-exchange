@@ -47,6 +47,9 @@
     "max_position_amount": 100000,
     "max_daily_loss": 50000,
     "trailing_atr_multiplier": 2.5,
+    "max_slippage_bps": 15,
+    "max_book_side_pct": 20,
+    "entry_cooldown_sec": 60,
     "position_sizing": {
       "mode": "risk_pct",
       "risk_per_trade_pct": 0.75,

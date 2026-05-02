@@ -1,6 +1,6 @@
 {
   "name": "production_ltc_60k",
-  "description": "Promoted on 2026-04-26 as ETH-budget-constrained LTC/JPY × PT15M production profile (initialBalance=60,000 JPY). Source candidate: experiment_ltc_60k_winner_no_break (cycle71g). Differs from production v7 in three places: breakout.enabled=false (cycle71g found this dominant), risk_per_trade_pct=0.75 (vs 0.50 for v7 -- ¥60k equity scale lets a higher risk fit the 20% MaxDD constraint), drawdown_scale_down (TierA=13%/0.65x, TierB=19%/0.40x -- needed because r=0.75 alone breaches 2y DD 22.51%). 4-period verification (3m/6m/1y/2y from 2026-04-16, initialBalance=60,000): 3m +5.09%/DD 6.26%, 6m +5.09%/DD 7.37%, 1y +45.16%/DD 17.52%, 2y +38.82%/DD 18.78%. All 4 periods positive, all 4 periods MaxDD <= 20%, geometric mean Return ~22% (vs v7@¥60k baseline +13.6%). Sizer config: min_lot=0.1, lot_step=0.1 (LTC venue), risk_pct=0.75 with DD scale-down. See docs/pdca/2026-04-26_cycle70-71_60k_promotion.md.",
+  "description": "Promoted on 2026-04-26 as ETH-budget-constrained LTC/JPY × PT15M production profile (initialBalance=60,000 JPY). Source candidate: experiment_ltc_60k_winner_no_break (cycle71g). Differs from production v7 in three places: breakout.enabled=false (cycle71g found this dominant), risk_per_trade_pct=0.75 (vs 0.50 for v7 -- ¥60k equity scale lets a higher risk fit the 20% MaxDD constraint), drawdown_scale_down (TierA=13%/0.65x, TierB=19%/0.40x -- needed because r=0.75 alone breaches 2y DD 22.51%). 4-period verification (3m/6m/1y/2y from 2026-04-16, initialBalance=60,000): 3m +5.09%/DD 6.26%, 6m +5.09%/DD 7.37%, 1y +45.16%/DD 17.52%, 2y +38.82%/DD 18.78%. All 4 periods positive, all 4 periods MaxDD <= 20%, geometric mean Return ~22% (vs v7@¥60k baseline +13.6%). Sizer config: min_lot=0.1, lot_step=0.1 (LTC venue), risk_pct=0.75 with DD scale-down. See docs/pdca/2026-04-26_cycle70-71_60k_promotion.md. 2026-05-02 PR4 (Signal/Decision/ExecutionPolicy Phase 1): added BookGate (max_slippage_bps=15, max_book_side_pct=20) and entry_cooldown_sec=60. Conservative initial values per design doc §8.4; PDCA sweep over 30/60/120/300s × 10/15/20/30 bps × 10/20/30 % to follow.",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -47,6 +47,9 @@
     "max_position_amount": 100000,
     "max_daily_loss": 50000,
     "trailing_atr_multiplier": 2.5,
+    "max_slippage_bps": 15,
+    "max_book_side_pct": 20,
+    "entry_cooldown_sec": 60,
     "position_sizing": {
       "mode": "risk_pct",
       "risk_per_trade_pct": 0.75,
