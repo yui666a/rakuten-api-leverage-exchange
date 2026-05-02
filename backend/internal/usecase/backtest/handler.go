@@ -510,16 +510,57 @@ type RiskHandler struct {
 	BookGateRejects map[string]int
 }
 
+// Handle dispatches on event type:
+//   - ActionDecisionEvent (PR3+): the new execution input. Decision-layer
+//     output drives sizing / risk gate / book gate / approved emission.
+//   - OrderEvent: observed for close-fill detection so the entry cooldown
+//     can be armed via RiskManager.NoteClose. The handler does not emit
+//     anything in this branch.
 func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.Event, error) {
-	signalEvent, ok := event.(entity.SignalEvent)
-	if !ok {
+	switch ev := event.(type) {
+	case entity.ActionDecisionEvent:
+		return h.handleDecision(ctx, ev)
+	case entity.OrderEvent:
+		h.handleOrderEvent(ev)
 		return nil, nil
 	}
+	return nil, nil
+}
+
+func (h *RiskHandler) handleDecision(ctx context.Context, decisionEvent entity.ActionDecisionEvent) ([]entity.Event, error) {
 	if h.RiskManager == nil {
 		return nil, fmt.Errorf("risk manager is nil")
 	}
 	if h.TradeAmount <= 0 {
 		return nil, fmt.Errorf("trade amount must be positive")
+	}
+
+	decision := decisionEvent.Decision
+
+	// HOLD / COOLDOWN_BLOCKED: nothing to do — recorder already captured the
+	// decision, and there is no order to attempt.
+	// EXIT_CANDIDATE is intentionally skipped in PR3: real exits stay on the
+	// TP/SL/Trailing path. A future PR may introduce an `exit_on_signal`
+	// profile flag to opt into signal-driven closes.
+	if decision.Intent != entity.IntentNewEntry {
+		return nil, nil
+	}
+
+	// Re-construct a Signal compatible with the existing downstream contract
+	// (sizer, RejectedSignalEvent, ApprovedSignalEvent). Confidence comes
+	// straight from MarketSignal.Strength (which itself was Confidence in
+	// the legacy translator), keeping bit-identical behaviour for sizing.
+	side := decision.Side
+	if side == "" {
+		// NEW_ENTRY without a side is a Decision-layer bug; treat as hold.
+		return nil, nil
+	}
+	synthSignal := entity.Signal{
+		SymbolID:   decision.SymbolID,
+		Action:     sideToAction(side),
+		Confidence: decision.Strength,
+		Reason:     decision.Reason,
+		Timestamp:  decision.Timestamp,
 	}
 
 	amount := h.TradeAmount
@@ -534,12 +575,12 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 		}
 		sized, skipReason := h.Sizer.Sized(
 			h.TradeAmount,
-			signalEvent.Price,
+			decisionEvent.Price,
 			h.StopLossPercent,
 			equity,
-			signalEvent.CurrentATR,
+			decisionEvent.CurrentATR,
 			ddPct,
-			signalEvent.Signal.Confidence,
+			synthSignal.Confidence,
 			h.MinConfidence,
 		)
 		if skipReason != "" || sized <= 0 {
@@ -550,68 +591,81 @@ func (h *RiskHandler) Handle(ctx context.Context, event entity.Event) ([]entity.
 				reason = "sizer returned zero lot"
 			}
 			return []entity.Event{entity.RejectedSignalEvent{
-				Signal:    signalEvent.Signal,
+				Signal:    synthSignal,
 				Stage:     entity.RejectedStageRisk,
 				Reason:    reason,
-				Price:     signalEvent.Price,
-				Timestamp: signalEvent.Timestamp,
+				Price:     decisionEvent.Price,
+				Timestamp: decisionEvent.Timestamp,
 			}}, nil
 		}
 		amount = sized
 	}
 
-	side := entity.OrderSideBuy
-	if signalEvent.Signal.Action == entity.SignalActionSell {
-		side = entity.OrderSideSell
-	}
 	proposal := entity.OrderProposal{
-		SymbolID: signalEvent.Signal.SymbolID,
+		SymbolID: decision.SymbolID,
 		Side:     side,
 		Amount:   amount,
-		Price:    signalEvent.Price,
+		Price:    decisionEvent.Price,
 		IsClose:  false,
 	}
 
-	check := h.RiskManager.CheckOrderAt(ctx, time.UnixMilli(signalEvent.Timestamp), proposal)
+	check := h.RiskManager.CheckOrderAt(ctx, time.UnixMilli(decisionEvent.Timestamp), proposal)
 	if !check.Approved {
 		return []entity.Event{entity.RejectedSignalEvent{
-			Signal:    signalEvent.Signal,
+			Signal:    synthSignal,
 			Stage:     entity.RejectedStageRisk,
 			Reason:    check.Reason,
-			Price:     signalEvent.Price,
-			Timestamp: signalEvent.Timestamp,
+			Price:     decisionEvent.Price,
+			Timestamp: decisionEvent.Timestamp,
 		}}, nil
 	}
 
-	// Pre-trade orderbook depth gate. Runs after RiskManager so the gate
-	// only sees signals that have already cleared position / daily-loss /
-	// cooldown checks. A nil BookGate short-circuits to allow.
 	if h.BookGate != nil {
-		decision := h.BookGate.Check(ctx, signalEvent.Signal.SymbolID, side, amount, signalEvent.Timestamp)
-		if !decision.Allow {
+		gateDecision := h.BookGate.Check(ctx, decision.SymbolID, side, amount, decisionEvent.Timestamp)
+		if !gateDecision.Allow {
 			if h.BookGateRejects == nil {
 				h.BookGateRejects = make(map[string]int)
 			}
-			h.BookGateRejects[decision.Reason]++
+			h.BookGateRejects[gateDecision.Reason]++
 			return []entity.Event{entity.RejectedSignalEvent{
-				Signal:    signalEvent.Signal,
+				Signal:    synthSignal,
 				Stage:     entity.RejectedStageBookGate,
-				Reason:    decision.Reason,
-				Price:     signalEvent.Price,
-				Timestamp: signalEvent.Timestamp,
+				Reason:    gateDecision.Reason,
+				Price:     decisionEvent.Price,
+				Timestamp: decisionEvent.Timestamp,
 			}}, nil
 		}
 	}
 
 	return []entity.Event{
 		entity.ApprovedSignalEvent{
-			Signal:    signalEvent.Signal,
-			Price:     signalEvent.Price,
-			Timestamp: signalEvent.Timestamp,
+			Signal:    synthSignal,
+			Price:     decisionEvent.Price,
+			Timestamp: decisionEvent.Timestamp,
 			Amount:    amount,
-			Urgency:   signalEvent.Signal.Urgency,
+			Urgency:   synthSignal.Urgency,
 		},
 	}, nil
+}
+
+// handleOrderEvent arms the entry cooldown when an OrderEvent represents a
+// realised close (ClosedPositionID > 0 with a non-zero OrderID). All other
+// order events — opens, failures (OrderID == 0), tick-driven trailing stops
+// already encoded by the executor — pass through untouched.
+func (h *RiskHandler) handleOrderEvent(ev entity.OrderEvent) {
+	if h.RiskManager == nil {
+		return
+	}
+	if ev.ClosedPositionID > 0 && ev.OrderID > 0 {
+		h.RiskManager.NoteClose(time.UnixMilli(ev.Timestamp))
+	}
+}
+
+func sideToAction(side entity.OrderSide) entity.SignalAction {
+	if side == entity.OrderSideSell {
+		return entity.SignalActionSell
+	}
+	return entity.SignalActionBuy
 }
 
 // TickRiskExecutor exposes minimum close-related operations for tick-driven risk checks.

@@ -315,10 +315,11 @@ func TestRiskHandler_EmitsApprovedSignalEvent(t *testing.T) {
 		TradeAmount: 0.01,
 	}
 
-	events, err := handler.Handle(context.Background(), entity.SignalEvent{
-		Signal: entity.Signal{
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
 			SymbolID: 7,
-			Action:   entity.SignalActionBuy,
+			Intent:   entity.IntentNewEntry,
+			Side:     entity.OrderSideBuy,
 			Reason:   "trend",
 		},
 		Price:     10000,
@@ -353,10 +354,11 @@ func TestRiskHandler_EmitsRejectedOnRiskManagerVeto(t *testing.T) {
 		TradeAmount: 0.01,
 	}
 
-	events, err := handler.Handle(context.Background(), entity.SignalEvent{
-		Signal: entity.Signal{
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
 			SymbolID: 7,
-			Action:   entity.SignalActionBuy,
+			Intent:   entity.IntentNewEntry,
+			Side:     entity.OrderSideBuy,
 			Reason:   "ema cross",
 		},
 		Price:     10000,
@@ -380,6 +382,87 @@ func TestRiskHandler_EmitsRejectedOnRiskManagerVeto(t *testing.T) {
 	}
 	if rej.Signal.Action != entity.SignalActionBuy {
 		t.Errorf("Signal must be carried through, got action %q", rej.Signal.Action)
+	}
+}
+
+// TestRiskHandler_PR3_NonNewEntryIntentsAreSilent: HOLD / EXIT_CANDIDATE /
+// COOLDOWN_BLOCKED must produce zero events. EXIT_CANDIDATE is intentionally
+// silent in PR3 — real exits stay on the TP/SL path.
+func TestRiskHandler_PR3_NonNewEntryIntentsAreSilent(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		MaxDailyLoss:      1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	handler := &RiskHandler{RiskManager: riskMgr, TradeAmount: 0.01}
+
+	for _, intent := range []entity.DecisionIntent{
+		entity.IntentHold,
+		entity.IntentExitCandidate,
+		entity.IntentCooldownBlocked,
+	} {
+		events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+			Decision: entity.ActionDecision{
+				SymbolID: 7, Intent: intent, Side: entity.OrderSideBuy,
+			},
+			Price:     10000,
+			Timestamp: time.Now().UnixMilli(),
+		})
+		if err != nil {
+			t.Fatalf("Handle(%q): %v", intent, err)
+		}
+		if len(events) != 0 {
+			t.Errorf("Intent %q should be silent, got %d events", intent, len(events))
+		}
+	}
+}
+
+// TestRiskHandler_PR3_OrderEventArmsCooldown verifies the close-detection
+// path: an OrderEvent with ClosedPositionID > 0 must arm the entry cooldown
+// via NoteClose, while opens (ClosedPositionID == 0) must not.
+func TestRiskHandler_PR3_OrderEventArmsCooldown(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		InitialCapital:   1_000_000,
+		EntryCooldownSec: 30,
+	})
+	handler := &RiskHandler{RiskManager: riskMgr, TradeAmount: 0.01}
+
+	closeTs := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if _, err := handler.Handle(context.Background(), entity.OrderEvent{
+		OrderID: 100, ClosedPositionID: 7, Timestamp: closeTs,
+	}); err != nil {
+		t.Fatalf("Handle close OrderEvent: %v", err)
+	}
+	if !riskMgr.IsEntryCooldown(time.UnixMilli(closeTs).Add(10 * time.Second)) {
+		t.Error("close fill should have armed entry cooldown")
+	}
+
+	// Reset and confirm an open OrderEvent does NOT arm cooldown.
+	riskMgr2 := usecase.NewRiskManager(entity.RiskConfig{
+		InitialCapital: 1_000_000, EntryCooldownSec: 30,
+	})
+	handler2 := &RiskHandler{RiskManager: riskMgr2, TradeAmount: 0.01}
+	if _, err := handler2.Handle(context.Background(), entity.OrderEvent{
+		OrderID: 100, OpenedPositionID: 7, ClosedPositionID: 0, Timestamp: closeTs,
+	}); err != nil {
+		t.Fatalf("Handle open OrderEvent: %v", err)
+	}
+	if riskMgr2.IsEntryCooldown(time.UnixMilli(closeTs).Add(time.Second)) {
+		t.Error("open fill must not arm entry cooldown")
+	}
+
+	// Failed close (OrderID == 0) must not arm cooldown either.
+	riskMgr3 := usecase.NewRiskManager(entity.RiskConfig{
+		InitialCapital: 1_000_000, EntryCooldownSec: 30,
+	})
+	handler3 := &RiskHandler{RiskManager: riskMgr3, TradeAmount: 0.01}
+	if _, err := handler3.Handle(context.Background(), entity.OrderEvent{
+		OrderID: 0, ClosedPositionID: 7, Timestamp: closeTs,
+	}); err != nil {
+		t.Fatalf("Handle failed close OrderEvent: %v", err)
+	}
+	if riskMgr3.IsEntryCooldown(time.UnixMilli(closeTs).Add(time.Second)) {
+		t.Error("failed close must not arm entry cooldown")
 	}
 }
 
