@@ -75,6 +75,26 @@ func TestRunner_WithDecisionRecorder_ForwardsBusEvents(t *testing.T) {
 	if !sawIndicator {
 		t.Errorf("recorder must see at least one IndicatorEvent; got %v", rec.seen)
 	}
+
+	// PR2: the new shadow route must reach the recorder too. MarketSignalEvent
+	// fires on every bar (HOLD included) and ActionDecisionEvent follows for
+	// each MarketSignalEvent the DecisionHandler processes.
+	sawMarket := false
+	sawDecision := false
+	for _, et := range rec.seen {
+		switch et {
+		case entity.EventTypeMarketSignal:
+			sawMarket = true
+		case entity.EventTypeDecision:
+			sawDecision = true
+		}
+	}
+	if !sawMarket {
+		t.Errorf("recorder must see MarketSignalEvent (PR2 shadow route); got %v", rec.seen)
+	}
+	if !sawDecision {
+		t.Errorf("recorder must see ActionDecisionEvent (PR2 shadow route); got %v", rec.seen)
+	}
 }
 
 func TestRunner_PreAllocatedResultID_IsHonoured(t *testing.T) {

@@ -87,16 +87,90 @@ func TestStrategyHandler_UsesIndicatorTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle error: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 signal event, got %d", len(events))
+	// PR2: actionable signal emits SignalEvent (legacy route) + MarketSignalEvent
+	// (new route, shadow). HOLD bars emit only the MarketSignalEvent.
+	if len(events) != 2 {
+		t.Fatalf("expected 2 events (SignalEvent + MarketSignalEvent), got %d", len(events))
 	}
 
 	signalEvent, ok := events[0].(entity.SignalEvent)
 	if !ok {
-		t.Fatalf("expected SignalEvent, got %T", events[0])
+		t.Fatalf("expected SignalEvent at index 0, got %T", events[0])
 	}
 	if signalEvent.Signal.Timestamp != ts/1000 {
 		t.Fatalf("expected signal timestamp %d, got %d", ts/1000, signalEvent.Signal.Timestamp)
+	}
+	if _, ok := events[1].(entity.MarketSignalEvent); !ok {
+		t.Fatalf("expected MarketSignalEvent at index 1, got %T", events[1])
+	}
+}
+
+// TestStrategyHandler_PR2_ShadowMarketSignal exercises the PR2 contract that
+// StrategyHandler emits MarketSignalEvent on every non-nil signal — including
+// HOLD bars where Direction=NEUTRAL and SignalEvent is intentionally dropped
+// to preserve the legacy RiskHandler input.
+func TestStrategyHandler_PR2_ShadowMarketSignal(t *testing.T) {
+	cases := []struct {
+		name        string
+		action      entity.SignalAction
+		wantSignal  bool
+		wantDirEnum entity.SignalDirection
+	}{
+		{"buy", entity.SignalActionBuy, true, entity.DirectionBullish},
+		{"sell", entity.SignalActionSell, true, entity.DirectionBearish},
+		{"hold", entity.SignalActionHold, false, entity.DirectionNeutral},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			handler := &StrategyHandler{Strategy: stubStrategy{action: c.action, confidence: 0.42, reason: "stub"}}
+			events, err := handler.Handle(context.Background(), entity.IndicatorEvent{
+				SymbolID: 7, Interval: "PT15M", Timestamp: 1700000000000,
+				LastPrice: 100,
+				Primary:   entity.IndicatorSet{SymbolID: 7},
+			})
+			if err != nil {
+				t.Fatalf("handle: %v", err)
+			}
+			wantLen := 1
+			if c.wantSignal {
+				wantLen = 2
+			}
+			if len(events) != wantLen {
+				t.Fatalf("len(events) = %d, want %d", len(events), wantLen)
+			}
+
+			var ms entity.MarketSignalEvent
+			for _, ev := range events {
+				if x, ok := ev.(entity.MarketSignalEvent); ok {
+					ms = x
+				}
+			}
+			if ms.EventType() != entity.EventTypeMarketSignal {
+				t.Fatalf("expected MarketSignalEvent, got %T", events[len(events)-1])
+			}
+			if ms.Signal.Direction != c.wantDirEnum {
+				t.Errorf("Direction = %q, want %q", ms.Signal.Direction, c.wantDirEnum)
+			}
+			if ms.Signal.Strength != 0.42 {
+				t.Errorf("Strength = %v, want 0.42", ms.Signal.Strength)
+			}
+			if ms.Signal.Source != "legacy_strategy_engine" {
+				t.Errorf("Source = %q, want legacy_strategy_engine", ms.Signal.Source)
+			}
+		})
+	}
+}
+
+func TestStrategyHandler_NilSignal_NoEvents(t *testing.T) {
+	handler := &StrategyHandler{Strategy: stubStrategy{returnNil: true}}
+	events, err := handler.Handle(context.Background(), entity.IndicatorEvent{
+		SymbolID: 7, Timestamp: 1, Primary: entity.IndicatorSet{SymbolID: 7},
+	})
+	if err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if events != nil {
+		t.Errorf("expected nil events for nil signal, got %v", events)
 	}
 }
 
@@ -135,6 +209,31 @@ func TestTickGeneratorHandler_SequenceAndTimestamps(t *testing.T) {
 }
 
 func floatPtr(v float64) *float64 { return &v }
+
+// stubStrategy returns a fixed Signal regardless of inputs. Used by PR2 tests
+// that exercise StrategyHandler's MarketSignal emission contract without
+// depending on the real StrategyEngine's signal-generation logic.
+type stubStrategy struct {
+	action     entity.SignalAction
+	confidence float64
+	reason     string
+	returnNil  bool
+}
+
+func (s stubStrategy) Name() string { return "stub" }
+
+func (s stubStrategy) Evaluate(ctx context.Context, indicators *entity.IndicatorSet, higherTF *entity.IndicatorSet, lastPrice float64, now time.Time) (*entity.Signal, error) {
+	if s.returnNil {
+		return nil, nil
+	}
+	return &entity.Signal{
+		SymbolID:   indicators.SymbolID,
+		Action:     s.action,
+		Confidence: s.confidence,
+		Reason:     s.reason,
+		Timestamp:  now.Unix(),
+	}, nil
+}
 
 type fakeSignalExecutor struct {
 	lastSymbolID  int64

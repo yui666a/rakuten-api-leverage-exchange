@@ -368,7 +368,7 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 	if err != nil {
 		return nil, err
 	}
-	if signal == nil || signal.Action == entity.SignalActionHold {
+	if signal == nil {
 		return nil, nil
 	}
 
@@ -376,14 +376,61 @@ func (h *StrategyHandler) Handle(ctx context.Context, event entity.Event) ([]ent
 	if indicators.ATR != nil {
 		atr = *indicators.ATR
 	}
-	return []entity.Event{
-		entity.SignalEvent{
+
+	events := make([]entity.Event, 0, 2)
+
+	// Legacy route (PR1 / earlier): SignalEvent fires only on actionable
+	// (non-HOLD) signals. PR2 deliberately preserves this asymmetry so the
+	// downstream RiskHandler keeps consuming the same events as before — the
+	// new route is shadow-only until PR3.
+	if signal.Action != entity.SignalActionHold {
+		events = append(events, entity.SignalEvent{
 			Signal:     *signal,
 			Price:      indicatorEvent.LastPrice,
 			Timestamp:  indicatorEvent.Timestamp,
 			CurrentATR: atr,
-		},
-	}, nil
+		})
+	}
+
+	// New route (PR2 of Signal/Decision/ExecutionPolicy three-layer
+	// separation): always publish a MarketSignalEvent — including HOLD bars,
+	// where Direction=NEUTRAL — so the recorder can populate the Phase 1
+	// columns on every bar. The DecisionHandler consumes this event at
+	// priority 27 and emits an ActionDecisionEvent in turn.
+	events = append(events, entity.MarketSignalEvent{
+		Signal:     toMarketSignal(*signal, indicators),
+		Price:      indicatorEvent.LastPrice,
+		CurrentATR: atr,
+		Timestamp:  indicatorEvent.Timestamp,
+	})
+
+	return events, nil
+}
+
+// toMarketSignal is the thin translation that lets the existing
+// BUY/SELL/HOLD-based StrategyEngine feed the new Direction/Strength-based
+// route without rewriting its internals. Phase 6+ may rework StrategyEngine
+// itself to emit MarketSignal directly; for now the adapter keeps both
+// routes correct without touching the strategy logic.
+func toMarketSignal(s entity.Signal, indicators entity.IndicatorSet) entity.MarketSignal {
+	var dir entity.SignalDirection
+	switch s.Action {
+	case entity.SignalActionBuy:
+		dir = entity.DirectionBullish
+	case entity.SignalActionSell:
+		dir = entity.DirectionBearish
+	default:
+		dir = entity.DirectionNeutral
+	}
+	return entity.MarketSignal{
+		SymbolID:   s.SymbolID,
+		Direction:  dir,
+		Strength:   s.Confidence,
+		Source:     "legacy_strategy_engine",
+		Reason:     s.Reason,
+		Indicators: indicators,
+		Timestamp:  s.Timestamp,
+	}
 }
 
 // EquityProvider exposes the running account equity to the risk handler so

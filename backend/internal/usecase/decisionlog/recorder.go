@@ -77,6 +77,10 @@ func (r *Recorder) Handle(ctx context.Context, event entity.Event) ([]entity.Eve
 		r.onIndicator(ctx, ev)
 	case entity.SignalEvent:
 		r.onSignal(ctx, ev)
+	case entity.MarketSignalEvent:
+		r.onMarketSignal(ctx, ev)
+	case entity.ActionDecisionEvent:
+		r.onActionDecision(ctx, ev)
 	case entity.ApprovedSignalEvent:
 		r.onApproved(ctx)
 	case entity.RejectedSignalEvent:
@@ -153,6 +157,32 @@ func (r *Recorder) onSignal(ctx context.Context, ev entity.SignalEvent) {
 	r.pendingRec.SignalConfidence = ev.Signal.Confidence
 	r.pendingRec.SignalReason = ev.Signal.Reason
 	r.persistPending(ctx, "signal")
+}
+
+// onMarketSignal populates the Phase 1 columns SignalDirection / SignalStrength
+// from the new shadow route (PR2). signal_reason / signal_action are owned by
+// the legacy onSignal path so they stay coherent with what the legacy
+// RiskHandler sees; the Decision-layer reasoning lands in DecisionReason.
+func (r *Recorder) onMarketSignal(ctx context.Context, ev entity.MarketSignalEvent) {
+	if !r.hasPending {
+		return
+	}
+	r.pendingRec.SignalDirection = string(ev.Signal.Direction)
+	r.pendingRec.SignalStrength = ev.Signal.Strength
+	r.persistPending(ctx, "market_signal")
+}
+
+// onActionDecision populates the Phase 1 columns DecisionIntent / DecisionSide
+// / DecisionReason from the Decision layer's output. PR2 leaves these as
+// observation-only — the legacy RiskHandler still drives execution.
+func (r *Recorder) onActionDecision(ctx context.Context, ev entity.ActionDecisionEvent) {
+	if !r.hasPending {
+		return
+	}
+	r.pendingRec.DecisionIntent = string(ev.Decision.Intent)
+	r.pendingRec.DecisionSide = string(ev.Decision.Side)
+	r.pendingRec.DecisionReason = ev.Decision.Reason
+	r.persistPending(ctx, "action_decision")
 }
 
 func (r *Recorder) onApproved(ctx context.Context) {

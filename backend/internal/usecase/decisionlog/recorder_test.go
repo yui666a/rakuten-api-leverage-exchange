@@ -265,3 +265,147 @@ func TestRecorder_InsertErrorDoesNotPropagate(t *testing.T) {
 		t.Fatalf("Handle indicator must swallow Insert errors, got: %v", err)
 	}
 }
+
+// TestRecorder_PR2_MarketSignalPopulatesPhaseOneColumns checks that the new
+// shadow route writes signal_direction / signal_strength without disturbing
+// the legacy signal_action / signal_confidence / signal_reason fields owned
+// by onSignal. Both routes update the same in-flight row.
+func TestRecorder_PR2_MarketSignalPopulatesPhaseOneColumns(t *testing.T) {
+	repo := &stubRepo{}
+	rec := newRecorderForTest(repo)
+	ctx := context.Background()
+
+	if _, err := rec.Handle(ctx, indicatorEvent(7, 1_000)); err != nil {
+		t.Fatalf("Handle indicator: %v", err)
+	}
+	// Legacy SignalEvent fills the old columns.
+	if _, err := rec.Handle(ctx, entity.SignalEvent{
+		Signal: entity.Signal{
+			SymbolID: 7, Action: entity.SignalActionBuy, Confidence: 0.7,
+			Reason: "trend follow: legacy",
+		},
+		Price: 30210, Timestamp: 1_000,
+	}); err != nil {
+		t.Fatalf("Handle legacy signal: %v", err)
+	}
+	// New MarketSignalEvent fills Phase 1 columns.
+	if _, err := rec.Handle(ctx, entity.MarketSignalEvent{
+		Signal: entity.MarketSignal{
+			SymbolID: 7, Direction: entity.DirectionBullish, Strength: 0.7,
+			Source: "legacy_strategy_engine", Reason: "trend follow: legacy",
+		},
+		Price: 30210, Timestamp: 1_000,
+	}); err != nil {
+		t.Fatalf("Handle market signal: %v", err)
+	}
+
+	got := repo.inserted[0]
+	if got.SignalAction != "BUY" {
+		t.Errorf("SignalAction = %q, want BUY (legacy preserved)", got.SignalAction)
+	}
+	if got.SignalConfidence != 0.7 {
+		t.Errorf("SignalConfidence = %v, want 0.7 (legacy preserved)", got.SignalConfidence)
+	}
+	if got.SignalReason != "trend follow: legacy" {
+		t.Errorf("SignalReason = %q (legacy preserved)", got.SignalReason)
+	}
+	if got.SignalDirection != "BULLISH" {
+		t.Errorf("SignalDirection = %q, want BULLISH", got.SignalDirection)
+	}
+	if got.SignalStrength != 0.7 {
+		t.Errorf("SignalStrength = %v, want 0.7", got.SignalStrength)
+	}
+}
+
+// TestRecorder_PR2_HoldBarFillsDirectionNeutral verifies the PR2 contract for
+// HOLD bars: the legacy onSignal is never called (StrategyHandler drops HOLD
+// SignalEvents) but onMarketSignal still fires with Direction=NEUTRAL, so
+// the bar gets meaningful Phase 1 columns.
+func TestRecorder_PR2_HoldBarFillsDirectionNeutral(t *testing.T) {
+	repo := &stubRepo{}
+	rec := newRecorderForTest(repo)
+	ctx := context.Background()
+
+	if _, err := rec.Handle(ctx, indicatorEvent(7, 1_000)); err != nil {
+		t.Fatalf("Handle indicator: %v", err)
+	}
+	// No legacy SignalEvent fires for HOLD. Only the shadow route reaches the recorder.
+	if _, err := rec.Handle(ctx, entity.MarketSignalEvent{
+		Signal: entity.MarketSignal{
+			SymbolID: 7, Direction: entity.DirectionNeutral, Strength: 0.0,
+			Reason: "no clear signal",
+		},
+		Timestamp: 1_000,
+	}); err != nil {
+		t.Fatalf("Handle market signal: %v", err)
+	}
+
+	got := repo.inserted[0]
+	if got.SignalAction != "HOLD" {
+		t.Errorf("SignalAction = %q, want HOLD (initial default preserved)", got.SignalAction)
+	}
+	if got.SignalDirection != "NEUTRAL" {
+		t.Errorf("SignalDirection = %q, want NEUTRAL", got.SignalDirection)
+	}
+}
+
+// TestRecorder_PR2_ActionDecisionPopulatesIntentColumns wires the second new
+// event type. Decision metadata flows to decision_intent / decision_side /
+// decision_reason without overwriting any legacy column.
+func TestRecorder_PR2_ActionDecisionPopulatesIntentColumns(t *testing.T) {
+	repo := &stubRepo{}
+	rec := newRecorderForTest(repo)
+	ctx := context.Background()
+
+	if _, err := rec.Handle(ctx, indicatorEvent(7, 1_000)); err != nil {
+		t.Fatalf("Handle indicator: %v", err)
+	}
+	if _, err := rec.Handle(ctx, entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentNewEntry,
+			Side:     entity.OrderSideBuy,
+			Reason:   "no position; bullish signal -> new long",
+		},
+		Timestamp: 1_000,
+	}); err != nil {
+		t.Fatalf("Handle action decision: %v", err)
+	}
+
+	got := repo.inserted[0]
+	if got.DecisionIntent != "NEW_ENTRY" {
+		t.Errorf("DecisionIntent = %q, want NEW_ENTRY", got.DecisionIntent)
+	}
+	if got.DecisionSide != "BUY" {
+		t.Errorf("DecisionSide = %q, want BUY", got.DecisionSide)
+	}
+	if got.DecisionReason == "" {
+		t.Errorf("DecisionReason should be populated")
+	}
+}
+
+// TestRecorder_PR2_NoPendingSwallowsNewEvents guards against panics when new
+// events arrive before the first IndicatorEvent of a bar (e.g. recorder
+// attached mid-stream). The legacy onSignal already has this guard; the new
+// handlers must too.
+func TestRecorder_PR2_NoPendingSwallowsNewEvents(t *testing.T) {
+	repo := &stubRepo{}
+	rec := newRecorderForTest(repo)
+	ctx := context.Background()
+
+	// No indicatorEvent yet → hasPending is false. Both new handlers should
+	// no-op without writing anything.
+	if _, err := rec.Handle(ctx, entity.MarketSignalEvent{
+		Signal: entity.MarketSignal{Direction: entity.DirectionBullish},
+	}); err != nil {
+		t.Fatalf("MarketSignal pre-pending: %v", err)
+	}
+	if _, err := rec.Handle(ctx, entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{Intent: entity.IntentNewEntry},
+	}); err != nil {
+		t.Fatalf("ActionDecision pre-pending: %v", err)
+	}
+	if len(repo.inserted) != 0 {
+		t.Errorf("expected no inserts, got %d", len(repo.inserted))
+	}
+}
