@@ -1,13 +1,15 @@
 package entity
 
 const (
-	EventTypeCandle    = "candle"
-	EventTypeIndicator = "indicator"
-	EventTypeTick      = "tick"
-	EventTypeSignal    = "signal"
-	EventTypeApproved  = "approved_signal"
-	EventTypeRejected  = "rejected_signal"
-	EventTypeOrder     = "order"
+	EventTypeCandle       = "candle"
+	EventTypeIndicator    = "indicator"
+	EventTypeTick         = "tick"
+	EventTypeSignal       = "signal"
+	EventTypeMarketSignal = "market_signal"
+	EventTypeDecision     = "decision"
+	EventTypeApproved     = "approved_signal"
+	EventTypeRejected     = "rejected_signal"
+	EventTypeOrder        = "order"
 )
 
 // Event is a minimal contract used by the backtest event bus.
