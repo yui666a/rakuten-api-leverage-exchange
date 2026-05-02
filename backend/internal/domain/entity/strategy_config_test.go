@@ -176,6 +176,67 @@ func TestStrategyProfile_Validate(t *testing.T) {
 			mutate:  func(p *StrategyProfile) { p.Risk.TakeProfitPercent = -1 },
 			wantErr: "take_profit_percent",
 		},
+		// PR4 (Phase 1): BookGate / EntryCooldown profile field bounds.
+		{
+			name:    "max_slippage_bps negative",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxSlippageBps = -1 },
+			wantErr: "max_slippage_bps",
+		},
+		{
+			name:    "max_slippage_bps too large",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxSlippageBps = 1001 },
+			wantErr: "max_slippage_bps",
+		},
+		{
+			name:   "max_slippage_bps boundary 0 (disabled)",
+			mutate: func(p *StrategyProfile) { p.Risk.MaxSlippageBps = 0 },
+			// 0 is allowed (disabled)
+			wantErr: "",
+		},
+		{
+			name:    "max_slippage_bps boundary 1000 (max)",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxSlippageBps = 1000 },
+			wantErr: "",
+		},
+		{
+			name:    "max_book_side_pct negative",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxBookSidePct = -1 },
+			wantErr: "max_book_side_pct",
+		},
+		{
+			name:    "max_book_side_pct too large",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxBookSidePct = 101 },
+			wantErr: "max_book_side_pct",
+		},
+		{
+			name:    "max_book_side_pct boundary 100",
+			mutate:  func(p *StrategyProfile) { p.Risk.MaxBookSidePct = 100 },
+			wantErr: "",
+		},
+		{
+			name:    "entry_cooldown_sec negative",
+			mutate:  func(p *StrategyProfile) { p.Risk.EntryCooldownSec = -1 },
+			wantErr: "entry_cooldown_sec",
+		},
+		{
+			name:    "entry_cooldown_sec too large",
+			mutate:  func(p *StrategyProfile) { p.Risk.EntryCooldownSec = 3601 },
+			wantErr: "entry_cooldown_sec",
+		},
+		{
+			name:    "entry_cooldown_sec boundary 3600",
+			mutate:  func(p *StrategyProfile) { p.Risk.EntryCooldownSec = 3600 },
+			wantErr: "",
+		},
+		{
+			name: "all PR4 fields populated normally",
+			mutate: func(p *StrategyProfile) {
+				p.Risk.MaxSlippageBps = 15
+				p.Risk.MaxBookSidePct = 20
+				p.Risk.EntryCooldownSec = 60
+			},
+			wantErr: "",
+		},
 	}
 
 	for _, tc := range tests {

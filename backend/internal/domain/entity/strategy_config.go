@@ -369,6 +369,14 @@ type StrategyRiskConfig struct {
 	// used as-is. When set, the sizer computes per-trade lot size from
 	// equity, signal confidence, ATR, and drawdown. See usecase/positionsize.
 	PositionSizing *PositionSizingConfig `json:"position_sizing,omitempty"`
+
+	// Phase 1 PR4 (Signal/Decision/ExecutionPolicy) profile-driven knobs for
+	// BookGate and entry cooldown. Zero leaves the env-var-derived RiskConfig
+	// value (set at NewRiskManager time) untouched; non-zero takes precedence
+	// — profile-driven intent is treated as the source of truth for production.
+	MaxSlippageBps   float64 `json:"max_slippage_bps,omitempty"`
+	MaxBookSidePct   float64 `json:"max_book_side_pct,omitempty"`
+	EntryCooldownSec int     `json:"entry_cooldown_sec,omitempty"`
 }
 
 // PositionSizingConfig declares how per-trade lot size is derived at runtime.
@@ -578,6 +586,19 @@ func (p StrategyProfile) Validate() error {
 	}
 	if p.Risk.TakeProfitPercent < 0 {
 		errs = append(errs, fmt.Errorf("strategy_risk.take_profit_percent must be >= 0 (got %v)", p.Risk.TakeProfitPercent))
+	}
+
+	// PR4 (Phase 1): BookGate / EntryCooldown profile knobs. 0 disables the
+	// override (env-var fallback applies); negative or absurd values are
+	// almost certainly typos so reject loudly.
+	if p.Risk.MaxSlippageBps < 0 || p.Risk.MaxSlippageBps > 1000 {
+		errs = append(errs, fmt.Errorf("strategy_risk.max_slippage_bps must be in [0, 1000] (got %v)", p.Risk.MaxSlippageBps))
+	}
+	if p.Risk.MaxBookSidePct < 0 || p.Risk.MaxBookSidePct > 100 {
+		errs = append(errs, fmt.Errorf("strategy_risk.max_book_side_pct must be in [0, 100] (got %v)", p.Risk.MaxBookSidePct))
+	}
+	if p.Risk.EntryCooldownSec < 0 || p.Risk.EntryCooldownSec > 3600 {
+		errs = append(errs, fmt.Errorf("strategy_risk.entry_cooldown_sec must be in [0, 3600] (got %d)", p.Risk.EntryCooldownSec))
 	}
 
 	// PR-11: negative Donchian period would compute NaN indefinitely; 0
