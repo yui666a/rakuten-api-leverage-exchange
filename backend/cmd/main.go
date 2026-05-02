@@ -130,6 +130,20 @@ func main() {
 		if liveProfile.StanceRules.BBSqueezeLookback > 0 {
 			indicatorCalc.SetBBSqueezeLookback(liveProfile.StanceRules.BBSqueezeLookback)
 		}
+		// PR4 (Phase 1): apply profile-driven BookGate / EntryCooldown
+		// overrides on top of the env-var defaults already in riskMgr.
+		// Zero values in the profile leave the env-var fallback untouched.
+		riskMgr.ApplyProfileRiskOverrides(
+			liveProfile.Risk.MaxSlippageBps,
+			liveProfile.Risk.MaxBookSidePct,
+			liveProfile.Risk.EntryCooldownSec,
+		)
+		slog.Info("profile risk overrides applied",
+			"profile", liveProfile.Name,
+			"maxSlippageBps", liveProfile.Risk.MaxSlippageBps,
+			"maxBookSidePct", liveProfile.Risk.MaxBookSidePct,
+			"entryCooldownSec", liveProfile.Risk.EntryCooldownSec,
+		)
 	}
 
 	if err := bootstrapCandles(context.Background(), restClient, marketDataSvc, symbolID, "PT15M", 500); err != nil {
