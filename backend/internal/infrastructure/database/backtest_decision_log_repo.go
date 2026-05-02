@@ -40,8 +40,11 @@ func (r *backtestDecisionLogRepo) InsertAndID(ctx context.Context, rec entity.De
 			order_outcome, order_id, executed_amount, executed_price, order_error,
 			closed_position_id, opened_position_id,
 			indicators_json, higher_tf_indicators_json,
+			signal_direction, signal_strength,
+			decision_intent, decision_side, decision_reason,
+			exit_policy_outcome,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	res, err := r.db.ExecContext(ctx, q,
 		runID,
@@ -54,6 +57,9 @@ func (r *backtestDecisionLogRepo) InsertAndID(ctx context.Context, rec entity.De
 		rec.OrderOutcome, rec.OrderID, rec.ExecutedAmount, rec.ExecutedPrice, rec.OrderError,
 		rec.ClosedPositionID, rec.OpenedPositionID,
 		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
+		rec.SignalDirection, rec.SignalStrength,
+		rec.DecisionIntent, rec.DecisionSide, rec.DecisionReason,
+		rec.ExitPolicyOutcome,
 		rec.CreatedAt,
 	)
 	if err != nil {
@@ -78,6 +84,9 @@ func (r *backtestDecisionLogRepo) Update(ctx context.Context, rec entity.Decisio
 			order_outcome = ?, order_id = ?, executed_amount = ?, executed_price = ?, order_error = ?,
 			closed_position_id = ?, opened_position_id = ?,
 			indicators_json = ?, higher_tf_indicators_json = ?,
+			signal_direction = ?, signal_strength = ?,
+			decision_intent = ?, decision_side = ?, decision_reason = ?,
+			exit_policy_outcome = ?,
 			created_at = ?
 		WHERE id = ?
 	`
@@ -91,6 +100,9 @@ func (r *backtestDecisionLogRepo) Update(ctx context.Context, rec entity.Decisio
 		rec.OrderOutcome, rec.OrderID, rec.ExecutedAmount, rec.ExecutedPrice, rec.OrderError,
 		rec.ClosedPositionID, rec.OpenedPositionID,
 		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
+		rec.SignalDirection, rec.SignalStrength,
+		rec.DecisionIntent, rec.DecisionSide, rec.DecisionReason,
+		rec.ExitPolicyOutcome,
 		rec.CreatedAt,
 		rec.ID,
 	)
@@ -129,6 +141,9 @@ func (r *backtestDecisionLogRepo) ListByRun(ctx context.Context, runID string, l
 		       order_outcome, order_id, executed_amount, executed_price, order_error,
 		       closed_position_id, opened_position_id,
 		       indicators_json, higher_tf_indicators_json,
+		       signal_direction, signal_strength,
+		       decision_intent, decision_side, decision_reason,
+		       exit_policy_outcome,
 		       created_at
 		FROM backtest_decision_log
 		WHERE %s
@@ -155,6 +170,9 @@ func (r *backtestDecisionLogRepo) ListByRun(ctx context.Context, runID string, l
 			&rec.OrderOutcome, &rec.OrderID, &rec.ExecutedAmount, &rec.ExecutedPrice, &rec.OrderError,
 			&rec.ClosedPositionID, &rec.OpenedPositionID,
 			&rec.IndicatorsJSON, &rec.HigherTFIndicatorsJSON,
+			&rec.SignalDirection, &rec.SignalStrength,
+			&rec.DecisionIntent, &rec.DecisionSide, &rec.DecisionReason,
+			&rec.ExitPolicyOutcome,
 			&rec.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("backtest_decision_log scan: %w", err)

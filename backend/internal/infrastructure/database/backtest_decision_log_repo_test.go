@@ -147,3 +147,60 @@ func TestBacktestDecisionLogRepo_DeleteOlderThan(t *testing.T) {
 		t.Errorf("old rows = %d, want 0", len(rowsOld))
 	}
 }
+
+// TestBacktestDecisionLogRepo_PhaseOneColumnsRoundTrip: Phase 1 で追加した
+// 6 カラムが INSERT → SELECT で往復し、Update でも上書きできることを確認。
+func TestBacktestDecisionLogRepo_PhaseOneColumnsRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	repo := &backtestDecisionLogRepo{db: db}
+	ctx := context.Background()
+
+	rec := sampleBacktestDecisionRecord(1745654700000, time.Now().UnixMilli())
+	rec.SignalDirection = "BEARISH"
+	rec.SignalStrength = 0.55
+	rec.DecisionIntent = "EXIT_CANDIDATE"
+	rec.DecisionSide = "SELL"
+	rec.DecisionReason = "rsi overbought"
+	rec.ExitPolicyOutcome = "VETOED"
+
+	id, err := repo.InsertAndID(ctx, rec, "run-phase1")
+	if err != nil {
+		t.Fatalf("InsertAndID: %v", err)
+	}
+
+	rows, _, err := repo.ListByRun(ctx, "run-phase1", 10, 0)
+	if err != nil {
+		t.Fatalf("ListByRun: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	got := rows[0]
+	if got.SignalDirection != "BEARISH" || got.SignalStrength != 0.55 ||
+		got.DecisionIntent != "EXIT_CANDIDATE" || got.DecisionSide != "SELL" ||
+		got.DecisionReason != "rsi overbought" || got.ExitPolicyOutcome != "VETOED" {
+		t.Errorf("Phase 1 round-trip mismatch: %+v", got)
+	}
+
+	// Update でも Phase 1 カラムが反映されること。
+	got.ID = id
+	got.SignalDirection = "BULLISH"
+	got.DecisionIntent = "NEW_ENTRY"
+	got.DecisionSide = "BUY"
+	if err := repo.Update(ctx, got); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	rows, _, _ = repo.ListByRun(ctx, "run-phase1", 10, 0)
+	if rows[0].SignalDirection != "BULLISH" || rows[0].DecisionIntent != "NEW_ENTRY" || rows[0].DecisionSide != "BUY" {
+		t.Errorf("Update did not persist Phase 1 fields, got %+v", rows[0])
+	}
+}
