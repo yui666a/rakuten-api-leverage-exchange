@@ -42,8 +42,11 @@ func (r *decisionLogRepo) InsertAndID(ctx context.Context, rec entity.DecisionRe
 			order_outcome, order_id, executed_amount, executed_price, order_error,
 			closed_position_id, opened_position_id,
 			indicators_json, higher_tf_indicators_json,
+			signal_direction, signal_strength,
+			decision_intent, decision_side, decision_reason,
+			exit_policy_outcome,
 			created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	res, err := r.db.ExecContext(ctx, q,
 		rec.BarCloseAt, rec.SequenceInBar, rec.TriggerKind,
@@ -55,6 +58,9 @@ func (r *decisionLogRepo) InsertAndID(ctx context.Context, rec entity.DecisionRe
 		rec.OrderOutcome, rec.OrderID, rec.ExecutedAmount, rec.ExecutedPrice, rec.OrderError,
 		rec.ClosedPositionID, rec.OpenedPositionID,
 		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
+		rec.SignalDirection, rec.SignalStrength,
+		rec.DecisionIntent, rec.DecisionSide, rec.DecisionReason,
+		rec.ExitPolicyOutcome,
 		rec.CreatedAt,
 	)
 	if err != nil {
@@ -79,6 +85,9 @@ func (r *decisionLogRepo) Update(ctx context.Context, rec entity.DecisionRecord)
 			order_outcome = ?, order_id = ?, executed_amount = ?, executed_price = ?, order_error = ?,
 			closed_position_id = ?, opened_position_id = ?,
 			indicators_json = ?, higher_tf_indicators_json = ?,
+			signal_direction = ?, signal_strength = ?,
+			decision_intent = ?, decision_side = ?, decision_reason = ?,
+			exit_policy_outcome = ?,
 			created_at = ?
 		WHERE id = ?
 	`
@@ -92,6 +101,9 @@ func (r *decisionLogRepo) Update(ctx context.Context, rec entity.DecisionRecord)
 		rec.OrderOutcome, rec.OrderID, rec.ExecutedAmount, rec.ExecutedPrice, rec.OrderError,
 		rec.ClosedPositionID, rec.OpenedPositionID,
 		rec.IndicatorsJSON, rec.HigherTFIndicatorsJSON,
+		rec.SignalDirection, rec.SignalStrength,
+		rec.DecisionIntent, rec.DecisionSide, rec.DecisionReason,
+		rec.ExitPolicyOutcome,
 		rec.CreatedAt,
 		rec.ID,
 	)
@@ -144,6 +156,9 @@ func (r *decisionLogRepo) List(ctx context.Context, f repository.DecisionLogFilt
 		       order_outcome, order_id, executed_amount, executed_price, order_error,
 		       closed_position_id, opened_position_id,
 		       indicators_json, higher_tf_indicators_json,
+		       signal_direction, signal_strength,
+		       decision_intent, decision_side, decision_reason,
+		       exit_policy_outcome,
 		       created_at
 		FROM decision_log
 		WHERE %s
@@ -170,6 +185,9 @@ func (r *decisionLogRepo) List(ctx context.Context, f repository.DecisionLogFilt
 			&rec.OrderOutcome, &rec.OrderID, &rec.ExecutedAmount, &rec.ExecutedPrice, &rec.OrderError,
 			&rec.ClosedPositionID, &rec.OpenedPositionID,
 			&rec.IndicatorsJSON, &rec.HigherTFIndicatorsJSON,
+			&rec.SignalDirection, &rec.SignalStrength,
+			&rec.DecisionIntent, &rec.DecisionSide, &rec.DecisionReason,
+			&rec.ExitPolicyOutcome,
 			&rec.CreatedAt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("decision_log scan: %w", err)

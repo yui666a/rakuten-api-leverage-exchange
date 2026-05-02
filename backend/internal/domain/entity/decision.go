@@ -21,6 +21,16 @@ type DecisionRecord struct {
 	SignalConfidence float64
 	SignalReason     string
 
+	// Phase 1 (Signal/Decision/ExecutionPolicy 三層分離) で追加。
+	// PR1 時点では recorder が値を埋めず、全行で空文字 / 0 のまま。
+	// PR2 で recorder が新ロジックの結果を書き始める。
+	SignalDirection   string  // SignalDirection の string 形 ("BULLISH" 等)
+	SignalStrength    float64 // 由来 MarketSignal.Strength
+	DecisionIntent    string  // DecisionIntent の string 形
+	DecisionSide      string  // OrderSide の string 形 ("BUY" | "SELL" | "")
+	DecisionReason    string
+	ExitPolicyOutcome string // PR4 で BookGate 経由の出口判断記録に使う
+
 	RiskOutcome string
 	RiskReason  string
 

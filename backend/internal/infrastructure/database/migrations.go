@@ -505,5 +505,34 @@ func RunMigrations(db *sql.DB) error {
 		}
 	}
 
+	if err := addDecisionLogV2Columns(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// addDecisionLogV2Columns は Phase 1 (Signal/Decision/ExecutionPolicy 三層分離)
+// で追加された 6 カラムを decision_log / backtest_decision_log に足す。
+// addColumnIfNotExists を介して冪等。既存行は DEFAULT (空文字 / 0) で残る。
+func addDecisionLogV2Columns(db *sql.DB) error {
+	cols := []struct {
+		name string
+		def  string
+	}{
+		{"signal_direction", "signal_direction TEXT NOT NULL DEFAULT ''"},
+		{"signal_strength", "signal_strength REAL NOT NULL DEFAULT 0"},
+		{"decision_intent", "decision_intent TEXT NOT NULL DEFAULT ''"},
+		{"decision_side", "decision_side TEXT NOT NULL DEFAULT ''"},
+		{"decision_reason", "decision_reason TEXT NOT NULL DEFAULT ''"},
+		{"exit_policy_outcome", "exit_policy_outcome TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, table := range []string{"decision_log", "backtest_decision_log"} {
+		for _, c := range cols {
+			if err := addColumnIfNotExists(db, table, c.name, c.def); err != nil {
+				return fmt.Errorf("add %s.%s: %w", table, c.name, err)
+			}
+		}
+	}
 	return nil
 }
