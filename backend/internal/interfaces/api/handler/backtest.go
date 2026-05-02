@@ -172,6 +172,9 @@ type runBacktestRequest struct {
 	// inspect — the runner silently drops the gate when BookSource is nil.
 	MaxSlippageBps float64 `json:"maxSlippageBps,omitempty"`
 	MaxBookSidePct float64 `json:"maxBookSidePct,omitempty"`
+	// PR4 (Phase 1): entry-cooldown window in seconds. 0 disables; profile
+	// fallback handled in applyProfileDefaults.
+	EntryCooldownSec int `json:"entryCooldownSec,omitempty"`
 
 	// PDCA extensions (spec §8.2). All optional; when ProfileName is set,
 	// the profile's values become the base and non-zero individual fields
@@ -384,6 +387,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 			CooldownMinutes:       req.CooldownMinutes,
 			MaxSlippageBps:        req.MaxSlippageBps,
 			MaxBookSidePct:        req.MaxBookSidePct,
+			EntryCooldownSec:      req.EntryCooldownSec,
 		},
 	})
 	if err != nil {
@@ -644,6 +648,16 @@ func applyProfileDefaults(req *runBacktestRequest, profile *entity.StrategyProfi
 	}
 	if req.TrailingATRMultiplier <= 0 && profile.Risk.TrailingATRMultiplier > 0 {
 		req.TrailingATRMultiplier = profile.Risk.TrailingATRMultiplier
+	}
+	// PR4 (Phase 1): BookGate / EntryCooldown profile fallback.
+	if req.MaxSlippageBps <= 0 && profile.Risk.MaxSlippageBps > 0 {
+		req.MaxSlippageBps = profile.Risk.MaxSlippageBps
+	}
+	if req.MaxBookSidePct <= 0 && profile.Risk.MaxBookSidePct > 0 {
+		req.MaxBookSidePct = profile.Risk.MaxBookSidePct
+	}
+	if req.EntryCooldownSec <= 0 && profile.Risk.EntryCooldownSec > 0 {
+		req.EntryCooldownSec = profile.Risk.EntryCooldownSec
 	}
 }
 

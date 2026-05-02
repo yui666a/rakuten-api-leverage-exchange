@@ -200,3 +200,62 @@ func TestGate_SellSideEvaluatesBidsWithSignedSlippage(t *testing.T) {
 		t.Fatalf("expected ~10 bps, got %f", d.SlippageBps)
 	}
 }
+
+// PR4 (Phase 1): edge-case coverage requested by the design doc §7.1 matrix.
+
+// TestGate_BookSidePctBoundary: 自ロットがちょうど top-N 累積数量の M% に
+// 到達する境界。strictly greater でなく == で reject される実装か allow か
+// 仕様を固定する。現実装は >= で reject なので 30% でちょうど reject。
+func TestGate_BookSidePctBoundary(t *testing.T) {
+	// Top-5 累積 = 5 + 5 + 5 + 5 + 5 = 25。30% = 7.5。
+	// 自分のサイズ 7.5 → ratio = 7.5 / 25 = 30% → 境界。
+	src := &fakeSource{
+		snap: ob(1000,
+			[]entity.OrderbookEntry{
+				{Price: 1001, Amount: 5},
+				{Price: 1002, Amount: 5},
+				{Price: 1003, Amount: 5},
+				{Price: 1004, Amount: 5},
+				{Price: 1005, Amount: 5},
+			},
+			[]entity.OrderbookEntry{{Price: 999, Amount: 25}},
+			1001, 999, 1000,
+		),
+		found: true,
+	}
+
+	g := New(src, Config{MaxSlippageBps: 99999, MaxBookSidePct: 30, TopN: 5, AllowOnMissingBook: true})
+
+	// Just below the boundary (29.6%) should pass.
+	dBelow := g.Check(context.Background(), 7, entity.OrderSideBuy, 7.4, 1500)
+	if !dBelow.Allow {
+		t.Errorf("ratio=29.6%% should pass MaxBookSidePct=30, got %+v", dBelow)
+	}
+
+	// Strictly above (30.4%) should reject.
+	dAbove := g.Check(context.Background(), 7, entity.OrderSideBuy, 7.6, 1500)
+	if dAbove.Allow {
+		t.Errorf("ratio=30.4%% should fail MaxBookSidePct=30, got %+v", dAbove)
+	}
+}
+
+// TestGate_TopNUnderfilled: 板に N 段未満しか並んでいないとき、累積は
+// 存在する分だけで計算される。Thin book の reject は別経路 (depth_pre_trade)
+// なので、十分な単一 ask があればそれが top-1 として扱われる。
+func TestGate_TopNUnderfilled(t *testing.T) {
+	src := &fakeSource{
+		snap: ob(1000,
+			[]entity.OrderbookEntry{{Price: 1001, Amount: 100}}, // top-1 のみ、残り 4 段空
+			[]entity.OrderbookEntry{{Price: 999, Amount: 100}},
+			1001, 999, 1000,
+		),
+		found: true,
+	}
+	g := New(src, Config{MaxSlippageBps: 99999, MaxBookSidePct: 30, TopN: 5, AllowOnMissingBook: true})
+
+	// 自ロット 1.0 / cumulative 100 = 1% → pass
+	d := g.Check(context.Background(), 7, entity.OrderSideBuy, 1.0, 1500)
+	if !d.Allow {
+		t.Errorf("single deep ask level should be enough to pass 1%% lot, got %+v", d)
+	}
+}

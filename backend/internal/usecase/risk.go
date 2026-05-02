@@ -481,6 +481,31 @@ func (rm *RiskManager) UpdateConfig(config entity.RiskConfig) {
 	rm.config = config
 }
 
+// ApplyProfileRiskOverrides updates only the BookGate / EntryCooldown knobs
+// that the strategy profile explicitly sets to a non-zero value, leaving the
+// rest of the in-memory RiskConfig (typically populated from env vars at
+// NewRiskManager time) intact. Profile-driven intent thus takes precedence
+// over env-var defaults without requiring a full UpdateConfig replacement —
+// which is important because UpdateConfig is also called by MCP/API handlers
+// that do not know about profile state.
+//
+// Zero is treated as "no override" so a profile that omits the field keeps
+// the legacy fallback semantics (env-var or disabled). Negative values would
+// have failed Validate; this method does not re-validate.
+func (rm *RiskManager) ApplyProfileRiskOverrides(maxSlippageBps, maxBookSidePct float64, entryCooldownSec int) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if maxSlippageBps > 0 {
+		rm.config.MaxSlippageBps = maxSlippageBps
+	}
+	if maxBookSidePct > 0 {
+		rm.config.MaxBookSidePct = maxBookSidePct
+	}
+	if entryCooldownSec > 0 {
+		rm.config.EntryCooldownSec = entryCooldownSec
+	}
+}
+
 // UpdateATR updates the current ATR value used for dynamic stop-loss calculation.
 func (rm *RiskManager) UpdateATR(atr float64) {
 	rm.mu.Lock()
