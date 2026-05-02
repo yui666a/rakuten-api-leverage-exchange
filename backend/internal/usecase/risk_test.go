@@ -527,6 +527,66 @@ func TestRiskManager_EntryCooldown_ZeroSecIsNoop(t *testing.T) {
 	}
 }
 
+// TestRiskManager_ApplyProfileRiskOverrides_NonZeroOverrides verifies that
+// profile-supplied values replace existing env-var defaults only when set.
+func TestRiskManager_ApplyProfileRiskOverrides_NonZeroOverrides(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{
+		InitialCapital:   100000,
+		MaxSlippageBps:   5,
+		MaxBookSidePct:   10,
+		EntryCooldownSec: 30,
+	})
+	rm.ApplyProfileRiskOverrides(15, 20, 60)
+	got := rm.GetStatus().Config
+	if got.MaxSlippageBps != 15 {
+		t.Errorf("MaxSlippageBps = %v, want 15 (profile override)", got.MaxSlippageBps)
+	}
+	if got.MaxBookSidePct != 20 {
+		t.Errorf("MaxBookSidePct = %v, want 20 (profile override)", got.MaxBookSidePct)
+	}
+	if got.EntryCooldownSec != 60 {
+		t.Errorf("EntryCooldownSec = %v, want 60 (profile override)", got.EntryCooldownSec)
+	}
+}
+
+// TestRiskManager_ApplyProfileRiskOverrides_ZeroSkips verifies that 0 in the
+// profile leaves the prior (env-var) value untouched. This is the contract
+// that lets profiles partially configure the risk envelope.
+func TestRiskManager_ApplyProfileRiskOverrides_ZeroSkips(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{
+		InitialCapital:   100000,
+		MaxSlippageBps:   5,
+		MaxBookSidePct:   10,
+		EntryCooldownSec: 30,
+	})
+	rm.ApplyProfileRiskOverrides(0, 0, 0)
+	got := rm.GetStatus().Config
+	if got.MaxSlippageBps != 5 || got.MaxBookSidePct != 10 || got.EntryCooldownSec != 30 {
+		t.Errorf("zero overrides should not touch env-var values, got %+v", got)
+	}
+}
+
+// TestRiskManager_ApplyProfileRiskOverrides_PartialMix only some fields set.
+func TestRiskManager_ApplyProfileRiskOverrides_PartialMix(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{
+		InitialCapital:   100000,
+		MaxSlippageBps:   5,
+		MaxBookSidePct:   10,
+		EntryCooldownSec: 30,
+	})
+	rm.ApplyProfileRiskOverrides(15, 0, 60)
+	got := rm.GetStatus().Config
+	if got.MaxSlippageBps != 15 {
+		t.Errorf("MaxSlippageBps should be overridden to 15, got %v", got.MaxSlippageBps)
+	}
+	if got.MaxBookSidePct != 10 {
+		t.Errorf("MaxBookSidePct should remain at env-var 10, got %v", got.MaxBookSidePct)
+	}
+	if got.EntryCooldownSec != 60 {
+		t.Errorf("EntryCooldownSec should be overridden to 60, got %v", got.EntryCooldownSec)
+	}
+}
+
 // TestRiskManager_EntryCooldown_IndependentFromConsecutiveLossCooldown checks
 // the two cooldown fields do not interact: arming the loss-streak cooldown
 // must not arm the entry cooldown, and vice versa.
