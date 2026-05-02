@@ -704,22 +704,31 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		cfg.HigherTFInterval = ""
 	}
 
+	riskConfig := entity.RiskConfig{
+		MaxPositionAmount:     maxPositionAmount,
+		MaxDailyLoss:          maxDailyLoss,
+		StopLossPercent:       stopLoss,
+		StopLossATRMultiplier: stopLossATR,
+		TrailingATRMultiplier: trailingATR,
+		TakeProfitPercent:     takeProfit,
+		InitialCapital:        f.InitialBalance,
+		MaxConsecutiveLosses:  0,
+		CooldownMinutes:       0,
+	}
+	// PR4 (Phase 1): forward profile-driven BookGate / EntryCooldown knobs to
+	// backtest so CLI runs apply the same gating as live. Zero leaves the
+	// gate disabled (legacy behaviour preserved for older profiles).
+	if profile != nil {
+		riskConfig.MaxSlippageBps = profile.Risk.MaxSlippageBps
+		riskConfig.MaxBookSidePct = profile.Risk.MaxBookSidePct
+		riskConfig.EntryCooldownSec = profile.Risk.EntryCooldownSec
+	}
 	in := bt.RunInput{
 		Config:         cfg,
 		TradeAmount:    f.TradeAmount,
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
-		RiskConfig: entity.RiskConfig{
-			MaxPositionAmount:     maxPositionAmount,
-			MaxDailyLoss:          maxDailyLoss,
-			StopLossPercent:       stopLoss,
-			StopLossATRMultiplier: stopLossATR,
-			TrailingATRMultiplier: trailingATR,
-			TakeProfitPercent:     takeProfit,
-			InitialCapital:        f.InitialBalance,
-			MaxConsecutiveLosses:  0,
-			CooldownMinutes:       0,
-		},
+		RiskConfig:     riskConfig,
 	}
 	if profile != nil {
 		in.BBSqueezeLookback = profile.StanceRules.BBSqueezeLookback
