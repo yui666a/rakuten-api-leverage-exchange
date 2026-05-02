@@ -282,16 +282,21 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	bus.Register(entity.EventTypeIndicator, 12, tickRiskHandler)
 	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
 	bus.Register(entity.EventTypeIndicator, 20, strategyHandler)
-	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
 
-	// PR2 (Signal/Decision/ExecutionPolicy three-layer separation): the new
-	// route runs in shadow alongside the legacy Signal route. Priority 27 is
-	// chosen to leave priority 25 free for indicatorEventTap on the live
-	// path; backtest does not have that tap but uses the same number for
-	// parity. PositionView is the flat stub — PR3 swaps in the real impl.
-	decisionHandler := decision.NewHandler(decision.Config{Positions: decision.FlatPositionView{}})
+	// PR3 (Signal/Decision/ExecutionPolicy three-layer separation): execution
+	// is now driven by the Decision layer. Priority 27 puts DecisionHandler
+	// after StrategyHandler (20) and any indicatorEventTap (25, live only),
+	// and before RiskHandler (30). RiskHandler also subscribes to OrderEvent
+	// at priority 50 (after ExecutionHandler at 40) so it can observe close
+	// fills and arm the entry cooldown via RiskManager.NoteClose.
+	decisionHandler := decision.NewHandler(decision.Config{
+		Positions: decision.ExecutorPositionView{Executor: simAdapter},
+		Cooldown:  riskMgr,
+	})
 	bus.Register(entity.EventTypeMarketSignal, 27, decisionHandler)
+	bus.Register(entity.EventTypeDecision, 30, riskHandler)
+	bus.Register(entity.EventTypeOrder, 50, riskHandler)
 
 	if r.decisionRecorder != nil {
 		bus.Register(entity.EventTypeIndicator, 99, r.decisionRecorder)
