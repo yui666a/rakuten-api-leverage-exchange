@@ -12,6 +12,7 @@ import (
 	infra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decision"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 	strategyuc "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/strategy"
@@ -284,9 +285,19 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 	bus.Register(entity.EventTypeApproved, 40, executionHandler)
 
+	// PR2 (Signal/Decision/ExecutionPolicy three-layer separation): the new
+	// route runs in shadow alongside the legacy Signal route. Priority 27 is
+	// chosen to leave priority 25 free for indicatorEventTap on the live
+	// path; backtest does not have that tap but uses the same number for
+	// parity. PositionView is the flat stub — PR3 swaps in the real impl.
+	decisionHandler := decision.NewHandler(decision.Config{Positions: decision.FlatPositionView{}})
+	bus.Register(entity.EventTypeMarketSignal, 27, decisionHandler)
+
 	if r.decisionRecorder != nil {
 		bus.Register(entity.EventTypeIndicator, 99, r.decisionRecorder)
 		bus.Register(entity.EventTypeSignal, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeMarketSignal, 99, r.decisionRecorder)
+		bus.Register(entity.EventTypeDecision, 99, r.decisionRecorder)
 		bus.Register(entity.EventTypeApproved, 99, r.decisionRecorder)
 		bus.Register(entity.EventTypeRejected, 99, r.decisionRecorder)
 		bus.Register(entity.EventTypeOrder, 99, r.decisionRecorder)

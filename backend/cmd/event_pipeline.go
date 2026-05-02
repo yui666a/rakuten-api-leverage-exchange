@@ -16,6 +16,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/booklimit"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/circuitbreaker"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decision"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
@@ -748,6 +749,15 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	}
 	bus.Register(entity.EventTypeSignal, 30, riskHandler)
 
+	// PR2 (Signal/Decision/ExecutionPolicy three-layer separation): the new
+	// route runs in shadow alongside the legacy Signal route. DecisionHandler
+	// at priority 27 sits after StrategyHandler (20) / indicatorEventTap (25)
+	// but before any future Risk-on-Decision wiring (PR3 will add that).
+	// PositionView is the flat stub here; PR3 swaps in a PositionManager-
+	// backed implementation when the new route starts driving execution.
+	decisionHandler := decision.NewHandler(decision.Config{Positions: decision.FlatPositionView{}})
+	bus.Register(entity.EventTypeMarketSignal, 27, decisionHandler)
+
 	// ExecutionHandler: opens orders from approved signals (priority 40).
 	executionHandler := &backtest.ExecutionHandler{
 		Executor:    executor,
@@ -773,6 +783,8 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		})
 		bus.Register(entity.EventTypeIndicator, 99, recorder)
 		bus.Register(entity.EventTypeSignal, 99, recorder)
+		bus.Register(entity.EventTypeMarketSignal, 99, recorder)
+		bus.Register(entity.EventTypeDecision, 99, recorder)
 		bus.Register(entity.EventTypeApproved, 99, recorder)
 		bus.Register(entity.EventTypeRejected, 99, recorder)
 		bus.Register(entity.EventTypeOrder, 99, recorder)
