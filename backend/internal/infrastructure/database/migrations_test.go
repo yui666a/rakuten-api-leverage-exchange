@@ -336,3 +336,116 @@ func TestRunMigrations_DecisionLogTablesAndIndexes(t *testing.T) {
 		}
 	}
 }
+
+// TestRunMigrations_DecisionLogV2Columns: Phase 1 (Signal/Decision/ExecutionPolicy
+// 三層分離) で追加した 6 カラムが decision_log と backtest_decision_log の両方に
+// 存在することを確認。冪等性、既存データ保護も検証。
+func TestRunMigrations_DecisionLogV2Columns(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	defer db.Close()
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("first migration failed: %v", err)
+	}
+
+	// 既存データを 1 行入れて、2 度目の migration でも残ることを確認 (ALTER TABLE 安全性)。
+	_, err = db.Exec(`INSERT INTO decision_log (
+		bar_close_at, sequence_in_bar, trigger_kind,
+		symbol_id, currency_pair, primary_interval,
+		stance, last_price, signal_action,
+		risk_outcome, order_outcome, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		1700000000000, 0, "BAR_CLOSE",
+		1, "LTC_JPY", "PT15M",
+		"TREND_FOLLOW", 8900.0, "BUY",
+		"APPROVED", "FILLED", 1700000000000)
+	if err != nil {
+		t.Fatalf("insert pre-migration row failed: %v", err)
+	}
+
+	// 2 度実行しても壊れないことを確認 (冪等性)。
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("second migration failed: %v", err)
+	}
+
+	// データが残っていることを確認。
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM decision_log`).Scan(&count); err != nil {
+		t.Fatalf("count after second migration: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("decision_log row count = %d, want 1 (data lost during migration)", count)
+	}
+
+	// 既存行の新カラムが DEFAULT 値になっていることを確認。
+	var (
+		signalDirection   string
+		signalStrength    float64
+		decisionIntent    string
+		decisionSide      string
+		decisionReason    string
+		exitPolicyOutcome string
+	)
+	err = db.QueryRow(`SELECT signal_direction, signal_strength, decision_intent,
+		decision_side, decision_reason, exit_policy_outcome FROM decision_log`).
+		Scan(&signalDirection, &signalStrength, &decisionIntent,
+			&decisionSide, &decisionReason, &exitPolicyOutcome)
+	if err != nil {
+		t.Fatalf("select new columns: %v", err)
+	}
+	if signalDirection != "" || decisionIntent != "" || decisionSide != "" ||
+		decisionReason != "" || exitPolicyOutcome != "" {
+		t.Errorf("new TEXT columns should default to empty, got dir=%q intent=%q side=%q reason=%q exit=%q",
+			signalDirection, decisionIntent, decisionSide, decisionReason, exitPolicyOutcome)
+	}
+	if signalStrength != 0 {
+		t.Errorf("signal_strength should default to 0, got %v", signalStrength)
+	}
+
+	// 新カラムが両テーブルに存在することを PRAGMA で確認。
+	wantNewCols := []string{
+		"signal_direction",
+		"signal_strength",
+		"decision_intent",
+		"decision_side",
+		"decision_reason",
+		"exit_policy_outcome",
+	}
+	for _, table := range []string{"decision_log", "backtest_decision_log"} {
+		seen := make(map[string]bool, len(wantNewCols))
+		for _, c := range wantNewCols {
+			seen[c] = false
+		}
+		rows, err := db.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatalf("pragma table_info(%s): %v", table, err)
+		}
+		for rows.Next() {
+			var (
+				cid     int
+				name    string
+				ctype   string
+				notnull int
+				dflt    interface{}
+				pk      int
+			)
+			if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+				rows.Close()
+				t.Fatalf("scan table_info(%s): %v", table, err)
+			}
+			if _, ok := seen[name]; ok {
+				seen[name] = true
+			}
+		}
+		rows.Close()
+		for c, ok := range seen {
+			if !ok {
+				t.Errorf("expected column %q in %s", c, table)
+			}
+		}
+	}
+}
