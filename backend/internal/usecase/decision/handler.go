@@ -2,9 +2,18 @@ package decision
 
 import (
 	"context"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
+
+// CooldownChecker reports whether the entry cooldown is active. Implemented
+// by RiskManager (its IsEntryCooldown method satisfies this interface). nil
+// is allowed and disables the cooldown branch entirely (used by tests and
+// during PR2 shadow wiring before the real cooldown is plumbed).
+type CooldownChecker interface {
+	IsEntryCooldown(now time.Time) bool
+}
 
 // Config bundles the dependencies needed by Handler.
 type Config struct {
@@ -12,6 +21,10 @@ type Config struct {
 	// FlatPositionView during PR2 (shadow-only) and replace with a real
 	// view in PR3 when DecisionHandler starts driving execution.
 	Positions PositionView
+	// Cooldown is optional. When non-nil, an active entry cooldown forces
+	// every signal to COOLDOWN_BLOCKED regardless of position state. nil
+	// keeps the legacy behaviour (no cooldown branch).
+	Cooldown CooldownChecker
 }
 
 // Handler converts MarketSignalEvent into ActionDecisionEvent by combining
@@ -24,15 +37,16 @@ type Config struct {
 // PR3 swaps the Risk path to consume ActionDecisionEvent and wires cooldown.
 type Handler struct {
 	positions PositionView
+	cooldown  CooldownChecker
 }
 
 // NewHandler builds a Handler. Panics if Positions is nil — composition-root
-// invariant matching StrategyHandler's behaviour.
+// invariant matching StrategyHandler's behaviour. Cooldown may be nil.
 func NewHandler(cfg Config) *Handler {
 	if cfg.Positions == nil {
 		panic("decision: NewHandler Positions must not be nil")
 	}
-	return &Handler{positions: cfg.Positions}
+	return &Handler{positions: cfg.Positions, cooldown: cfg.Cooldown}
 }
 
 // Handle implements eventengine.EventHandler. It only acts on
@@ -43,7 +57,7 @@ func (h *Handler) Handle(ctx context.Context, event entity.Event) ([]entity.Even
 		return nil, nil
 	}
 	side := h.positions.CurrentSide(ctx, ev.Signal.SymbolID)
-	decision := h.decide(ev.Signal, side)
+	decision := h.decide(ev.Signal, side, time.UnixMilli(ev.Timestamp))
 	return []entity.Event{
 		entity.ActionDecisionEvent{
 			Decision:   decision,
@@ -54,15 +68,22 @@ func (h *Handler) Handle(ctx context.Context, event entity.Event) ([]entity.Even
 	}, nil
 }
 
-// decide is the pure logic that maps (signal, position) → ActionDecision.
-// Cooldown is intentionally absent in PR2; PR3 wires RiskManager.IsEntryCooldown
-// in here as a guard before the position branches.
-func (h *Handler) decide(ms entity.MarketSignal, hold entity.OrderSide) entity.ActionDecision {
+// decide is the pure logic that maps (signal, position, now) → ActionDecision.
+// Cooldown is checked first: an active entry cooldown short-circuits every
+// other branch into COOLDOWN_BLOCKED so the bot does not chase entries
+// immediately after a close fill.
+func (h *Handler) decide(ms entity.MarketSignal, hold entity.OrderSide, now time.Time) entity.ActionDecision {
 	base := entity.ActionDecision{
 		SymbolID:  ms.SymbolID,
 		Source:    ms.Source,
 		Strength:  ms.Strength,
 		Timestamp: ms.Timestamp,
+	}
+
+	if h.cooldown != nil && h.cooldown.IsEntryCooldown(now) {
+		base.Intent = entity.IntentCooldownBlocked
+		base.Reason = "entry cooldown active after recent close"
+		return base
 	}
 
 	switch hold {

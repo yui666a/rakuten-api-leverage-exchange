@@ -3,6 +3,7 @@ package decision
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 )
@@ -127,8 +128,76 @@ func TestNewHandler_PanicsOnNilPositions(t *testing.T) {
 	NewHandler(Config{Positions: nil})
 }
 
-// Cooldown 経路は PR3 で配線するためここでは未テスト。
-// PR3 の plan で COOLDOWN_BLOCKED / cooldown timing のテストを追加する。
-func TestHandler_CooldownIsDeferredToPR3(t *testing.T) {
-	t.Skip("cooldown wired in PR3 (RiskManager.IsEntryCooldown)")
+// stubCooldown reports a fixed value regardless of `now`. PR3 plumbs the real
+// RiskManager.IsEntryCooldown into Handler; this stub keeps the unit tests
+// independent of clock plumbing.
+type stubCooldown struct{ active bool }
+
+func (s stubCooldown) IsEntryCooldown(_ time.Time) bool { return s.active }
+
+func TestHandler_CooldownActive_ForcesCooldownBlocked(t *testing.T) {
+	cases := []struct {
+		name      string
+		hold      entity.OrderSide
+		direction entity.SignalDirection
+	}{
+		{"flat+bullish", "", entity.DirectionBullish},
+		{"flat+bearish", "", entity.DirectionBearish},
+		{"flat+neutral", "", entity.DirectionNeutral},
+		{"long+bearish (would be EXIT_CANDIDATE)", entity.OrderSideBuy, entity.DirectionBearish},
+		{"short+bullish (would be EXIT_CANDIDATE)", entity.OrderSideSell, entity.DirectionBullish},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := NewHandler(Config{
+				Positions: fixedPositionView{side: c.hold},
+				Cooldown:  stubCooldown{active: true},
+			})
+			out, err := h.Handle(context.Background(), entity.MarketSignalEvent{
+				Signal:    entity.MarketSignal{SymbolID: 7, Direction: c.direction},
+				Timestamp: 1700000000000,
+			})
+			if err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			dec := out[0].(entity.ActionDecisionEvent).Decision
+			if dec.Intent != entity.IntentCooldownBlocked {
+				t.Errorf("Intent = %q, want COOLDOWN_BLOCKED (cooldown should win over %q+%q)", dec.Intent, c.hold, c.direction)
+			}
+			if dec.Side != "" {
+				t.Errorf("Side = %q, want empty", dec.Side)
+			}
+		})
+	}
+}
+
+func TestHandler_CooldownInactive_RunsMatrix(t *testing.T) {
+	// When cooldown is plumbed but inactive, behaviour must be identical to
+	// the no-cooldown path. Spot-check the BUY branch that would otherwise
+	// be the first thing affected by a logic mistake.
+	h := NewHandler(Config{
+		Positions: FlatPositionView{},
+		Cooldown:  stubCooldown{active: false},
+	})
+	out, _ := h.Handle(context.Background(), entity.MarketSignalEvent{
+		Signal:    entity.MarketSignal{SymbolID: 7, Direction: entity.DirectionBullish},
+		Timestamp: 1700000000000,
+	})
+	dec := out[0].(entity.ActionDecisionEvent).Decision
+	if dec.Intent != entity.IntentNewEntry || dec.Side != entity.OrderSideBuy {
+		t.Errorf("inactive cooldown changed matrix: got Intent=%q Side=%q", dec.Intent, dec.Side)
+	}
+}
+
+func TestHandler_NilCooldown_PreservesLegacyBehaviour(t *testing.T) {
+	// Config without Cooldown field should match PR2 behaviour exactly.
+	h := NewHandler(Config{Positions: FlatPositionView{}})
+	out, _ := h.Handle(context.Background(), entity.MarketSignalEvent{
+		Signal:    entity.MarketSignal{SymbolID: 7, Direction: entity.DirectionBearish},
+		Timestamp: 1,
+	})
+	dec := out[0].(entity.ActionDecisionEvent).Decision
+	if dec.Intent != entity.IntentNewEntry {
+		t.Errorf("nil cooldown should not block: Intent=%q", dec.Intent)
+	}
 }

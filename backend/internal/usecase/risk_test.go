@@ -482,3 +482,88 @@ func TestRiskManager_CheckOrderAt_UsesInjectedTimeForCooldown(t *testing.T) {
 		t.Fatalf("order should be approved after injected cooldown end: %s", allowed.Reason)
 	}
 }
+
+// TestRiskManager_EntryCooldown_NoteCloseTransitions verifies the new entry
+// cooldown introduced in PR3. NoteClose must extend the window by exactly
+// EntryCooldownSec seconds; IsEntryCooldown returns true while inside it and
+// false after it elapses.
+func TestRiskManager_EntryCooldown_NoteCloseTransitions(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{
+		InitialCapital:   100000,
+		EntryCooldownSec: 60,
+	})
+	base := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+
+	if rm.IsEntryCooldown(base) {
+		t.Fatal("fresh RiskManager should not report cooldown active")
+	}
+
+	rm.NoteClose(base)
+
+	if !rm.IsEntryCooldown(base.Add(30 * time.Second)) {
+		t.Error("cooldown should be active 30s after close")
+	}
+	if !rm.IsEntryCooldown(base.Add(59 * time.Second)) {
+		t.Error("cooldown should still be active just before window end")
+	}
+	if rm.IsEntryCooldown(base.Add(60 * time.Second)) {
+		t.Error("cooldown should expire at exactly EntryCooldownSec")
+	}
+	if rm.IsEntryCooldown(base.Add(120 * time.Second)) {
+		t.Error("cooldown should remain expired thereafter")
+	}
+}
+
+// TestRiskManager_EntryCooldown_ZeroSecIsNoop confirms profiles without the
+// new field keep their existing behaviour: NoteClose must not arm the
+// cooldown when EntryCooldownSec=0.
+func TestRiskManager_EntryCooldown_ZeroSecIsNoop(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{InitialCapital: 100000})
+	base := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+
+	rm.NoteClose(base)
+	if rm.IsEntryCooldown(base.Add(time.Second)) {
+		t.Error("EntryCooldownSec=0 must leave NoteClose as a no-op")
+	}
+}
+
+// TestRiskManager_EntryCooldown_IndependentFromConsecutiveLossCooldown checks
+// the two cooldown fields do not interact: arming the loss-streak cooldown
+// must not arm the entry cooldown, and vice versa.
+func TestRiskManager_EntryCooldown_IndependentFromConsecutiveLossCooldown(t *testing.T) {
+	rm := NewRiskManager(entity.RiskConfig{
+		InitialCapital:       100000,
+		MaxConsecutiveLosses: 3,
+		CooldownMinutes:      30,
+		EntryCooldownSec:     60,
+	})
+	base := time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC)
+
+	// Arm only the loss-streak cooldown.
+	rm.RecordConsecutiveLossAt(base)
+	rm.RecordConsecutiveLossAt(base)
+	rm.RecordConsecutiveLossAt(base)
+	if rm.IsEntryCooldown(base.Add(time.Second)) {
+		t.Error("RecordConsecutiveLoss must not arm IsEntryCooldown")
+	}
+
+	// Arm only the entry cooldown. Use realistic limits so unrelated guards
+	// (daily loss / position cap) do not falsely fail the assertion.
+	rm2 := NewRiskManager(entity.RiskConfig{
+		InitialCapital:       100000,
+		MaxPositionAmount:    1_000_000_000,
+		MaxDailyLoss:         1_000_000_000,
+		MaxConsecutiveLosses: 3,
+		CooldownMinutes:      30,
+		EntryCooldownSec:     60,
+	})
+	rm2.NoteClose(base)
+	proposal := entity.OrderProposal{
+		SymbolID: 7, Side: entity.OrderSideBuy, OrderType: entity.OrderTypeMarket,
+		Amount: 0.001, Price: 1000000,
+	}
+	check := rm2.CheckOrderAt(context.Background(), base.Add(time.Second), proposal)
+	if !check.Approved {
+		t.Errorf("NoteClose must not engage the loss-streak cooldown path: %s", check.Reason)
+	}
+}

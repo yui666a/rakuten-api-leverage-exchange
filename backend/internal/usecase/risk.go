@@ -34,6 +34,12 @@ type RiskManager struct {
 	highWaterMarks    map[int64]float64 // positionID → best price
 	consecutiveLosses int
 	cooldownUntil     time.Time
+	// entryCooldownUntil is the Phase 1 entry cooldown introduced by the
+	// Signal/Decision/ExecutionPolicy separation. It is wholly independent of
+	// cooldownUntil (the consecutive-loss cooldown): NoteClose extends it on
+	// every close fill, and DecisionHandler reads it via IsEntryCooldown to
+	// emit COOLDOWN_BLOCKED. EntryCooldownSec=0 disables this path entirely.
+	entryCooldownUntil time.Time
 	currentATR        float64 // latest ATR value for dynamic stop-loss
 
 	// Browser-notification plumbing. realtimeHub is optional: when nil all
@@ -313,6 +319,31 @@ func (rm *RiskManager) ResetConsecutiveLosses() {
 	rm.consecutiveLosses = 0
 	rm.cooldownUntil = time.Time{}
 	rm.consecutiveLossFlag = false
+}
+
+// IsEntryCooldown reports whether the entry-cooldown window (set by NoteClose)
+// is still active. Used by DecisionHandler to short-circuit signals into
+// COOLDOWN_BLOCKED. Read-only fast-path, hence RLock.
+func (rm *RiskManager) IsEntryCooldown(now time.Time) bool {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	if rm.entryCooldownUntil.IsZero() {
+		return false
+	}
+	return now.Before(rm.entryCooldownUntil)
+}
+
+// NoteClose extends the entry-cooldown window by EntryCooldownSec seconds
+// from now. Called by RiskHandler when an OrderEvent with ClosedPositionID > 0
+// (i.e. a fill that closed a position) is observed. EntryCooldownSec=0 makes
+// this a no-op so existing profiles without the field keep their behaviour.
+func (rm *RiskManager) NoteClose(now time.Time) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if rm.config.EntryCooldownSec <= 0 {
+		return
+	}
+	rm.entryCooldownUntil = now.Add(time.Duration(rm.config.EntryCooldownSec) * time.Second)
 }
 
 // UpdateHighWaterMark updates the best price for a position.

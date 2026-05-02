@@ -747,16 +747,22 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 			AllowOnMissingBook: true,
 		})
 	}
-	bus.Register(entity.EventTypeSignal, 30, riskHandler)
-
-	// PR2 (Signal/Decision/ExecutionPolicy three-layer separation): the new
-	// route runs in shadow alongside the legacy Signal route. DecisionHandler
-	// at priority 27 sits after StrategyHandler (20) / indicatorEventTap (25)
-	// but before any future Risk-on-Decision wiring (PR3 will add that).
-	// PositionView is the flat stub here; PR3 swaps in a PositionManager-
-	// backed implementation when the new route starts driving execution.
-	decisionHandler := decision.NewHandler(decision.Config{Positions: decision.FlatPositionView{}})
+	// PR3 (Signal/Decision/ExecutionPolicy three-layer separation): execution
+	// is now driven by the Decision layer. DecisionHandler at priority 27
+	// sits after StrategyHandler (20) / indicatorEventTap (25); RiskHandler
+	// receives ActionDecisionEvent at priority 30 (replacing the legacy
+	// EventTypeSignal route) and OrderEvent at priority 50 so it can arm
+	// the entry cooldown via RiskManager.NoteClose on close fills.
+	// PositionView is the executor-backed implementation that returns the
+	// *net* side per symbol — the structural fix for the two-sided sum bug
+	// that motivated the whole separation.
+	decisionHandler := decision.NewHandler(decision.Config{
+		Positions: decision.ExecutorPositionView{Executor: executor},
+		Cooldown:  p.riskMgr,
+	})
 	bus.Register(entity.EventTypeMarketSignal, 27, decisionHandler)
+	bus.Register(entity.EventTypeDecision, 30, riskHandler)
+	bus.Register(entity.EventTypeOrder, 50, riskHandler)
 
 	// ExecutionHandler: opens orders from approved signals (priority 40).
 	executionHandler := &backtest.ExecutionHandler{
