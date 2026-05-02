@@ -22,6 +22,11 @@ type RiskConfig struct {
 	// MaxBookSidePct: 自ロットが板上位 5 段累積数量のこの % を超えると
 	// 注文をブロックする (0=無効)。30 = 30%。
 	MaxBookSidePct float64 `json:"maxBookSidePct,omitempty"`
+
+	// EntryCooldownSec: close 約定後この秒数の間、新規エントリーを抑制する
+	// (0=無効)。MaxConsecutiveLosses ベースの cooldown とは独立して動く別経路。
+	// DecisionHandler が IsEntryCooldown を読んで COOLDOWN_BLOCKED 判定を出す。
+	EntryCooldownSec int `json:"entryCooldownSec,omitempty"`
 }
 
 // OrderProposal はRisk Managerに承認を求める注文提案。
