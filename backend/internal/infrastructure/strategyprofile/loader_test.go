@@ -273,3 +273,24 @@ func TestLoader_List_EmptyDir(t *testing.T) {
 		t.Errorf("expected 0 summaries, got %d", len(summaries))
 	}
 }
+
+// TestLoader_Load_ProductionLTC60kReadsPR4Fields ensures the on-disk
+// production profile parses cleanly and exposes the BookGate / EntryCooldown
+// values introduced in PR4. This guards against silent dropouts (e.g. someone
+// removing a JSON tag and the field defaulting to 0).
+func TestLoader_Load_ProductionLTC60kReadsPR4Fields(t *testing.T) {
+	loader := NewLoader("../../../profiles")
+	profile, err := loader.Load("production_ltc_60k")
+	if err != nil {
+		t.Fatalf("Load production_ltc_60k: %v", err)
+	}
+	if profile.Risk.MaxSlippageBps != 15 {
+		t.Errorf("Risk.MaxSlippageBps = %v, want 15", profile.Risk.MaxSlippageBps)
+	}
+	if profile.Risk.MaxBookSidePct != 20 {
+		t.Errorf("Risk.MaxBookSidePct = %v, want 20", profile.Risk.MaxBookSidePct)
+	}
+	if profile.Risk.EntryCooldownSec != 60 {
+		t.Errorf("Risk.EntryCooldownSec = %v, want 60", profile.Risk.EntryCooldownSec)
+	}
+}
