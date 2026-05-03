@@ -79,6 +79,20 @@ const STATIC_REASONS: Record<string, string> = {
   stop_loss: 'ストップロス',
   trailing_stop: 'トレイリングストップ',
   'circuit_breaker:price_jump': 'サーキットブレーカー: 価格急変',
+
+  // --- Phase 1 Decision レイヤ (Signal/Decision/ExecutionPolicy 三層分離) ---
+  'no position; bullish signal -> new long': '保有なし: 上昇シグナルで新規ロング',
+  'no position; bearish signal -> new short': '保有なし: 下落シグナルで新規ショート',
+  'no position; neutral signal': '保有なし: シグナル中立',
+  'long held; bearish signal -> exit candidate': 'ロング保有中: 下落シグナルで利確/損切候補',
+  'long held; not bearish': 'ロング保有中: 下落シグナルではない',
+  'short held; bullish signal -> exit candidate': 'ショート保有中: 上昇シグナルで利確/損切候補',
+  'short held; not bullish': 'ショート保有中: 上昇シグナルではない',
+  'unknown position side; defensive hold': '保有方向不明: 安全側で見送り',
+  'entry cooldown active after recent close': '直近の決済後クールダウン中',
+
+  // --- Phase 1 BookGate (PR4 で有効化) ---
+  depth_above_threshold: '板厚に対する自ロットの占有率が上限超過',
 }
 
 type DynamicRule = { regex: RegExp; replace: (m: RegExpMatchArray) => string }
