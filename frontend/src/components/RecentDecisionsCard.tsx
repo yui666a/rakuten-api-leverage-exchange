@@ -1,10 +1,14 @@
+import { useRef } from 'react'
 import { Link } from '@tanstack/react-router'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import type { DecisionLogItem, StrategyResponse } from '../lib/api'
 import { useDecisionLog } from '../hooks/useDecisionLog'
 import { translateReason } from '../lib/decisionReasonI18n'
 import { StanceLegendPopover } from './StanceLegendPopover'
 
 const RECENT_LIMIT = 200
+const ROW_HEIGHT = 36 // px
+const VISIBLE_ROWS = 12
 
 type Props = {
   symbolId: number
@@ -60,18 +64,40 @@ export function RecentDecisionsCard({ symbolId, strategy, rootSearch }: Props) {
             まだ判断履歴がありません。
           </div>
         ) : (
-          <MiniDecisionTable decisions={decisions} />
+          <VirtualizedDecisionTable decisions={decisions} />
         )}
       </div>
     </section>
   )
 }
 
-function MiniDecisionTable({ decisions }: { decisions: DecisionLogItem[] }) {
+function VirtualizedDecisionTable({ decisions }: { decisions: DecisionLogItem[] }) {
+  const parentRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: decisions.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 5,
+  })
+
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/8">
-      <table className="w-full text-xs">
-        <thead className="bg-white/5 text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary">
+    <div
+      ref={parentRef}
+      className="overflow-auto rounded-2xl border border-white/8"
+      style={{ height: VISIBLE_ROWS * ROW_HEIGHT }}
+    >
+      <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: '4.5rem' }} />
+          <col style={{ width: '7rem' }} />
+          <col style={{ width: '5rem' }} />
+          <col style={{ width: '4rem' }} />
+          <col style={{ width: '4.5rem' }} />
+          <col style={{ width: '6rem' }} />
+          <col style={{ width: '8rem' }} />
+          <col />
+        </colgroup>
+        <thead className="sticky top-0 z-10 bg-bg-card text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary">
           <tr>
             <th className="px-3 py-2 text-left">時刻</th>
             <th className="px-3 py-2 text-left">スタンス</th>
@@ -83,10 +109,18 @@ function MiniDecisionTable({ decisions }: { decisions: DecisionLogItem[] }) {
             <th className="px-3 py-2 text-left">理由</th>
           </tr>
         </thead>
-        <tbody>
-          {decisions.map((d) => (
-            <MiniRow key={d.id} item={d} />
-          ))}
+        <tbody style={{ height: virtualizer.getTotalSize(), position: 'relative', display: 'block' }}>
+          {virtualizer.getVirtualItems().map((vrow) => {
+            const item = decisions[vrow.index]
+            return (
+              <VirtualRow
+                key={item.id}
+                item={item}
+                top={vrow.start}
+                height={ROW_HEIGHT}
+              />
+            )
+          })}
         </tbody>
       </table>
     </div>
@@ -103,7 +137,15 @@ const INTENT_SHORT_LABEL: Record<NonNullable<DecisionLogItem['decision']>['inten
   '': '—',
 }
 
-function MiniRow({ item }: { item: DecisionLogItem }) {
+function VirtualRow({
+  item,
+  top,
+  height,
+}: {
+  item: DecisionLogItem
+  top: number
+  height: number
+}) {
   const bg = rowBackground(item)
   const rawReason =
     item.decision?.reason ||
@@ -116,28 +158,49 @@ function MiniRow({ item }: { item: DecisionLogItem }) {
   const outcome = outcomeLabel(item)
   const intent = item.decision?.intent ?? ''
   return (
-    <tr className={`border-t border-white/8 ${bg}`}>
-      <td className="px-3 py-2 whitespace-nowrap">
+    <tr
+      className={`border-t border-white/8 ${bg}`}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height,
+        transform: `translateY(${top}px)`,
+        display: 'table',
+        tableLayout: 'fixed',
+      }}
+    >
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '4.5rem' }}>
         {new Date(item.barCloseAt).toLocaleTimeString('ja-JP', {
           hour: '2-digit',
           minute: '2-digit',
         })}
       </td>
-      <td className="px-3 py-2">{item.stance || '—'}</td>
-      <td className="px-3 py-2 whitespace-nowrap">{INTENT_SHORT_LABEL[intent]}</td>
-      <td className="px-3 py-2 font-medium">{item.signal.action}</td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2" style={{ width: '7rem' }}>{item.stance || '—'}</td>
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '5rem' }}>
+        {INTENT_SHORT_LABEL[intent]}
+      </td>
+      <td className="px-3 py-2 font-medium" style={{ width: '4rem' }}>
+        {item.signal.action}
+      </td>
+      <td className="px-3 py-2 text-right" style={{ width: '4.5rem' }}>
         {item.signal.action === 'HOLD'
           ? '—'
           : `${(item.signal.confidence * 100).toFixed(1)}%`}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">{outcome}</td>
-      <td className="px-3 py-2 text-right whitespace-nowrap">
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '6rem' }}>
+        {outcome}
+      </td>
+      <td
+        className="px-3 py-2 text-right whitespace-nowrap"
+        style={{ width: '8rem' }}
+      >
         {item.order.outcome === 'NOOP'
           ? '—'
           : `${item.order.amount} @ ${item.order.price.toLocaleString('ja-JP')}`}
       </td>
-      <td className="max-w-[18rem] truncate px-3 py-2 text-text-secondary" title={rawReason}>
+      <td className="truncate px-3 py-2 text-text-secondary" title={rawReason}>
         {reason}
       </td>
     </tr>
