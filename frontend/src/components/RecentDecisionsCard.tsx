@@ -95,7 +95,7 @@ function VirtualizedDecisionTable({ decisions }: { decisions: DecisionLogItem[] 
           <col style={{ width: '4.5rem' }} />
           <col style={{ width: '6rem' }} />
           <col style={{ width: '8rem' }} />
-          <col />
+          <col style={{ width: '18rem' }} />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-bg-card text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary">
           <tr>
@@ -200,7 +200,11 @@ function VirtualRow({
           ? '—'
           : `${item.order.amount} @ ${item.order.price.toLocaleString('ja-JP')}`}
       </td>
-      <td className="truncate px-3 py-2 text-text-secondary" title={rawReason}>
+      <td
+        className="truncate px-3 py-2 text-text-secondary"
+        style={{ width: '18rem' }}
+        title={rawReason}
+      >
         {reason}
       </td>
     </tr>
