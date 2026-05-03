@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	domainexitplan "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/exitplan"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/risk"
@@ -19,6 +20,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decision"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/decisionlog"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
+	usecaseexitplan "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/exitplan"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/reconcile"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/sor"
@@ -82,6 +84,12 @@ type EventDrivenPipeline struct {
 	// EventBus so every pipeline cycle persists a row. nil disables the
 	// recorder; the rest of the pipeline is unaffected.
 	decisionLogRepo repository.DecisionLogRepository
+
+	// exitPlanRepo, when non-nil, attaches the Phase 1 ExitPlan shadow
+	// handler so every fill is mirrored into the exit_plans table.
+	// シャドウなので発注パスへは干渉しない。Phase 2 で SL/TP/Trailing
+	// 発火本体が ExitHandler に移管されたら shadow handler は退役する。
+	exitPlanRepo domainexitplan.Repository
 
 	// candlestickFetcher is used at event-loop start to seed the LiveSource
 	// CandleBuilder with the in-progress PT15M bar reconstructed from PT1M
@@ -173,6 +181,11 @@ type EventDrivenPipelineConfig struct {
 	// without otherwise affecting the pipeline.
 	DecisionLogRepo repository.DecisionLogRepository
 
+	// ExitPlanRepo, when non-nil, attaches the Phase 1 ExitPlan shadow
+	// handler so the pipeline mirrors fills into the exit_plans table.
+	// シャドウ運用専用。SL/TP/Trailing 発火経路は変更しない。
+	ExitPlanRepo domainexitplan.Repository
+
 	// CandlestickFetcher is used to seed the LiveSource CandleBuilder with
 	// the in-progress PT15M bar (reconstructed from PT1M) at startup so the
 	// first emitted bar after a restart has correct OHLC. nil keeps the
@@ -248,6 +261,7 @@ func NewEventDrivenPipeline(
 		indicatorPeriods:   cfg.IndicatorPeriods,
 		bbSqueezeLookback:  cfg.BBSqueezeLookback,
 		decisionLogRepo:    cfg.DecisionLogRepo,
+		exitPlanRepo:       cfg.ExitPlanRepo,
 		candlestickFetcher: cfg.CandlestickFetcher,
 		stanceResolver:     cfg.StanceResolver,
 		primaryInterval:    primaryIntervalOrDefault(cfg.PrimaryInterval),
@@ -778,6 +792,18 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeMarketSignal, 27, decisionHandler)
 	bus.Register(entity.EventTypeDecision, 30, riskHandler)
 	bus.Register(entity.EventTypeOrder, 50, riskHandler)
+
+	// ExitPlan shadow (priority 60): OrderEvent をシャドウで listen して
+	// ExitPlan の作成・close だけ行う。発注パスには干渉しない。Phase 2 で
+	// 出口判定本体を Exit レイヤに移管したらこの shadow は退役する。
+	if p.exitPlanRepo != nil {
+		shadow := usecaseexitplan.NewShadowHandler(usecaseexitplan.ShadowHandlerConfig{
+			Repo:   p.exitPlanRepo,
+			Policy: snap.riskPolicy,
+		})
+		bus.Register(entity.EventTypeOrder, 60, shadow)
+		slog.Info("event-pipeline: ExitPlan shadow handler registered (Phase 1)")
+	}
 
 	// ExecutionHandler: opens orders from approved signals (priority 40).
 	executionHandler := &backtest.ExecutionHandler{
