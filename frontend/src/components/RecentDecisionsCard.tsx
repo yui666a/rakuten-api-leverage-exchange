@@ -4,7 +4,7 @@ import { useDecisionLog } from '../hooks/useDecisionLog'
 import { translateReason } from '../lib/decisionReasonI18n'
 import { StanceLegendPopover } from './StanceLegendPopover'
 
-const RECENT_LIMIT = 10
+const RECENT_LIMIT = 200
 
 type Props = {
   symbolId: number
