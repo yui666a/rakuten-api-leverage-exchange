@@ -88,14 +88,14 @@ function VirtualizedDecisionTable({ decisions }: { decisions: DecisionLogItem[] 
     >
       <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
         <colgroup>
-          <col style={{ width: '4.5rem' }} />
-          <col style={{ width: '7rem' }} />
-          <col style={{ width: '5rem' }} />
-          <col style={{ width: '4rem' }} />
-          <col style={{ width: '4.5rem' }} />
-          <col style={{ width: '6rem' }} />
-          <col style={{ width: '8rem' }} />
-          <col style={{ width: '18rem' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '9%' }} />
+          <col style={{ width: '7%' }} />
+          <col style={{ width: '8%' }} />
+          <col style={{ width: '11%' }} />
+          <col style={{ width: '14%' }} />
+          <col style={{ width: '31%' }} />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-bg-card text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary">
           <tr>
@@ -171,30 +171,30 @@ function VirtualRow({
         tableLayout: 'fixed',
       }}
     >
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '4.5rem' }}>
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '8%' }}>
         {new Date(item.barCloseAt).toLocaleTimeString('ja-JP', {
           hour: '2-digit',
           minute: '2-digit',
         })}
       </td>
-      <td className="px-3 py-2" style={{ width: '7rem' }}>{item.stance || '—'}</td>
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '5rem' }}>
+      <td className="px-3 py-2" style={{ width: '12%' }}>{item.stance || '—'}</td>
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '9%' }}>
         {INTENT_SHORT_LABEL[intent]}
       </td>
-      <td className="px-3 py-2 font-medium" style={{ width: '4rem' }}>
+      <td className="px-3 py-2 font-medium" style={{ width: '7%' }}>
         {item.signal.action}
       </td>
-      <td className="px-3 py-2 text-right" style={{ width: '4.5rem' }}>
+      <td className="px-3 py-2 text-right" style={{ width: '8%' }}>
         {item.signal.action === 'HOLD'
           ? '—'
           : `${(item.signal.confidence * 100).toFixed(1)}%`}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '6rem' }}>
+      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '11%' }}>
         {outcome}
       </td>
       <td
         className="px-3 py-2 text-right whitespace-nowrap"
-        style={{ width: '8rem' }}
+        style={{ width: '14%' }}
       >
         {item.order.outcome === 'NOOP'
           ? '—'
@@ -202,7 +202,7 @@ function VirtualRow({
       </td>
       <td
         className="truncate px-3 py-2 text-text-secondary"
-        style={{ width: '18rem' }}
+        style={{ width: '31%' }}
         title={rawReason}
       >
         {reason}
