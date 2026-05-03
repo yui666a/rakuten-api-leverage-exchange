@@ -734,6 +734,7 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		in.BBSqueezeLookback = profile.StanceRules.BBSqueezeLookback
 		in.IndicatorPeriods = profile.Indicators
 		in.PositionSizing = profile.Risk.PositionSizing
+		in.ExitOnSignal = profile.Risk.ExitOnSignal
 	}
 	return in, nil
 }

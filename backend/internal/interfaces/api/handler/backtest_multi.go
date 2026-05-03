@@ -213,11 +213,13 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 			var bbLookback int
 			var positionSizing *entity.PositionSizingConfig
 			var indicatorPeriods entity.IndicatorConfig
+			var exitOnSignal bool
 			if profile != nil {
 				resolved := resolveRiskProfile(baseDir, profile)
 				bbLookback = resolved.StanceRules.BBSqueezeLookback
 				positionSizing = resolved.Risk.PositionSizing
 				indicatorPeriods = resolved.Indicators
+				exitOnSignal = resolved.Risk.ExitOnSignal
 			}
 			fillSrc, bookSrc, buildErr := h.buildExecutionSourcesForCfg(c.Request.Context(), cfg)
 			if buildErr != nil {
@@ -231,6 +233,7 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				BBSqueezeLookback: bbLookback,
 				IndicatorPeriods:  indicatorPeriods,
 				PositionSizing:    positionSizing,
+				ExitOnSignal:      exitOnSignal,
 				FillPriceSource:   fillSrc,
 				BookSource:        bookSrc,
 				RiskConfig: entity.RiskConfig{

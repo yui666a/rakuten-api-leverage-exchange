@@ -481,6 +481,17 @@ type SignalSizer interface {
 	Sized(requested, entryPrice, slPercent, equity, atr, ddPct, confidence, minConfidence float64) (amount float64, skipReason string)
 }
 
+// DecisionExitExecutor is the narrow capability the RiskHandler needs to
+// honour Decision-layer exits (IntentExitCandidate when the profile opted
+// in via ExitOnSignal). Both SimExecutor and the live RealExecutor satisfy
+// it transparently — only the methods we touch are listed so test fakes
+// can implement just these two without dragging in the full executor
+// surface (Open / SelectSLTPExit, etc.).
+type DecisionExitExecutor interface {
+	Positions() []eventengine.Position
+	Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error)
+}
+
 // RiskHandler gates SignalEvents using RiskManager with injected event time
 // and (optionally) a position sizer that decides the lot per trade.
 type RiskHandler struct {
@@ -508,11 +519,25 @@ type RiskHandler struct {
 	// BookGateRejects counts how many signals the gate vetoed across
 	// the run, broken down by reason. Used for backtest reports.
 	BookGateRejects map[string]int
+
+	// ExitOnSignal opts the handler into Decision-driven exits. When true
+	// and Executor is non-nil, IntentExitCandidate closes every same-symbol
+	// position whose Side opposes the decision's Side (i.e. matches the
+	// position the strategy now wants to flatten). Defaults to false so
+	// profiles that have not opted in keep the Phase 1 "TP/SL only" path.
+	ExitOnSignal bool
+	// Executor backs ExitOnSignal closes. nil disables the branch even
+	// when ExitOnSignal is true (defensive — tests that wire only the
+	// risk-manager half stay on the legacy silent path). Both the
+	// backtest SimExecutor and the live RealExecutor satisfy this.
+	Executor DecisionExitExecutor
 }
 
 // Handle dispatches on event type:
 //   - ActionDecisionEvent (PR3+): the new execution input. Decision-layer
-//     output drives sizing / risk gate / book gate / approved emission.
+//     output drives sizing / risk gate / book gate / approved emission for
+//     IntentNewEntry, and (when ExitOnSignal is set on the profile)
+//     direct close emission for IntentExitCandidate.
 //   - OrderEvent: observed for close-fill detection so the entry cooldown
 //     can be armed via RiskManager.NoteClose. The handler does not emit
 //     anything in this branch.
@@ -537,11 +562,17 @@ func (h *RiskHandler) handleDecision(ctx context.Context, decisionEvent entity.A
 
 	decision := decisionEvent.Decision
 
+	// IntentExitCandidate: when the profile opted in via ExitOnSignal AND an
+	// executor is wired, close every position on the same symbol whose Side
+	// opposes the decision's Side (i.e. the positions the strategy now
+	// wants to flatten). Without ExitOnSignal the branch stays silent so
+	// the legacy TP/SL/Trailing path remains the only exit channel.
+	if decision.Intent == entity.IntentExitCandidate {
+		return h.handleExitCandidate(decisionEvent)
+	}
+
 	// HOLD / COOLDOWN_BLOCKED: nothing to do — recorder already captured the
 	// decision, and there is no order to attempt.
-	// EXIT_CANDIDATE is intentionally skipped in PR3: real exits stay on the
-	// TP/SL/Trailing path. A future PR may introduce an `exit_on_signal`
-	// profile flag to opt into signal-driven closes.
 	if decision.Intent != entity.IntentNewEntry {
 		return nil, nil
 	}
@@ -646,6 +677,73 @@ func (h *RiskHandler) handleDecision(ctx context.Context, decisionEvent entity.A
 			Urgency:   synthSignal.Urgency,
 		},
 	}, nil
+}
+
+// handleExitCandidate closes every position on the decision's symbol whose
+// Side is opposite to decision.Side (i.e. the position(s) the strategy now
+// wants to flatten). The branch is a no-op unless the profile opted in via
+// ExitOnSignal AND an executor is wired — both gates are intentional so a
+// missing dependency cannot accidentally start trading on a profile that
+// never asked for signal-driven exits.
+//
+// Each successful close emits an OrderEvent tagged with
+// DecisionTriggerDecisionExit so the recorder / analytics can attribute the
+// exit to the Decision layer rather than the tick SL/TP/Trailing path.
+// ClosedPositionID is populated for downstream consumers (RiskHandler arms
+// the entry cooldown via NoteClose when it sees a non-zero ClosedPositionID).
+//
+// Sizer / RiskManager / BookGate are intentionally skipped: an exit is a
+// forced unwind, sizing logic does not apply, and a thin book must not
+// trap the bot in a position the strategy no longer wants to hold.
+// ThinBookError from a thin orderbook leaves the position open — the next
+// tick still has SL/TP/Trailing as a backstop, and a fresh
+// IntentExitCandidate next bar will retry the close.
+func (h *RiskHandler) handleExitCandidate(decisionEvent entity.ActionDecisionEvent) ([]entity.Event, error) {
+	if !h.ExitOnSignal || h.Executor == nil {
+		return nil, nil
+	}
+	decision := decisionEvent.Decision
+	if decision.Side == "" {
+		// Decision-layer bug: EXIT_CANDIDATE without a side. Stay silent
+		// rather than guess — the recorder already captured the decision.
+		return nil, nil
+	}
+	// The position to flatten is the one whose Side is opposite to
+	// decision.Side: a long-flatten EXIT carries Side=Sell, so we close
+	// every Buy position on the symbol (and vice versa).
+	target := entity.OrderSideBuy
+	if decision.Side == entity.OrderSideBuy {
+		target = entity.OrderSideSell
+	}
+
+	emitted := make([]entity.Event, 0)
+	for _, pos := range h.Executor.Positions() {
+		if pos.SymbolID != decision.SymbolID {
+			continue
+		}
+		if pos.Side != target {
+			continue
+		}
+		orderEvent, _, err := h.Executor.Close(
+			pos.PositionID,
+			decisionEvent.Price,
+			decision.Reason,
+			decisionEvent.Timestamp,
+		)
+		if err != nil {
+			var thin *infraThinBookError
+			if errors.As(err, &thin) {
+				// Thin book: leave the position open; tick SL/TP/Trailing
+				// is still active, and the next bar's Decision will retry.
+				continue
+			}
+			return nil, err
+		}
+		orderEvent.Trigger = entity.DecisionTriggerDecisionExit
+		orderEvent.ClosedPositionID = pos.PositionID
+		emitted = append(emitted, orderEvent)
+	}
+	return emitted, nil
 }
 
 // handleOrderEvent arms the entry cooldown when an OrderEvent represents a

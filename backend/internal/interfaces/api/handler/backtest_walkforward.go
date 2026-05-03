@@ -267,6 +267,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				BBSqueezeLookback: profile.StanceRules.BBSqueezeLookback,
 				IndicatorPeriods:  profile.Indicators,
 				PositionSizing:    profile.Risk.PositionSizing,
+				ExitOnSignal:      profile.Risk.ExitOnSignal,
 				FillPriceSource:   fillSrc,
 				BookSource:        bookSrc,
 				RiskConfig:        risk,

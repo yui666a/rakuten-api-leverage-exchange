@@ -64,6 +64,13 @@ type RunInput struct {
 	// scaling (the sizer passes the multiplier through as 1.0).
 	MinConfidence float64
 
+	// ExitOnSignal mirrors profile.Risk.ExitOnSignal. When true the run's
+	// RiskHandler treats Decision-layer IntentExitCandidate as a real exit
+	// (closes matching positions through the simulator), instead of leaving
+	// the close to the TP/SL/Trailing tick path. Defaults false so the
+	// pre-Phase-1 backtest behaviour remains the baseline.
+	ExitOnSignal bool
+
 	// ResultID, when non-empty, overrides the auto-generated ULID assigned
 	// at the end of Run. Callers wire this when they need to know the run
 	// id *before* Run starts — e.g. to bind a DecisionRecorder to it via
@@ -246,6 +253,8 @@ func (r *BacktestRunner) Run(ctx context.Context, input RunInput) (*entity.Backt
 		TradeAmount:     input.TradeAmount,
 		StopLossPercent: riskCfg.StopLossPercent,
 		MinConfidence:   input.MinConfidence,
+		ExitOnSignal:    input.ExitOnSignal,
+		Executor:        simAdapter,
 	}
 	if ps := input.PositionSizing; ps != nil && ps.Mode != "" && ps.Mode != "fixed" {
 		defaults := positionsize.VenueDefaults(input.Config.Symbol)

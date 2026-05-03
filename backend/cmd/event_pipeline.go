@@ -105,6 +105,11 @@ type EventDrivenPipeline struct {
 	// initialBalance seeds the PeakTracker for drawdown-based lot scaling.
 	// Sourced from cfg.Risk.InitialCapital at startup.
 	initialBalance float64
+	// exitOnSignal mirrors profile.Risk.ExitOnSignal. When true, RiskHandler
+	// closes positions on IntentExitCandidate via the live executor instead
+	// of leaving the exit to TP/SL/Trailing. Defaults false so profiles
+	// that have not opted in keep the Phase 1 behaviour.
+	exitOnSignal bool
 
 	// primaryInterval / higherTFInterval drive the LiveSource, the
 	// IndicatorHandler, and every per-bar handler that needs to know which
@@ -202,6 +207,13 @@ type EventDrivenPipelineConfig struct {
 	// InitialBalance seeds the PeakTracker for drawdown-aware lot scaling.
 	// Typically cfg.Risk.InitialCapital. 0 disables PeakTracker.
 	InitialBalance float64
+
+	// ExitOnSignal mirrors profile.Risk.ExitOnSignal. When true the live
+	// RiskHandler closes positions on Decision-layer IntentExitCandidate
+	// instead of leaving exits to the TP/SL/Trailing tick path. Defaults
+	// false to preserve Phase 1 behaviour for profiles that have not
+	// opted in.
+	ExitOnSignal bool
 }
 
 func NewEventDrivenPipeline(
@@ -242,6 +254,7 @@ func NewEventDrivenPipeline(
 		higherTFInterval:   higherTFIntervalOrDefault(cfg.HigherTFInterval),
 		positionSizing:     cfg.PositionSizing,
 		initialBalance:     cfg.InitialBalance,
+		exitOnSignal:       cfg.ExitOnSignal,
 	}
 }
 
@@ -718,6 +731,8 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		TradeAmount:     snap.tradeAmount,
 		StopLossPercent: snap.riskPolicy.StopLoss.Percent,
 		MinConfidence:   snap.minConfidence,
+		ExitOnSignal:    p.exitOnSignal,
+		Executor:        executor,
 	}
 	if ps := p.positionSizing; ps != nil && ps.Mode != "" && ps.Mode != "fixed" {
 		defaults := positionsize.VenueDefaults(p.currencyPair)
