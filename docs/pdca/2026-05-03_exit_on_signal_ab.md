@@ -5,6 +5,8 @@
 **Profile variant**: `backend/profiles/experiment_ltc_60k_exit_on_signal.json` (exit_on_signal=true; その他は完全同一)
 **実装 PR**: #238 (`feat(risk): exit_on_signal — Decision-driven exits via RiskHandler`)
 
+> **2026-05-03 追記**: spread sensitivity 検証の結果、本レポートの結論（"promote 推奨"）は **spread=0.1% 前提に過剰最適化** していたことが判明し、最終的に **promote 見送り**となった。詳細は `docs/pdca/2026-05-03_exit_on_signal_no_promote.md` 参照。
+
 ## 仮説
 
 Phase 1 の DecisionHandler は long 保有中の bearish シグナル / short 保有中の bullish シグナルを `EXIT_CANDIDATE` として emit するが、PR #238 までは RiskHandler が silent-skip していた。実 exit は TP / SL / Trailing しか持たない状態。
