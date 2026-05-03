@@ -377,6 +377,14 @@ type StrategyRiskConfig struct {
 	MaxSlippageBps   float64 `json:"max_slippage_bps,omitempty"`
 	MaxBookSidePct   float64 `json:"max_book_side_pct,omitempty"`
 	EntryCooldownSec int     `json:"entry_cooldown_sec,omitempty"`
+
+	// ExitOnSignal opts the strategy into Decision-driven exits: when the
+	// Decision layer emits IntentExitCandidate (long held + bearish signal,
+	// or short held + bullish signal), RiskHandler closes every matching
+	// position via OrderExecutor.Close, instead of leaving the exit to the
+	// TP/SL/Trailing tick path. Defaults to false to preserve the Phase 1
+	// "TP/SL only" behaviour for profiles that have not opted in.
+	ExitOnSignal bool `json:"exit_on_signal,omitempty"`
 }
 
 // PositionSizingConfig declares how per-trade lot size is derived at runtime.

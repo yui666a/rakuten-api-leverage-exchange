@@ -208,6 +208,7 @@ func main() {
 			HigherTFInterval:   liveHigherTFIntervalFromEnv(),
 			PositionSizing:     liveProfilePositionSizing(liveProfile),
 			InitialBalance:     cfg.Risk.InitialCapital,
+			ExitOnSignal:       liveProfileExitOnSignal(liveProfile),
 		},
 		restClient,
 		restClient, // SymbolFetcher
@@ -538,6 +539,17 @@ func liveProfilePositionSizing(p *entity.StrategyProfile) *entity.PositionSizing
 		return nil
 	}
 	return p.Risk.PositionSizing
+}
+
+// liveProfileExitOnSignal returns profile.Risk.ExitOnSignal, defaulting to
+// false when the profile is missing. Threading this through main lets the
+// pipeline keep its profile-agnostic constructor signature while still
+// honouring the profile's opt-in for Decision-driven exits.
+func liveProfileExitOnSignal(p *entity.StrategyProfile) bool {
+	if p == nil {
+		return false
+	}
+	return p.Risk.ExitOnSignal
 }
 
 // livePrimaryIntervalFromEnv reads $LIVE_PRIMARY_INTERVAL with a PT15M

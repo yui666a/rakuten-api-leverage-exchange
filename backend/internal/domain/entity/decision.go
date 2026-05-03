@@ -57,6 +57,12 @@ const (
 	DecisionTriggerBarClose     = "BAR_CLOSE"
 	DecisionTriggerTickSLTP     = "TICK_SLTP"
 	DecisionTriggerTickTrailing = "TICK_TRAILING"
+	// DecisionTriggerDecisionExit identifies an exit produced by the
+	// Decision layer (IntentExitCandidate consumed by RiskHandler when the
+	// strategy profile opted in via ExitOnSignal). Distinct from the tick
+	// SL/TP/Trailing exits so the recorder and analytics can attribute
+	// signal-driven closes to the strategy rather than the risk envelope.
+	DecisionTriggerDecisionExit = "DECISION_EXIT"
 )
 
 // Risk gate outcomes.

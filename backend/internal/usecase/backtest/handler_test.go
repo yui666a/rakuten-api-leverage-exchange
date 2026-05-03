@@ -386,8 +386,9 @@ func TestRiskHandler_EmitsRejectedOnRiskManagerVeto(t *testing.T) {
 }
 
 // TestRiskHandler_PR3_NonNewEntryIntentsAreSilent: HOLD / EXIT_CANDIDATE /
-// COOLDOWN_BLOCKED must produce zero events. EXIT_CANDIDATE is intentionally
-// silent in PR3 — real exits stay on the TP/SL path.
+// COOLDOWN_BLOCKED must produce zero events when ExitOnSignal is OFF (the
+// default). EXIT_CANDIDATE only becomes loud when both ExitOnSignal=true
+// AND an executor is wired — that path has its own dedicated tests.
 func TestRiskHandler_PR3_NonNewEntryIntentsAreSilent(t *testing.T) {
 	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
 		MaxPositionAmount: 1_000_000,
@@ -463,6 +464,273 @@ func TestRiskHandler_PR3_OrderEventArmsCooldown(t *testing.T) {
 	}
 	if riskMgr3.IsEntryCooldown(time.UnixMilli(closeTs).Add(time.Second)) {
 		t.Error("failed close must not arm entry cooldown")
+	}
+}
+
+// fakeDecisionExitExecutor is a minimal DecisionExitExecutor for the
+// EXIT_CANDIDATE branch tests. It records every Close call so we can assert
+// the exact (positionID, price, timestamp, reason) tuples the handler emitted.
+type fakeDecisionExitExecutor struct {
+	positions []eventengine.Position
+	closedIDs []int64
+	closeErr  error
+	closeCall []struct {
+		positionID int64
+		price      float64
+		reason     string
+		ts         int64
+	}
+}
+
+func (f *fakeDecisionExitExecutor) Positions() []eventengine.Position {
+	out := make([]eventengine.Position, len(f.positions))
+	copy(out, f.positions)
+	return out
+}
+
+func (f *fakeDecisionExitExecutor) Close(positionID int64, signalPrice float64, reason string, timestamp int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error) {
+	if f.closeErr != nil {
+		return entity.OrderEvent{}, nil, f.closeErr
+	}
+	f.closedIDs = append(f.closedIDs, positionID)
+	f.closeCall = append(f.closeCall, struct {
+		positionID int64
+		price      float64
+		reason     string
+		ts         int64
+	}{positionID: positionID, price: signalPrice, reason: reason, ts: timestamp})
+	// Return a minimal OrderEvent — the handler overwrites Trigger and
+	// ClosedPositionID, so we only need the executor to surface a non-zero
+	// OrderID so downstream cooldown plumbing (in production) would arm.
+	return entity.OrderEvent{
+		OrderID:   1000 + positionID,
+		SymbolID:  0,
+		Price:     signalPrice,
+		Reason:    reason,
+		Timestamp: timestamp,
+	}, nil, nil
+}
+
+// TestRiskHandler_ExitOnSignal_DisabledStaysSilent is the safety net: with
+// ExitOnSignal=false (default) the handler must keep the Phase 1 behaviour
+// where IntentExitCandidate produces zero events. Wiring an executor must
+// not flip the branch on by accident.
+func TestRiskHandler_ExitOnSignal_DisabledStaysSilent(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	exec := &fakeDecisionExitExecutor{
+		positions: []eventengine.Position{
+			{PositionID: 1, SymbolID: 7, Side: entity.OrderSideBuy, Amount: 0.5, EntryPrice: 9000},
+		},
+	}
+	handler := &RiskHandler{
+		RiskManager:  riskMgr,
+		TradeAmount:  0.01,
+		Executor:     exec,
+		ExitOnSignal: false,
+	}
+
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentExitCandidate,
+			Side:     entity.OrderSideSell,
+			Reason:   "long held; bearish signal -> exit candidate",
+		},
+		Price:     10000,
+		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("ExitOnSignal=false must stay silent, got %d events", len(events))
+	}
+	if len(exec.closedIDs) != 0 {
+		t.Errorf("executor.Close must not be called, got %v", exec.closedIDs)
+	}
+}
+
+// TestRiskHandler_ExitOnSignal_ClosesLongOnExitCandidate covers the headline
+// case: long held + bearish MarketSignal → DecisionHandler emits
+// IntentExitCandidate with Side=Sell → RiskHandler must close every Buy
+// position on the symbol and tag the OrderEvent with DecisionTriggerDecisionExit.
+func TestRiskHandler_ExitOnSignal_ClosesLongOnExitCandidate(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	exec := &fakeDecisionExitExecutor{
+		positions: []eventengine.Position{
+			{PositionID: 1, SymbolID: 7, Side: entity.OrderSideBuy, Amount: 0.5, EntryPrice: 9000},
+			// Different symbol — must NOT be closed.
+			{PositionID: 2, SymbolID: 99, Side: entity.OrderSideBuy, Amount: 0.5, EntryPrice: 9000},
+			// Same symbol but already a Sell — must NOT be closed (the
+			// Decision is to flatten longs, not shorts).
+			{PositionID: 3, SymbolID: 7, Side: entity.OrderSideSell, Amount: 0.5, EntryPrice: 9000},
+		},
+	}
+	handler := &RiskHandler{
+		RiskManager:  riskMgr,
+		TradeAmount:  0.01,
+		Executor:     exec,
+		ExitOnSignal: true,
+	}
+
+	ts := time.Now().UnixMilli()
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentExitCandidate,
+			Side:     entity.OrderSideSell,
+			Reason:   "long held; bearish signal -> exit candidate",
+		},
+		Price:     10000,
+		Timestamp: ts,
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 OrderEvent, got %d", len(events))
+	}
+	orderEvent, ok := events[0].(entity.OrderEvent)
+	if !ok {
+		t.Fatalf("expected OrderEvent, got %T", events[0])
+	}
+	if orderEvent.Trigger != entity.DecisionTriggerDecisionExit {
+		t.Errorf("Trigger = %q, want %q", orderEvent.Trigger, entity.DecisionTriggerDecisionExit)
+	}
+	if orderEvent.ClosedPositionID != 1 {
+		t.Errorf("ClosedPositionID = %d, want 1", orderEvent.ClosedPositionID)
+	}
+	if len(exec.closedIDs) != 1 || exec.closedIDs[0] != 1 {
+		t.Errorf("closedIDs = %v, want [1]", exec.closedIDs)
+	}
+	if exec.closeCall[0].price != 10000 || exec.closeCall[0].ts != ts {
+		t.Errorf("Close called with price=%v ts=%v; want 10000/%d", exec.closeCall[0].price, exec.closeCall[0].ts, ts)
+	}
+}
+
+// TestRiskHandler_ExitOnSignal_ClosesShortOnExitCandidate is the symmetric
+// case: short held + bullish MarketSignal → IntentExitCandidate Side=Buy →
+// every Sell position on the symbol is closed.
+func TestRiskHandler_ExitOnSignal_ClosesShortOnExitCandidate(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	exec := &fakeDecisionExitExecutor{
+		positions: []eventengine.Position{
+			{PositionID: 11, SymbolID: 7, Side: entity.OrderSideSell, Amount: 0.3, EntryPrice: 11000},
+			{PositionID: 12, SymbolID: 7, Side: entity.OrderSideSell, Amount: 0.2, EntryPrice: 10800},
+		},
+	}
+	handler := &RiskHandler{
+		RiskManager:  riskMgr,
+		TradeAmount:  0.01,
+		Executor:     exec,
+		ExitOnSignal: true,
+	}
+
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentExitCandidate,
+			Side:     entity.OrderSideBuy,
+			Reason:   "short held; bullish signal -> exit candidate",
+		},
+		Price:     10500,
+		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("expected 2 OrderEvents (one per short position), got %d", len(events))
+	}
+	got := map[int64]bool{}
+	for _, e := range events {
+		oe, ok := e.(entity.OrderEvent)
+		if !ok {
+			t.Fatalf("expected OrderEvent, got %T", e)
+		}
+		got[oe.ClosedPositionID] = true
+		if oe.Trigger != entity.DecisionTriggerDecisionExit {
+			t.Errorf("Trigger = %q, want %q", oe.Trigger, entity.DecisionTriggerDecisionExit)
+		}
+	}
+	if !got[11] || !got[12] {
+		t.Errorf("expected both 11 and 12 closed, got %v", got)
+	}
+}
+
+// TestRiskHandler_ExitOnSignal_NoPositionsNoEmits guards the "flat book"
+// edge case: even with ExitOnSignal on, an EXIT_CANDIDATE with no matching
+// position must be a no-op (the recorder already captured the decision).
+func TestRiskHandler_ExitOnSignal_NoPositionsNoEmits(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	exec := &fakeDecisionExitExecutor{} // empty positions
+	handler := &RiskHandler{
+		RiskManager:  riskMgr,
+		TradeAmount:  0.01,
+		Executor:     exec,
+		ExitOnSignal: true,
+	}
+
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentExitCandidate,
+			Side:     entity.OrderSideSell,
+		},
+		Price:     10000,
+		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("expected 0 events when no positions match, got %d", len(events))
+	}
+	if len(exec.closedIDs) != 0 {
+		t.Errorf("Close must not be called, got %v", exec.closedIDs)
+	}
+}
+
+// TestRiskHandler_ExitOnSignal_NilExecutorIsSilent: ExitOnSignal=true but
+// Executor=nil must stay silent (defensive — tests / partial wiring should
+// never panic).
+func TestRiskHandler_ExitOnSignal_NilExecutorIsSilent(t *testing.T) {
+	riskMgr := usecase.NewRiskManager(entity.RiskConfig{
+		MaxPositionAmount: 1_000_000,
+		InitialCapital:    1_000_000,
+	})
+	handler := &RiskHandler{
+		RiskManager:  riskMgr,
+		TradeAmount:  0.01,
+		Executor:     nil,
+		ExitOnSignal: true,
+	}
+	events, err := handler.Handle(context.Background(), entity.ActionDecisionEvent{
+		Decision: entity.ActionDecision{
+			SymbolID: 7,
+			Intent:   entity.IntentExitCandidate,
+			Side:     entity.OrderSideSell,
+		},
+		Price:     10000,
+		Timestamp: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("nil executor must not emit events, got %d", len(events))
 	}
 }
 
