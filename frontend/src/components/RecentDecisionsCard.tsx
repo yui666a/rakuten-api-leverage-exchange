@@ -75,6 +75,7 @@ function MiniDecisionTable({ decisions }: { decisions: DecisionLogItem[] }) {
           <tr>
             <th className="px-3 py-2 text-left">時刻</th>
             <th className="px-3 py-2 text-left">スタンス</th>
+            <th className="px-3 py-2 text-left">判断</th>
             <th className="px-3 py-2 text-left">シグナル</th>
             <th className="px-3 py-2 text-right">信頼度</th>
             <th className="px-3 py-2 text-left">結果</th>
@@ -92,12 +93,28 @@ function MiniDecisionTable({ decisions }: { decisions: DecisionLogItem[] }) {
   )
 }
 
+// Phase 1 PR5: short Intent labels for the dashboard mini-table. Empty
+// (pre-PR2 row) maps to "—" so legacy data still renders.
+const INTENT_SHORT_LABEL: Record<NonNullable<DecisionLogItem['decision']>['intent'], string> = {
+  NEW_ENTRY: '新規',
+  EXIT_CANDIDATE: '出口候補',
+  HOLD: '見送り',
+  COOLDOWN_BLOCKED: 'クールダウン',
+  '': '—',
+}
+
 function MiniRow({ item }: { item: DecisionLogItem }) {
   const bg = rowBackground(item)
   const rawReason =
-    item.signal.reason || item.risk.reason || item.bookGate.reason || item.order.error || '—'
+    item.decision?.reason ||
+    item.signal.reason ||
+    item.risk.reason ||
+    item.bookGate.reason ||
+    item.order.error ||
+    '—'
   const reason = translateReason(rawReason)
   const outcome = outcomeLabel(item)
+  const intent = item.decision?.intent ?? ''
   return (
     <tr className={`border-t border-white/8 ${bg}`}>
       <td className="px-3 py-2 whitespace-nowrap">
@@ -107,6 +124,7 @@ function MiniRow({ item }: { item: DecisionLogItem }) {
         })}
       </td>
       <td className="px-3 py-2">{item.stance || '—'}</td>
+      <td className="px-3 py-2 whitespace-nowrap">{INTENT_SHORT_LABEL[intent]}</td>
       <td className="px-3 py-2 font-medium">{item.signal.action}</td>
       <td className="px-3 py-2 text-right">
         {item.signal.action === 'HOLD'
@@ -161,6 +179,10 @@ function outcomeLabel(item: DecisionLogItem): string {
   if (item.order.outcome === 'FAILED') return '失敗'
   if (item.risk.outcome === 'REJECTED') return '却下(リスク)'
   if (item.bookGate.outcome === 'VETOED') return '却下(板)'
+  // Phase 1 PR5: cooldown / exit candidates short-circuit before the
+  // legacy HOLD / NOOP labels.
+  if (item.decision?.intent === 'COOLDOWN_BLOCKED') return 'クールダウン'
+  if (item.decision?.intent === 'EXIT_CANDIDATE') return '出口候補(待機)'
   if (item.signal.action === 'HOLD') return 'HOLD'
   if (item.triggerKind !== 'BAR_CLOSE') return item.triggerKind
   return '発注なし'

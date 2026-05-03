@@ -678,6 +678,14 @@ export async function createManualOrder(req: ManualOrderRequest): Promise<Manual
   return sendApi<ManualOrderResponse, ManualOrderRequest>('/orders', 'POST', req)
 }
 
+export type SignalDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL' | ''
+export type DecisionIntent =
+  | 'NEW_ENTRY'
+  | 'EXIT_CANDIDATE'
+  | 'HOLD'
+  | 'COOLDOWN_BLOCKED'
+  | ''
+
 export type DecisionLogItem = {
   id: number
   barCloseAt: number
@@ -689,6 +697,12 @@ export type DecisionLogItem = {
   stance: string
   lastPrice: number
   signal: { action: 'BUY' | 'SELL' | 'HOLD'; confidence: number; reason: string }
+  // Phase 1 PR5 (Signal/Decision/ExecutionPolicy 三層分離) で追加された新カラム。
+  // PR2 以降の行は値が入り、PR1 以前 / 旧データには空文字 / 0 が入る。
+  // optional 化しているのは、後方互換のため (古い API 応答が来てもクラッシュしない)。
+  marketSignal?: { direction: SignalDirection; strength: number }
+  decision?: { intent: DecisionIntent; side: 'BUY' | 'SELL' | ''; reason: string }
+  exitPolicyOutcome?: string
   risk: { outcome: 'APPROVED' | 'REJECTED' | 'SKIPPED'; reason: string }
   bookGate: { outcome: 'ALLOWED' | 'VETOED' | 'SKIPPED'; reason: string }
   order: { outcome: 'FILLED' | 'FAILED' | 'NOOP'; orderId: number; amount: number; price: number; error: string }

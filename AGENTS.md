@@ -64,7 +64,8 @@
 ## Architecture
 
 - Clean Architecture: domain → usecase → infrastructure → interfaces の依存方向を厳守。
-- Trading Pipeline: イベント駆動 (`backend/cmd/event_pipeline.go` の `EventDrivenPipeline`)。プライマリ足 (PT15M) が確定するごとに 指標計算 → Stance 判定 → シグナル → リスクチェック → 注文 を実行する（旧 `pipeline.go` の 60 秒 polling は legacy）。SL/TP/Trailing は tick 単位で常時監視、ポジション同期 30 秒、残高/state sync は `STATE_SYNC_INTERVAL_SEC` (既定 15 秒)。`PIPELINE_INTERVAL_SEC` は legacy 用の遺物で EventDrivenPipeline では未使用。
+- Trading Pipeline: イベント駆動 (`backend/cmd/event_pipeline.go` の `EventDrivenPipeline`)。プライマリ足 (PT15M) が確定するごとに 指標計算 → Strategy → **Decision** → リスクチェック → 注文 を実行する（旧 `pipeline.go` の 60 秒 polling は legacy）。SL/TP/Trailing は tick 単位で常時監視、ポジション同期 30 秒、残高/state sync は `STATE_SYNC_INTERVAL_SEC` (既定 15 秒)。`PIPELINE_INTERVAL_SEC` は legacy 用の遺物で EventDrivenPipeline では未使用。
+- Signal / Decision / ExecutionPolicy 三層分離 (Phase 1 完了 2026-05-02): Strategy が市場解釈 (Direction = `BULLISH`/`BEARISH`/`NEUTRAL` + Strength) のみを返し、Decision レイヤがポジション保有状況と entry cooldown を加味して `NEW_ENTRY` / `EXIT_CANDIDATE` / `HOLD` / `COOLDOWN_BLOCKED` を出す。ExecutionPolicy (Risk + BookGate) で実発注に絞り込む。EXIT_CANDIDATE は現状 Risk で skip され実 exit は TP/SL に任せる。詳細: `docs/design/2026-04-29-signal-decision-policy-separation-design.md`
 - Stance: `TREND_FOLLOW` / `CONTRARIAN` / `BREAKOUT` / `HOLD`。ルールベース自動判定 or オーバーライド（オーバーライド可能なのは `TREND_FOLLOW` / `CONTRARIAN` / `HOLD` の3種）。
 - Indicators: SMA / EMA / RSI / MACD / Bollinger / ATR / Volume / ADX(+DI/-DI) / Stochastics (%K/%D/StochRSI) / Ichimoku (Tenkan/Kijun/SenkouA-B/Chikou)。
 - PDCA/Backtest: 単発 (`/backtest/run`) / 複数期間 (`/backtest/run-multi`) / Walk-Forward (`/backtest/walk-forward`) を API + CLI で提供、結果は SQLite に永続化。

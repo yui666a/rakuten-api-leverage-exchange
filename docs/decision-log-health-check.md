@@ -138,6 +138,52 @@ orphan_ticks
 | `empty_indicators > 0` | recorder の IndicatorEvent 受信に欠落 | 該当行を SELECT して `created_at` / `bar_close_at` を確認、近傍ログを照合 |
 | `orphan_ticks > 0` | tick 行の sequence 計算がおかしい | バーまたぎ前後の挙動を疑う。`SELECT * FROM decision_log WHERE bar_close_at = <該当>` で前後比較 |
 
+## Phase 1 三層分離カラムの確認 (2026-05-02 〜)
+
+PR1 (#232) 〜 PR4 (#235) で `decision_log` / `backtest_decision_log` に 6 列追加:
+`signal_direction`, `signal_strength`, `decision_intent`, `decision_side`, `decision_reason`, `exit_policy_outcome`.
+
+PR2 以降の行はすべての列が埋まっているはず。空文字 (`= ''`) が混じる場合は recorder が新ルートを購読し損なっている疑いあり。
+
+```sql
+-- 直近 24h の Decision レイヤ出力サマリ。NEW_ENTRY/HOLD/EXIT_CANDIDATE/COOLDOWN_BLOCKED の比率を把握する。
+SELECT
+  signal_direction,
+  decision_intent,
+  decision_side,
+  COUNT(*) AS rows
+FROM decision_log
+WHERE bar_close_at > strftime('%s','now','-24 hours') * 1000
+GROUP BY signal_direction, decision_intent, decision_side
+ORDER BY rows DESC;
+
+-- PR2 以降の行で signal_direction が空のものは異常 (recorder が新ルートを取り損ねている可能性)
+SELECT COUNT(*) AS empty_direction_rows
+FROM decision_log
+WHERE bar_close_at > strftime('%s','now','-24 hours') * 1000
+  AND signal_direction = '';
+
+-- EXIT_CANDIDATE が出ているか (両建て総額判定バグ修正の動作確認)
+SELECT bar_close_at, signal_action, signal_direction, decision_intent, decision_side, decision_reason
+FROM decision_log
+WHERE decision_intent = 'EXIT_CANDIDATE'
+ORDER BY bar_close_at DESC
+LIMIT 20;
+
+-- COOLDOWN_BLOCKED が出ているか (close 約定後 EntryCooldownSec 秒の抑制動作確認)
+SELECT bar_close_at, decision_intent, decision_reason
+FROM decision_log
+WHERE decision_intent = 'COOLDOWN_BLOCKED'
+ORDER BY bar_close_at DESC
+LIMIT 20;
+```
+
+期待される観察:
+
+- `signal_direction` 別: NEUTRAL が圧倒的、BULLISH / BEARISH が時々
+- `decision_intent` 別: HOLD が大半、NEW_ENTRY が時々、EXIT_CANDIDATE は保有中の signal 反転時のみ、COOLDOWN_BLOCKED は close 直後 60 秒以内
+- `signal_action` (旧) と `signal_direction` (新) の整合: BUY ↔ BULLISH、SELL ↔ BEARISH、HOLD ↔ NEUTRAL
+
 ## バックテスト側
 
 `backtest_decision_log` も同じ要領で確認できる。違いは `backtest_run_id` で必ず scope すること:
