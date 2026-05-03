@@ -79,9 +79,11 @@ describe('RecentDecisionsCard', () => {
       expect(screen.getByText('時刻')).toBeInTheDocument()
     })
 
-    // 仮想化されているなら、200 件すべての <tr> は描画されない
-    const rows = document.querySelectorAll('tbody tr')
+    // 仮想化されているなら、200 件すべての行は描画されない。
+    // grid 構造に置き換わったため translateY を持つ要素を行とみなす。
+    const rows = document.querySelectorAll('[style*="translateY"]')
     expect(rows.length).toBeLessThan(200)
+    expect(rows.length).toBeGreaterThan(0)
   })
 
   it('limit=200 で /decisions を叩く', async () => {

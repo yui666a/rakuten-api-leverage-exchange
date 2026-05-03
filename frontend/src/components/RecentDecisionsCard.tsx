@@ -9,6 +9,8 @@ import { StanceLegendPopover } from './StanceLegendPopover'
 const RECENT_LIMIT = 200
 const ROW_HEIGHT = 36 // px
 const VISIBLE_ROWS = 12
+// 各列の grid template (8 列、合計 100%)
+const GRID_TEMPLATE_COLUMNS = '8% 12% 9% 7% 8% 11% 14% 31%'
 
 type Props = {
   symbolId: number
@@ -83,46 +85,35 @@ function VirtualizedDecisionTable({ decisions }: { decisions: DecisionLogItem[] 
   return (
     <div
       ref={parentRef}
-      className="overflow-auto rounded-2xl border border-white/8"
+      className="overflow-auto rounded-2xl border border-white/8 text-xs"
       style={{ height: VISIBLE_ROWS * ROW_HEIGHT }}
     >
-      <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
-        <colgroup>
-          <col style={{ width: '8%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '9%' }} />
-          <col style={{ width: '7%' }} />
-          <col style={{ width: '8%' }} />
-          <col style={{ width: '11%' }} />
-          <col style={{ width: '14%' }} />
-          <col style={{ width: '31%' }} />
-        </colgroup>
-        <thead className="sticky top-0 z-10 bg-bg-card text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary">
-          <tr>
-            <th className="px-3 py-2 text-left">時刻</th>
-            <th className="px-3 py-2 text-left">スタンス</th>
-            <th className="px-3 py-2 text-left">判断</th>
-            <th className="px-3 py-2 text-left">シグナル</th>
-            <th className="px-3 py-2 text-right">信頼度</th>
-            <th className="px-3 py-2 text-left">結果</th>
-            <th className="px-3 py-2 text-right">数量/価格</th>
-            <th className="px-3 py-2 text-left">理由</th>
-          </tr>
-        </thead>
-        <tbody style={{ height: virtualizer.getTotalSize(), position: 'relative', display: 'block' }}>
-          {virtualizer.getVirtualItems().map((vrow) => {
-            const item = decisions[vrow.index]
-            return (
-              <VirtualRow
-                key={item.id}
-                item={item}
-                top={vrow.start}
-                height={ROW_HEIGHT}
-              />
-            )
-          })}
-        </tbody>
-      </table>
+      <div
+        className="sticky top-0 z-10 grid bg-bg-card text-[0.65rem] uppercase tracking-[0.18em] text-text-secondary"
+        style={{ gridTemplateColumns: GRID_TEMPLATE_COLUMNS }}
+      >
+        <div className="px-3 py-2 text-left">時刻</div>
+        <div className="px-3 py-2 text-left">スタンス</div>
+        <div className="px-3 py-2 text-left">判断</div>
+        <div className="px-3 py-2 text-left">シグナル</div>
+        <div className="px-3 py-2 text-right">信頼度</div>
+        <div className="px-3 py-2 text-left">結果</div>
+        <div className="px-3 py-2 text-right">数量/価格</div>
+        <div className="px-3 py-2 text-left">理由</div>
+      </div>
+      <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+        {virtualizer.getVirtualItems().map((vrow) => {
+          const item = decisions[vrow.index]
+          return (
+            <VirtualRow
+              key={item.id}
+              item={item}
+              top={vrow.start}
+              height={ROW_HEIGHT}
+            />
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -158,8 +149,8 @@ function VirtualRow({
   const outcome = outcomeLabel(item)
   const intent = item.decision?.intent ?? ''
   return (
-    <tr
-      className={`border-t border-white/8 ${bg}`}
+    <div
+      className={`grid border-t border-white/8 ${bg}`}
       style={{
         position: 'absolute',
         top: 0,
@@ -167,47 +158,38 @@ function VirtualRow({
         width: '100%',
         height,
         transform: `translateY(${top}px)`,
-        display: 'table',
-        tableLayout: 'fixed',
+        gridTemplateColumns: GRID_TEMPLATE_COLUMNS,
       }}
     >
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '8%' }}>
+      <div className="px-3 py-2 whitespace-nowrap">
         {new Date(item.barCloseAt).toLocaleTimeString('ja-JP', {
           hour: '2-digit',
           minute: '2-digit',
         })}
-      </td>
-      <td className="px-3 py-2" style={{ width: '12%' }}>{item.stance || '—'}</td>
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '9%' }}>
+      </div>
+      <div className="px-3 py-2 truncate">{item.stance || '—'}</div>
+      <div className="px-3 py-2 whitespace-nowrap">
         {INTENT_SHORT_LABEL[intent]}
-      </td>
-      <td className="px-3 py-2 font-medium" style={{ width: '7%' }}>
-        {item.signal.action}
-      </td>
-      <td className="px-3 py-2 text-right" style={{ width: '8%' }}>
+      </div>
+      <div className="px-3 py-2 font-medium">{item.signal.action}</div>
+      <div className="px-3 py-2 text-right">
         {item.signal.action === 'HOLD'
           ? '—'
           : `${(item.signal.confidence * 100).toFixed(1)}%`}
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap" style={{ width: '11%' }}>
-        {outcome}
-      </td>
-      <td
-        className="px-3 py-2 text-right whitespace-nowrap"
-        style={{ width: '14%' }}
-      >
+      </div>
+      <div className="px-3 py-2 whitespace-nowrap truncate">{outcome}</div>
+      <div className="px-3 py-2 text-right whitespace-nowrap truncate">
         {item.order.outcome === 'NOOP'
           ? '—'
           : `${item.order.amount} @ ${item.order.price.toLocaleString('ja-JP')}`}
-      </td>
-      <td
+      </div>
+      <div
         className="truncate px-3 py-2 text-text-secondary"
-        style={{ width: '31%' }}
         title={rawReason}
       >
         {reason}
-      </td>
-    </tr>
+      </div>
+    </div>
   )
 }
 
