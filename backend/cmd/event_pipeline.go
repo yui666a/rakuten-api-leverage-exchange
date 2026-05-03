@@ -794,7 +794,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeOrder, 50, riskHandler)
 
 	// ExitPlan shadow (priority 60): OrderEvent をシャドウで listen して
-	// ExitPlan の作成・close だけ行う。発注パスには干渉しない。Phase 2 で
+	// ExitPlan の作成・close だけ行う。発注パスには干渉しない。Phase 2b で
 	// 出口判定本体を Exit レイヤに移管したらこの shadow は退役する。
 	if p.exitPlanRepo != nil {
 		shadow := usecaseexitplan.NewShadowHandler(usecaseexitplan.ShadowHandlerConfig{
@@ -802,7 +802,24 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 			Policy: snap.riskPolicy,
 		})
 		bus.Register(entity.EventTypeOrder, 60, shadow)
-		slog.Info("event-pipeline: ExitPlan shadow handler registered (Phase 1)")
+
+		// ATRSource (priority 26): IndicatorEvent から ATR を吸い上げて
+		// ExitPlan の動的計算に使う in-memory 値を保持する。indicatorEventTap
+		// (25) の直後、recorder (99) より前。
+		atrSrc := usecaseexitplan.NewATRSource()
+		bus.Register(entity.EventTypeIndicator, 26, atrSrc)
+
+		// TrailingPersistenceHandler (priority 16): TickEvent ごとに ExitPlan
+		// の HWM を更新する。既存 TickRiskHandler (priority 15) の直後に
+		// 置くことで発火後に残った plan の HWM を更新する順序になる。
+		// Phase 2a では既存発火経路には影響を与えず、永続化された HWM を
+		// 観察するだけ (Phase 2b で TickRiskHandler を置き換える)。
+		trailing := usecaseexitplan.NewTrailingPersistenceHandler(usecaseexitplan.TrailingPersistenceConfig{
+			Repo: p.exitPlanRepo,
+		})
+		bus.Register(entity.EventTypeTick, 16, trailing)
+
+		slog.Info("event-pipeline: ExitPlan shadow + trailing persistence registered (Phase 1+2a)")
 	}
 
 	// ExecutionHandler: opens orders from approved signals (priority 40).
