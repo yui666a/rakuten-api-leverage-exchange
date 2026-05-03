@@ -60,6 +60,7 @@ func main() {
 	tradingConfigRepo := database.NewTradingConfigRepo(db)
 	decisionLogRepo := database.NewDecisionLogRepository(db)
 	backtestDecisionLogRepo := database.NewBacktestDecisionLogRepository(db)
+	exitPlanRepo := database.NewExitPlanRepository(db)
 
 	// --- Usecase ---
 	marketDataSvc := usecase.NewMarketDataServiceWithConfig(marketDataRepo, loadPersistenceConfig())
@@ -202,6 +203,7 @@ func main() {
 			IndicatorPeriods:   liveProfileIndicators(liveProfile),
 			BBSqueezeLookback:  liveProfileBBSqueezeLookback(liveProfile),
 			DecisionLogRepo:    decisionLogRepo,
+			ExitPlanRepo:       exitPlanRepo,
 			CandlestickFetcher: restClient,
 			StanceResolver:     stanceResolver,
 			PrimaryInterval:    livePrimaryIntervalFromEnv(),

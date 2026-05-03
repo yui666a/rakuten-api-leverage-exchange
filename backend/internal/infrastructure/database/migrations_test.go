@@ -449,3 +449,92 @@ func TestRunMigrations_DecisionLogV2Columns(t *testing.T) {
 		}
 	}
 }
+
+
+func TestRunMigrations_createsExitPlansTable(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDB(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("NewDB: %v", err)
+	}
+	defer db.Close()
+
+	if err := RunMigrations(db); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	rows, err := db.Query("PRAGMA table_info(exit_plans)")
+	if err != nil {
+		t.Fatalf("pragma table_info(exit_plans): %v", err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    interface{}
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		cols[name] = true
+	}
+	want := []string{
+		"id", "position_id", "symbol_id", "side", "entry_price",
+		"sl_percent", "sl_atr_multiplier",
+		"tp_percent",
+		"trailing_mode", "trailing_atr_multiplier",
+		"trailing_activated", "trailing_hwm",
+		"created_at", "updated_at", "closed_at",
+	}
+	for _, c := range want {
+		if !cols[c] {
+			t.Errorf("exit_plans missing column %q", c)
+		}
+	}
+
+	idxRows, err := db.Query("PRAGMA index_list(exit_plans)")
+	if err != nil {
+		t.Fatalf("pragma index_list: %v", err)
+	}
+	defer idxRows.Close()
+	hasUniqueOnPositionID := false
+	for idxRows.Next() {
+		var (
+			seq     int
+			name    string
+			unique  int
+			origin  string
+			partial int
+		)
+		if err := idxRows.Scan(&seq, &name, &unique, &origin, &partial); err != nil {
+			t.Fatalf("scan idx_list: %v", err)
+		}
+		if unique != 1 {
+			continue
+		}
+		colRows, err := db.Query("PRAGMA index_info(" + name + ")")
+		if err != nil {
+			t.Fatalf("pragma index_info(%s): %v", name, err)
+		}
+		var seqno, cid int
+		var cname string
+		for colRows.Next() {
+			if err := colRows.Scan(&seqno, &cid, &cname); err != nil {
+				colRows.Close()
+				t.Fatalf("scan idx_info: %v", err)
+			}
+			if cname == "position_id" {
+				hasUniqueOnPositionID = true
+			}
+		}
+		colRows.Close()
+	}
+	if !hasUniqueOnPositionID {
+		t.Errorf("exit_plans should have UNIQUE constraint on position_id")
+	}
+}

@@ -509,6 +509,45 @@ func RunMigrations(db *sql.DB) error {
 		return err
 	}
 
+	if err := createExitPlansTable(db); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// createExitPlansTable は ExitPlan を永続化する exit_plans テーブルを作る。
+// position_id は UNIQUE で建玉と 1:1 を保証する。trailing_hwm と closed_at は
+// NULL 許容（HWM 未活性 / open）。
+func createExitPlansTable(db *sql.DB) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS exit_plans (
+			id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+			position_id             INTEGER NOT NULL UNIQUE,
+			symbol_id               INTEGER NOT NULL,
+			side                    TEXT NOT NULL,
+			entry_price             REAL NOT NULL,
+			sl_percent              REAL NOT NULL,
+			sl_atr_multiplier       REAL NOT NULL DEFAULT 0,
+			tp_percent              REAL NOT NULL,
+			trailing_mode           INTEGER NOT NULL DEFAULT 0,
+			trailing_atr_multiplier REAL NOT NULL DEFAULT 0,
+			trailing_activated      INTEGER NOT NULL DEFAULT 0,
+			trailing_hwm            REAL,
+			created_at              INTEGER NOT NULL,
+			updated_at              INTEGER NOT NULL,
+			closed_at               INTEGER
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_exit_plans_symbol_open
+			ON exit_plans(symbol_id, closed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_exit_plans_position
+			ON exit_plans(position_id)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("create exit_plans: %w", err)
+		}
+	}
 	return nil
 }
 
