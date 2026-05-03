@@ -30,6 +30,13 @@ const (
 )
 
 // Signal はStrategy Engineが生成する売買シグナル。
+//
+// Deprecated (Phase 1, 2026-05-02): Signal は旧ルートの 1st-class entity
+// だったが、Phase 1 で MarketSignal (Direction + Strength) と ActionDecision
+// (Intent + Side) の二層に分割された。Signal は現在 RiskHandler 内で
+// synthSignal として組み立てられ ApprovedSignalEvent / RejectedSignalEvent
+// の payload として残っているだけ。Phase 6+ で完全に置換予定。
+// 詳細: docs/design/2026-04-29-signal-decision-policy-separation-design.md
 type Signal struct {
 	SymbolID   int64         `json:"symbolId"`
 	Action     SignalAction  `json:"action"`
