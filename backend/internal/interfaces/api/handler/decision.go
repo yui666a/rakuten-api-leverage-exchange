@@ -126,8 +126,25 @@ func decisionRecordToJSON(r entity.DecisionRecord) gin.H {
 			"confidence": r.SignalConfidence,
 			"reason":     r.SignalReason,
 		},
-		"risk":     gin.H{"outcome": r.RiskOutcome, "reason": r.RiskReason},
-		"bookGate": gin.H{"outcome": r.BookGateOutcome, "reason": r.BookGateReason},
+		// Phase 1 PR5 (Signal/Decision/ExecutionPolicy): expose the new shadow
+		// columns alongside the legacy `signal` block. The frontend renders
+		// both — `signal` carries the legacy BUY/SELL/HOLD label, while
+		// `marketSignal.direction` and `decision.intent` reveal the Phase 1
+		// classification (e.g. EXIT_CANDIDATE on a bearish-against-long bar).
+		// Empty strings / 0 indicate pre-PR2 rows; the frontend handles them
+		// as "—" so old runs still render without crashing.
+		"marketSignal": gin.H{
+			"direction": r.SignalDirection,
+			"strength":  r.SignalStrength,
+		},
+		"decision": gin.H{
+			"intent": r.DecisionIntent,
+			"side":   r.DecisionSide,
+			"reason": r.DecisionReason,
+		},
+		"exitPolicyOutcome":  r.ExitPolicyOutcome,
+		"risk":               gin.H{"outcome": r.RiskOutcome, "reason": r.RiskReason},
+		"bookGate":           gin.H{"outcome": r.BookGateOutcome, "reason": r.BookGateReason},
 		"order": gin.H{
 			"outcome": r.OrderOutcome,
 			"orderId": r.OrderID,

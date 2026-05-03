@@ -127,3 +127,68 @@ func TestDecisionHandler_List_PreservesIndicatorsJSON(t *testing.T) {
 		t.Errorf("indicators_json must be passed through verbatim; body = %s", w.Body.String())
 	}
 }
+
+// TestDecisionHandler_List_ExposesPhaseOneFields ensures the API surface
+// carries the Phase 1 PR1 columns (signal_direction, decision_intent, etc.)
+// alongside the legacy `signal` block. Frontend depends on this shape from
+// PR5 onward to render the new "方向" / "判断" columns.
+func TestDecisionHandler_List_ExposesPhaseOneFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h, cleanup := newDecisionHandlerForTest(t)
+	defer cleanup()
+
+	rec := entity.DecisionRecord{
+		BarCloseAt:        1_000,
+		TriggerKind:       entity.DecisionTriggerBarClose,
+		SymbolID:          7,
+		CurrencyPair:      "LTC_JPY",
+		PrimaryInterval:   "PT15M",
+		Stance:            "TREND_FOLLOW",
+		LastPrice:         30210,
+		SignalAction:      "BUY",
+		SignalConfidence:  0.7,
+		SignalReason:      "trend follow legacy",
+		SignalDirection:   "BULLISH",
+		SignalStrength:    0.7,
+		DecisionIntent:    "NEW_ENTRY",
+		DecisionSide:      "BUY",
+		DecisionReason:    "no position; bullish signal -> new long",
+		ExitPolicyOutcome: "",
+		RiskOutcome:       entity.DecisionRiskApproved,
+		BookGateOutcome:   entity.DecisionBookAllowed,
+		OrderOutcome:      entity.DecisionOrderFilled,
+		IndicatorsJSON:    `{}`,
+		CreatedAt:         time.Now().UnixMilli(),
+	}
+	if err := h.repoForTest().Insert(context.Background(), rec); err != nil {
+		t.Fatalf("seed Insert: %v", err)
+	}
+
+	r := gin.New()
+	r.GET("/decisions", h.List)
+	req := httptest.NewRequest(http.MethodGet, "/decisions?symbolId=7", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d", w.Code)
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"marketSignal"`,
+		`"direction":"BULLISH"`,
+		`"strength":0.7`,
+		`"decision"`,
+		`"intent":"NEW_ENTRY"`,
+		`"side":"BUY"`,
+		// Gin's default JSON encoder HTML-escapes ">" to ">". Match the
+		// safe substring that survives the escape so the test pins the
+		// presence of the reason without coupling to the encoder choice.
+		`"reason":"no position; bullish signal `,
+		`"exitPolicyOutcome":""`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("response missing %q\nbody: %s", want, body)
+		}
+	}
+}
