@@ -678,6 +678,30 @@ export async function createManualOrder(req: ManualOrderRequest): Promise<Manual
   return sendApi<ManualOrderResponse, ManualOrderRequest>('/orders', 'POST', req)
 }
 
+export type ClosePositionRequest = {
+  symbolId: number
+  clientOrderId: string
+}
+
+export type ClosePositionResponse = {
+  clientOrderId: string
+  executed: boolean
+  orderId?: number
+  reason?: string
+  duplicate?: boolean
+}
+
+export async function closePosition(
+  positionId: number,
+  req: ClosePositionRequest,
+): Promise<ClosePositionResponse> {
+  return sendApi<ClosePositionResponse, ClosePositionRequest>(
+    `/positions/${positionId}/close`,
+    'POST',
+    req,
+  )
+}
+
 export type SignalDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL' | ''
 export type DecisionIntent =
   | 'NEW_ENTRY'

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Position } from '../lib/api'
 import { useManualOrder } from '../hooks/useManualOrder'
+import { useClosePosition } from '../hooks/useClosePosition'
 
 type Props = {
   symbolId: number
@@ -25,7 +26,9 @@ export function PositionsAndTradeCard({
   const [amount, setAmount] = useState<number>(min)
   const [pending, setPending] = useState<{ side: 'BUY' | 'SELL'; amount: number } | null>(null)
   const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; message: string } | null>(null)
+  const [closing, setClosing] = useState<Position | null>(null)
   const order = useManualOrder()
+  const closeOrder = useClosePosition()
 
   const submit = (side: 'BUY' | 'SELL') => {
     setFeedback(null)
@@ -44,6 +47,41 @@ export function PositionsAndTradeCard({
             setFeedback({ kind: 'ok', message: `${side} ${amt} 約定 (orderId=${res.orderId})` })
           } else {
             setFeedback({ kind: 'err', message: res.reason || '約定しませんでした' })
+          }
+        },
+        onError: (err) => {
+          setFeedback({ kind: 'err', message: err.message })
+        },
+      },
+    )
+  }
+
+  const confirmClose = () => {
+    if (!closing) return
+    const target = closing
+    setClosing(null)
+    setFeedback(null)
+    closeOrder.mutate(
+      { positionId: target.id, symbolId: target.symbolId },
+      {
+        onSuccess: (res) => {
+          if (res.duplicate) {
+            setFeedback({
+              kind: 'ok',
+              message: `決済リクエストは既に処理済 (orderId=${res.orderId ?? '—'})`,
+            })
+            return
+          }
+          if (res.executed) {
+            setFeedback({
+              kind: 'ok',
+              message: `ポジション #${target.id} 決済 約定 (orderId=${res.orderId})`,
+            })
+          } else {
+            setFeedback({
+              kind: 'err',
+              message: res.reason || '決済が約定しませんでした',
+            })
           }
         },
         onError: (err) => {
@@ -111,8 +149,19 @@ export function PositionsAndTradeCard({
                     {pos.floatingProfit.toLocaleString()}
                   </span>
                 </div>
-                <div className="mt-1 text-text-secondary">
-                  @ ¥{pos.price.toLocaleString()}
+                <div className="mt-2 flex items-center justify-between text-text-secondary">
+                  <span>@ ¥{pos.price.toLocaleString()}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFeedback(null)
+                      setClosing(pos)
+                    }}
+                    disabled={closeOrder.isPending}
+                    className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-semibold text-slate-200 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    決済
+                  </button>
                 </div>
               </div>
             ))}
@@ -199,6 +248,17 @@ export function PositionsAndTradeCard({
           pending={order.isPending}
         />
       )}
+
+      {closing && (
+        <CloseConfirmDialog
+          position={closing}
+          currencyPair={currencyPair}
+          baseAsset={baseAsset}
+          onCancel={() => setClosing(null)}
+          onConfirm={confirmClose}
+          pending={closeOrder.isPending}
+        />
+      )}
     </section>
   )
 }
@@ -265,6 +325,66 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <dt className="text-text-secondary">{label}</dt>
       <dd className="font-mono text-white">{value}</dd>
+    </div>
+  )
+}
+
+function CloseConfirmDialog({
+  position,
+  currencyPair,
+  baseAsset,
+  onCancel,
+  onConfirm,
+  pending,
+}: {
+  position: Position
+  currencyPair?: string
+  baseAsset: string
+  onCancel: () => void
+  onConfirm: () => void
+  pending: boolean
+}) {
+  const directionLabel = position.orderSide === 'BUY' ? 'LONG (買建)' : 'SHORT (売建)'
+  const amountLabel = baseAsset
+    ? `${position.remainingAmount} ${baseAsset}`
+    : `${position.remainingAmount}`
+  const floatingLabel = `${position.floatingProfit >= 0 ? '+' : ''}¥${position.floatingProfit.toLocaleString()}`
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-bg-card p-6 shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
+        <h3 className="text-lg font-semibold text-white">ポジションを決済しますか？</h3>
+        <dl className="mt-4 space-y-2 text-sm">
+          <Row label="銘柄" value={currencyPair?.replace('_', '/') ?? '—'} />
+          <Row label="ポジションID" value={`#${position.id}`} />
+          <Row label="方向" value={directionLabel} />
+          <Row label="数量" value={amountLabel} />
+          <Row label="建値" value={`¥${position.price.toLocaleString()}`} />
+          <Row label="評価損益" value={floatingLabel} />
+          <Row label="種別" value="成行決済 (MARKET)" />
+        </dl>
+        <p className="mt-4 text-xs text-text-secondary">
+          残数量を全量、成行で反対売買します。実際の口座に注文が送信されます。
+        </p>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded-2xl border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-white/10 disabled:opacity-50"
+          >
+            キャンセル
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded-2xl bg-accent-red px-4 py-2.5 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+          >
+            {pending ? '送信中...' : '決済する'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

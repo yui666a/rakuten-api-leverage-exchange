@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fetchApi, sendApi, buildRealtimeWebSocketUrl } from './api'
+import {
+  fetchApi,
+  sendApi,
+  buildRealtimeWebSocketUrl,
+  closePosition,
+} from './api'
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn())
@@ -117,6 +122,50 @@ describe('sendApi', () => {
     await expect(sendApi('/config', 'PUT', {})).rejects.toThrow(
       'API error: 400 Bad Request',
     )
+  })
+})
+
+describe('closePosition', () => {
+  it('POSTs to /positions/:id/close with the provided body and returns parsed JSON', async () => {
+    const mockResponse = {
+      clientOrderId: 'manual-close-42-xyz',
+      executed: true,
+      orderId: 99,
+    }
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockResponse),
+    } as Response)
+
+    const result = await closePosition(42, {
+      symbolId: 7,
+      clientOrderId: 'manual-close-42-xyz',
+    })
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/positions/42/close'),
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbolId: 7,
+          clientOrderId: 'manual-close-42-xyz',
+        }),
+      }),
+    )
+    expect(result).toEqual(mockResponse)
+  })
+
+  it('throws on non-ok response', async () => {
+    vi.mocked(fetch).mockResolvedValue({
+      ok: false,
+      status: 404,
+      statusText: 'Not Found',
+    } as Response)
+
+    await expect(
+      closePosition(999, { symbolId: 7, clientOrderId: 'x' }),
+    ).rejects.toThrow('API error: 404 Not Found')
   })
 })
 
