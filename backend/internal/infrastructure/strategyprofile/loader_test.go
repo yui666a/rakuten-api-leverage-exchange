@@ -290,7 +290,10 @@ func TestLoader_Load_ProductionLTC60kReadsPR4Fields(t *testing.T) {
 	if profile.Risk.MaxBookSidePct != 20 {
 		t.Errorf("Risk.MaxBookSidePct = %v, want 20", profile.Risk.MaxBookSidePct)
 	}
-	if profile.Risk.EntryCooldownSec != 60 {
-		t.Errorf("Risk.EntryCooldownSec = %v, want 60", profile.Risk.EntryCooldownSec)
+	// 2026-05-03 follow-up: bumped from 60 → 1800 (= 2 PT15M bars) after
+	// observing the original value never fired during the validation run.
+	// See docs/design/2026-05-03-phase1-validation-report.md §3.
+	if profile.Risk.EntryCooldownSec != 1800 {
+		t.Errorf("Risk.EntryCooldownSec = %v, want 1800", profile.Risk.EntryCooldownSec)
 	}
 }
