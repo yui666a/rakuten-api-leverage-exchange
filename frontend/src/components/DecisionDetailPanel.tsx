@@ -24,11 +24,16 @@ function PhaseOnePanel({ item }: { item: DecisionLogItem }) {
   const intent = item.decision?.intent ?? ''
   const side = item.decision?.side ?? ''
   const decisionReason = item.decision?.reason ?? ''
+  // PR3 三層分離以降、HOLD バーでは SignalEvent が emit されず
+  // signal_reason 列が空のまま残る。decision_reason には ActionDecision
+  // からの reasoning が入っているのでそれを優先し、空なら legacy
+  // signal_reason、最後に "—" にフォールバックする。
+  const reasonText = decisionReason || item.signal.reason || '—'
   const exitOutcome = item.exitPolicyOutcome ?? ''
 
   // Hide the panel entirely when none of the new fields are populated —
   // there is no point showing "—" for every row in pre-PR2 backtest data.
-  if (!direction && !intent && !side && !decisionReason && !exitOutcome) {
+  if (!direction && !intent && !side && !decisionReason && !item.signal.reason && !exitOutcome) {
     return null
   }
 
@@ -43,7 +48,7 @@ function PhaseOnePanel({ item }: { item: DecisionLogItem }) {
         <KV label="判断 (Intent)" value={intent || '—'} />
         <KV label="サイド" value={side || '—'} />
         <KV label="出口判定" value={exitOutcome || '—'} />
-        <KV label="判断理由" value={decisionReason || '—'} wide />
+        <KV label="判断理由" value={reasonText} wide />
       </dl>
     </div>
   )
