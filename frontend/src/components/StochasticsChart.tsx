@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
-import { createChart, LineSeries, type IChartApi, type ISeriesApi, type LineData, type Time } from 'lightweight-charts'
+import { createChart, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type LineData, type Time } from 'lightweight-charts'
 import type { Candle } from '../lib/api'
+import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
 
 type StochasticsChartProps = {
   candles: Candle[]
@@ -80,6 +81,18 @@ export function StochasticsChart({ candles }: StochasticsChartProps) {
       timeScale: {
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (time: Time, tickMarkType: TickMarkType) => {
+          const seconds = time as number
+          const showDate =
+            tickMarkType === TickMarkType.Year ||
+            tickMarkType === TickMarkType.Month ||
+            tickMarkType === TickMarkType.DayOfMonth
+          return formatChartTickJst(seconds, showDate)
+        },
+      },
+      localization: {
+        locale: 'ja-JP',
+        timeFormatter: (time: Time) => formatChartTimeJst(time as number),
       },
       rightPriceScale: {
         scaleMargins: { top: 0.05, bottom: 0.05 },
