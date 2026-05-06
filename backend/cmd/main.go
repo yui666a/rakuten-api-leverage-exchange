@@ -72,7 +72,15 @@ func main() {
 	backtestResultRepo := backtestinfra.NewResultRepository(db)
 	multiPeriodRepo := backtestinfra.NewMultiPeriodResultRepository(db, backtestResultRepo)
 	walkForwardRepo := backtestinfra.NewWalkForwardResultRepository(db)
-	stanceResolver := usecase.NewRuleBasedStanceResolver(stanceOverrideRepo)
+	// Load the live strategy profile up-front so the stance resolver can
+	// honour profile-driven thresholds (rsi_oversold/overbought, sma
+	// convergence, breakout volume ratio) instead of falling back to the
+	// hard-coded 25/75 defaults. Without this, the resolver used by the
+	// pipeline diverged from the one ConfigurableStrategy builds internally,
+	// so log/UI stance values were computed with different thresholds than
+	// the actual signal generator.
+	liveProfile := loadLiveProfile()
+	stanceResolver := newLiveStanceResolver(stanceOverrideRepo, liveProfile)
 	strategyEngine := usecase.NewStrategyEngine(stanceResolver)
 	// The StrategyRegistry lives in the strategy package and is exercised by
 	// its own unit tests. It is intentionally not wired here yet because no
@@ -119,13 +127,13 @@ func main() {
 		slog.Info("trading config restored from db", "symbolID", symbolID, "tradeAmount", tradeAmount)
 	}
 
-	// Load the live strategy profile so the IndicatorCalculator (used by API
-	// /indicators handlers + bootstrap) and the EventDrivenPipeline both see
-	// the same lookback periods the strategy was tuned for. Failure falls
-	// back to legacy defaults so a missing / malformed profile does not
-	// prevent the live pipeline from starting — but we log the error so
-	// operators see what happened.
-	liveProfile := loadLiveProfile()
+	// liveProfile was loaded earlier (above) so the stance resolver could be
+	// constructed with profile-driven thresholds. Reuse the same value here
+	// to wire the IndicatorCalculator (used by API /indicators handlers +
+	// bootstrap) and the EventDrivenPipeline lookback periods, plus the
+	// risk-manager overrides. Failure falls back to legacy defaults so a
+	// missing / malformed profile does not prevent the live pipeline from
+	// starting — but we log the error so operators see what happened.
 	if liveProfile != nil {
 		indicatorCalc.SetIndicatorPeriods(liveProfile.Indicators)
 		if liveProfile.StanceRules.BBSqueezeLookback > 0 {
@@ -510,6 +518,26 @@ func loadLiveProfile() *entity.StrategyProfile {
 	}
 	slog.Info("live strategy profile loaded", "name", profile.Name, "baseDir", baseDir)
 	return profile
+}
+
+// newLiveStanceResolver wires the rule-based stance resolver used by the
+// live pipeline. When a profile is loaded, its stance_rules thresholds are
+// threaded through so the pipeline-level resolver classifies stances with
+// the same RSI / SMA / breakout boundaries that ConfigurableStrategy uses
+// internally — without this, the live resolver fell back to the hard-coded
+// 25/75 defaults and log/UI stance values diverged from the actual signal
+// generator. When no profile is available (env-only startup, malformed
+// JSON), zero-valued options are passed and the resolver backfills legacy
+// defaults, preserving the prior behaviour bit-for-bit.
+func newLiveStanceResolver(repo repository.StanceOverrideRepository, p *entity.StrategyProfile) *usecase.RuleBasedStanceResolver {
+	opts := usecase.RuleBasedStanceResolverOptions{}
+	if p != nil {
+		opts.RSIOversold = p.StanceRules.RSIOversold
+		opts.RSIOverbought = p.StanceRules.RSIOverbought
+		opts.SMAConvergenceThreshold = p.StanceRules.SMAConvergenceThreshold
+		opts.BreakoutVolumeRatio = p.StanceRules.BreakoutVolumeRatio
+	}
+	return usecase.NewRuleBasedStanceResolverWithOptions(repo, opts)
 }
 
 // liveProfileIndicators returns the IndicatorConfig from a loaded profile,

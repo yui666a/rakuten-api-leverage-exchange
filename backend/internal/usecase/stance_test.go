@@ -529,3 +529,106 @@ func TestRuleBasedStanceResolver_RSI_Contrarian_OverridesBreakout(t *testing.T) 
 		t.Fatalf("expected CONTRARIAN to override BREAKOUT when RSI extreme, got %s", result.Stance)
 	}
 }
+
+// TestRuleBasedStanceResolver_ProfileThresholds_AppliedToApplyRules pins down
+// the bug fixed for Issue #250: when a caller (the live pipeline wiring in
+// main.go) supplies profile-driven thresholds via WithOptions, applyRules
+// must honour those values instead of the legacy 25/75 defaults. The
+// previous wiring constructed the resolver with bare options and the live
+// pipeline silently fell back to the defaults, so the log/UI stance value
+// disagreed with the one ConfigurableStrategy used internally.
+func TestRuleBasedStanceResolver_ProfileThresholds_AppliedToApplyRules(t *testing.T) {
+	t.Run("RSI 31.4 below profile oversold 32 → CONTRARIAN", func(t *testing.T) {
+		// production_ltc_60k profile: rsi_oversold=32. With the legacy 25
+		// default this RSI would not trigger CONTRARIAN.
+		opts := RuleBasedStanceResolverOptions{
+			RSIOversold:             32,
+			RSIOverbought:           68,
+			SMAConvergenceThreshold: 0.001,
+			BreakoutVolumeRatio:     1.5,
+		}
+		resolver := NewRuleBasedStanceResolverWithOptions(nil, opts)
+		result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+			SMAShort: ptr(5100000),
+			SMALong:  ptr(5000000),
+			RSI:      ptr(31.4),
+		}, 0)
+		if result.Stance != entity.MarketStanceContrarian {
+			t.Fatalf("expected CONTRARIAN with profile oversold=32, got %s", result.Stance)
+		}
+		if result.Reasoning != "RSI oversold" {
+			t.Fatalf("expected reasoning 'RSI oversold', got %q", result.Reasoning)
+		}
+	})
+
+	t.Run("RSI 69 above profile overbought 68 → CONTRARIAN", func(t *testing.T) {
+		opts := RuleBasedStanceResolverOptions{
+			RSIOversold:             32,
+			RSIOverbought:           68,
+			SMAConvergenceThreshold: 0.001,
+			BreakoutVolumeRatio:     1.5,
+		}
+		resolver := NewRuleBasedStanceResolverWithOptions(nil, opts)
+		result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+			SMAShort: ptr(5100000),
+			SMALong:  ptr(5000000),
+			RSI:      ptr(69.0),
+		}, 0)
+		if result.Stance != entity.MarketStanceContrarian {
+			t.Fatalf("expected CONTRARIAN with profile overbought=68, got %s", result.Stance)
+		}
+	})
+
+	t.Run("RSI 31.4 stays TREND_FOLLOW under legacy 25 default", func(t *testing.T) {
+		// Regression guard: the env-only / no-profile startup path still
+		// resolves with the legacy 25/75 defaults so existing deployments
+		// without a profile see bit-identical behaviour.
+		resolver := NewRuleBasedStanceResolver(nil)
+		result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+			SMAShort: ptr(5100000),
+			SMALong:  ptr(5000000),
+			RSI:      ptr(31.4),
+		}, 0)
+		if result.Stance != entity.MarketStanceTrendFollow {
+			t.Fatalf("expected TREND_FOLLOW with legacy default oversold=25, got %s", result.Stance)
+		}
+	})
+
+	t.Run("custom SMAConvergenceThreshold widens HOLD band", func(t *testing.T) {
+		// divergence = |5_000_000 - 5_010_000| / 5_010_000 ≈ 0.001996
+		// Default 0.001 → divergence above threshold → TREND_FOLLOW.
+		// Profile 0.005 → divergence below threshold → HOLD.
+		opts := RuleBasedStanceResolverOptions{
+			SMAConvergenceThreshold: 0.005,
+		}
+		resolver := NewRuleBasedStanceResolverWithOptions(nil, opts)
+		result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+			SMAShort: ptr(5000000),
+			SMALong:  ptr(5010000),
+			RSI:      ptr(50.0),
+		}, 0)
+		if result.Stance != entity.MarketStanceHold {
+			t.Fatalf("expected HOLD with profile sma_convergence=0.005, got %s", result.Stance)
+		}
+	})
+
+	t.Run("custom BreakoutVolumeRatio gates BB squeeze breakout", func(t *testing.T) {
+		// VolumeRatio = 1.8: passes legacy 1.5, fails profile 2.0.
+		opts := RuleBasedStanceResolverOptions{
+			BreakoutVolumeRatio: 2.0,
+		}
+		resolver := NewRuleBasedStanceResolverWithOptions(nil, opts)
+		result := resolver.Resolve(context.Background(), entity.IndicatorSet{
+			SMAShort:      ptr(5000000),
+			SMALong:       ptr(4900000),
+			RSI:           ptr(50.0),
+			BBUpper:       ptr(5100000),
+			BBLower:       ptr(4900000),
+			VolumeRatio:   ptr(1.8),
+			RecentSqueeze: boolPtr(true),
+		}, 5200000)
+		if result.Stance != entity.MarketStanceHold {
+			t.Fatalf("expected HOLD when volume ratio < profile threshold, got %s (%s)", result.Stance, result.Reasoning)
+		}
+	})
+}
