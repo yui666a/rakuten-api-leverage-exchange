@@ -149,6 +149,18 @@ func (r *Recorder) onIndicator(ctx context.Context, ev entity.IndicatorEvent) {
 	r.hasPending = true
 }
 
+// onSignal populates the legacy signal_action / signal_confidence /
+// signal_reason columns from the pre-three-layer SignalEvent path.
+//
+// PR3 (Signal/Decision/ExecutionPolicy three-layer separation, 2026-04-29)
+// asymmetry to be aware of: StrategyHandler only emits a SignalEvent when
+// signal.Action != HOLD (see backtest/handler.go). HOLD bars therefore
+// never reach this handler and signal_reason stays empty for those rows.
+// The Decision-layer reasoning lands in DecisionReason via onActionDecision
+// instead — the UI prefers decision_reason and falls back to signal_reason
+// so HOLD bars still surface a human-readable reason. Do not remove this
+// handler: actionable (BUY/SELL) signals still flow through it and continue
+// to fill the legacy columns coherently.
 func (r *Recorder) onSignal(ctx context.Context, ev entity.SignalEvent) {
 	if !r.hasPending {
 		return
