@@ -3,6 +3,7 @@ import { createChart, CandlestickSeries, LineSeries, TickMarkType, type IChartAp
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
+import { ChartSyncGroup } from '../lib/chartSync'
 import { IndicatorSubPanels } from './IndicatorSubPanels'
 
 type CandlestickChartProps = {
@@ -385,6 +386,8 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const ichimokuSeriesRefs = useRef<Partial<Record<IchimokuLineKey, ISeriesApi<'Line'>>>>({})
   const kumoFillRef = useRef<KumoFillPrimitive | null>(null)
   const prevCandleCountRef = useRef(0)
+  // Sync group shared with the indicator sub-panels so all charts pan/zoom together.
+  const syncGroupRef = useRef<ChartSyncGroup>(new ChartSyncGroup())
 
   const [interval, setInterval] = useState<CandleInterval>('PT15M')
   const { data, isFetching, hasNextPage, fetchNextPage, isFetchingNextPage } = useCandles(symbolId, interval)
@@ -468,6 +471,9 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     chartRef.current = chart
     seriesRef.current = series
 
+    const syncGroup = syncGroupRef.current
+    syncGroup.register(chart)
+
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -477,6 +483,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      syncGroup.unregister(chart)
       lineSeriesRefs.current = {}
       bbSeriesRefs.current = {}
       bbFillRefs.current = {}
@@ -861,7 +868,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
         </div>
       </div>
       <div ref={containerRef} />
-      <IndicatorSubPanels candles={candles} />
+      <IndicatorSubPanels candles={candles} syncGroup={syncGroupRef.current} />
     </div>
   )
 }

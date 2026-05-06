@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 import { createChart, LineSeries, HistogramSeries, TickMarkType, type IChartApi, type ISeriesApi, type LineData, type HistogramData, type Time } from 'lightweight-charts'
 import type { Candle } from '../lib/api'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
+import type { ChartSyncGroup } from '../lib/chartSync'
 
 type MACDChartProps = {
   candles: Candle[]
+  syncGroup?: ChartSyncGroup
 }
 
 function calcEMA(values: number[], period: number): (number | null)[] {
@@ -73,12 +75,13 @@ function calcMACD(closes: number[]): {
   return { macdLine, signalLine, histogram }
 }
 
-export function MACDChart({ candles }: MACDChartProps) {
+export function MACDChart({ candles, syncGroup }: MACDChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const macdSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const signalSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const histSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const hasInitialFitRef = useRef(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -141,6 +144,8 @@ export function MACDChart({ candles }: MACDChartProps) {
     signalSeriesRef.current = signalSeries
     histSeriesRef.current = histSeries
 
+    syncGroup?.register(chart)
+
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -150,9 +155,11 @@ export function MACDChart({ candles }: MACDChartProps) {
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      syncGroup?.unregister(chart)
+      hasInitialFitRef.current = false
       chart.remove()
     }
-  }, [])
+  }, [syncGroup])
 
   useEffect(() => {
     if (!chartRef.current || !macdSeriesRef.current || !signalSeriesRef.current || !histSeriesRef.current || candles.length === 0) return
@@ -185,7 +192,14 @@ export function MACDChart({ candles }: MACDChartProps) {
     macdSeriesRef.current.setData(macdData)
     signalSeriesRef.current.setData(signalData)
     histSeriesRef.current.setData(histData)
-    chartRef.current.timeScale().fitContent()
+    // Fit only on the first data load. Subsequent updates either prepend older
+    // candles (visible range is preserved by the sync group) or append a new
+    // candle (lightweight-charts keeps the existing range). Calling fitContent
+    // every render would override scrolls done by the user or by sync.
+    if (!hasInitialFitRef.current) {
+      chartRef.current.timeScale().fitContent()
+      hasInitialFitRef.current = true
+    }
   }, [candles])
 
   return (

@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 import { createChart, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type LineData, type Time } from 'lightweight-charts'
 import type { Candle } from '../lib/api'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
+import type { ChartSyncGroup } from '../lib/chartSync'
 
 type StochasticsChartProps = {
   candles: Candle[]
+  syncGroup?: ChartSyncGroup
 }
 
 function calcStochastics(
@@ -56,13 +58,14 @@ function calcStochastics(
   return { percentK, percentD }
 }
 
-export function StochasticsChart({ candles }: StochasticsChartProps) {
+export function StochasticsChart({ candles, syncGroup }: StochasticsChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const kSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const dSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const overboughtRef = useRef<ISeriesApi<'Line'> | null>(null)
   const oversoldRef = useRef<ISeriesApi<'Line'> | null>(null)
+  const hasInitialFitRef = useRef(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -140,6 +143,8 @@ export function StochasticsChart({ candles }: StochasticsChartProps) {
     overboughtRef.current = overbought
     oversoldRef.current = oversold
 
+    syncGroup?.register(chart)
+
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -149,9 +154,11 @@ export function StochasticsChart({ candles }: StochasticsChartProps) {
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      syncGroup?.unregister(chart)
+      hasInitialFitRef.current = false
       chart.remove()
     }
-  }, [])
+  }, [syncGroup])
 
   useEffect(() => {
     if (!chartRef.current || !kSeriesRef.current || !dSeriesRef.current || !overboughtRef.current || !oversoldRef.current || candles.length === 0) return
@@ -190,7 +197,10 @@ export function StochasticsChart({ candles }: StochasticsChartProps) {
       ])
     }
 
-    chartRef.current.timeScale().fitContent()
+    if (!hasInitialFitRef.current) {
+      chartRef.current.timeScale().fitContent()
+      hasInitialFitRef.current = true
+    }
   }, [candles])
 
   return (
