@@ -2,9 +2,11 @@ import { useEffect, useRef } from 'react'
 import { createChart, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type LineData, type Time } from 'lightweight-charts'
 import type { Candle } from '../lib/api'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
+import type { ChartSyncGroup } from '../lib/chartSync'
 
 type ADXChartProps = {
   candles: Candle[]
+  syncGroup?: ChartSyncGroup
 }
 
 // calcADX is the FE-side companion to backend/internal/infrastructure/indicator/adx.go.
@@ -120,7 +122,7 @@ function calcADX(
   return { adx, plusDI, minusDI }
 }
 
-export function ADXChart({ candles }: ADXChartProps) {
+export function ADXChart({ candles, syncGroup }: ADXChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const adxSeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
@@ -128,6 +130,7 @@ export function ADXChart({ candles }: ADXChartProps) {
   const minusDISeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
   const threshold25Ref = useRef<ISeriesApi<'Line'> | null>(null)
   const threshold40Ref = useRef<ISeriesApi<'Line'> | null>(null)
+  const hasInitialFitRef = useRef(false)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -215,9 +218,11 @@ export function ADXChart({ candles }: ADXChartProps) {
     window.addEventListener('resize', handleResize)
     return () => {
       window.removeEventListener('resize', handleResize)
+      syncGroup?.unregister(chart)
+      hasInitialFitRef.current = false
       chart.remove()
     }
-  }, [])
+  }, [syncGroup])
 
   useEffect(() => {
     if (
@@ -264,8 +269,12 @@ export function ADXChart({ candles }: ADXChartProps) {
       ])
     }
 
-    chartRef.current.timeScale().fitContent()
-  }, [candles])
+    if (!hasInitialFitRef.current) {
+      chartRef.current.timeScale().fitContent()
+      hasInitialFitRef.current = true
+      syncGroup?.register(chartRef.current)
+    }
+  }, [candles, syncGroup])
 
   return (
     <div className="bg-bg-card rounded-lg p-4">

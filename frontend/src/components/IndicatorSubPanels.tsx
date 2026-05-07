@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Candle } from '../lib/api'
+import type { ChartSyncGroup } from '../lib/chartSync'
 import { ADXChart } from './ADXChart'
 import { MACDChart } from './MACDChart'
 import { RSIChart } from './RSIChart'
@@ -7,6 +8,7 @@ import { StochasticsChart } from './StochasticsChart'
 
 type Props = {
   candles: Candle[]
+  syncGroup?: ChartSyncGroup
 }
 
 type PanelKey = 'macd' | 'rsi' | 'stoch' | 'adx'
@@ -18,7 +20,7 @@ const PANELS: { key: PanelKey; label: string }[] = [
   { key: 'adx', label: 'ADX' },
 ]
 
-export function IndicatorSubPanels({ candles }: Props) {
+export function IndicatorSubPanels({ candles, syncGroup }: Props) {
   const [active, setActive] = useState<PanelKey>('macd')
   if (candles.length === 0) return null
   return (
@@ -39,10 +41,10 @@ export function IndicatorSubPanels({ candles }: Props) {
           </button>
         ))}
       </div>
-      {active === 'macd' && <MACDChart candles={candles} />}
-      {active === 'rsi' && <RSIChart candles={candles} />}
-      {active === 'stoch' && <StochasticsChart candles={candles} />}
-      {active === 'adx' && <ADXChart candles={candles} />}
+      {active === 'macd' && <MACDChart candles={candles} syncGroup={syncGroup} />}
+      {active === 'rsi' && <RSIChart candles={candles} syncGroup={syncGroup} />}
+      {active === 'stoch' && <StochasticsChart candles={candles} syncGroup={syncGroup} />}
+      {active === 'adx' && <ADXChart candles={candles} syncGroup={syncGroup} />}
     </div>
   )
 }
