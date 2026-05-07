@@ -210,8 +210,6 @@ export function ADXChart({ candles, syncGroup }: ADXChartProps) {
     threshold25Ref.current = t25
     threshold40Ref.current = t40
 
-    syncGroup?.register(chart)
-
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -274,8 +272,9 @@ export function ADXChart({ candles, syncGroup }: ADXChartProps) {
     if (!hasInitialFitRef.current) {
       chartRef.current.timeScale().fitContent()
       hasInitialFitRef.current = true
+      syncGroup?.register(chartRef.current)
     }
-  }, [candles])
+  }, [candles, syncGroup])
 
   return (
     <div className="bg-bg-card rounded-lg p-4">

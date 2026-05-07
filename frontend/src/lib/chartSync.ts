@@ -20,6 +20,19 @@ export class ChartSyncGroup {
   private members = new Map<IChartApi, (range: IRange<Time> | null) => void>()
   private syncing = false
 
+  // setVisibleRange throws when the receiving chart has no data covering the
+  // requested range yet (e.g. a sub-panel registered before its series was
+  // populated, or before the indicator warm-up filled in any points). The
+  // throw is harmless — the next user gesture or data update will retry the
+  // sync — so swallow it instead of letting it propagate to React.
+  private safeSetVisibleRange(chart: IChartApi, range: IRange<Time>) {
+    try {
+      chart.timeScale().setVisibleRange(range)
+    } catch {
+      // Ignore: chart not ready to render this range yet.
+    }
+  }
+
   register(chart: IChartApi) {
     if (this.members.has(chart)) return
     const handler = (range: IRange<Time> | null) => {
@@ -28,7 +41,7 @@ export class ChartSyncGroup {
       try {
         for (const other of this.members.keys()) {
           if (other === chart) continue
-          other.timeScale().setVisibleRange(range)
+          this.safeSetVisibleRange(other, range)
         }
       } finally {
         this.syncing = false
@@ -44,7 +57,7 @@ export class ChartSyncGroup {
       if (range) {
         this.syncing = true
         try {
-          chart.timeScale().setVisibleRange(range)
+          this.safeSetVisibleRange(chart, range)
         } finally {
           this.syncing = false
         }

@@ -133,8 +133,6 @@ export function RSIChart({ candles, syncGroup }: RSIChartProps) {
     oversoldRef.current = oversold
     midRef.current = mid
 
-    syncGroup?.register(chart)
-
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -187,8 +185,9 @@ export function RSIChart({ candles, syncGroup }: RSIChartProps) {
     if (!hasInitialFitRef.current) {
       chartRef.current.timeScale().fitContent()
       hasInitialFitRef.current = true
+      syncGroup?.register(chartRef.current)
     }
-  }, [candles])
+  }, [candles, syncGroup])
 
   return (
     <div className="bg-bg-card rounded-lg p-4">

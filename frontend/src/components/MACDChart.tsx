@@ -144,8 +144,6 @@ export function MACDChart({ candles, syncGroup }: MACDChartProps) {
     signalSeriesRef.current = signalSeries
     histSeriesRef.current = histSeries
 
-    syncGroup?.register(chart)
-
     const handleResize = () => {
       if (containerRef.current) {
         chart.applyOptions({ width: containerRef.current.clientWidth })
@@ -192,15 +190,18 @@ export function MACDChart({ candles, syncGroup }: MACDChartProps) {
     macdSeriesRef.current.setData(macdData)
     signalSeriesRef.current.setData(signalData)
     histSeriesRef.current.setData(histData)
-    // Fit only on the first data load. Subsequent updates either prepend older
-    // candles (visible range is preserved by the sync group) or append a new
-    // candle (lightweight-charts keeps the existing range). Calling fitContent
-    // every render would override scrolls done by the user or by sync.
+    // Fit only on the first data load, then join the sync group. Joining after
+    // setData ensures the chart can accept the group's current visible range
+    // (lightweight-charts throws if you set a range before any data exists).
+    // Subsequent renders either prepend older candles (visible range preserved
+    // by the sync group) or append a new candle (lightweight-charts keeps the
+    // existing range), so no further fit is needed.
     if (!hasInitialFitRef.current) {
       chartRef.current.timeScale().fitContent()
       hasInitialFitRef.current = true
+      syncGroup?.register(chartRef.current)
     }
-  }, [candles])
+  }, [candles, syncGroup])
 
   return (
     <div className="bg-bg-card rounded-lg p-4">
