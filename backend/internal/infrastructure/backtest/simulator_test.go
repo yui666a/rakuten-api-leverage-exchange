@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
 
 func TestSimExecutor_SelectSLTPExit_BuyWorstCase(t *testing.T) {
@@ -163,5 +164,66 @@ func TestSimExecutor_FeeRecordedOnTradeRecord(t *testing.T) {
 	// Total fee = -0.02 (rebate)
 	if trade.Fee >= 0 {
 		t.Fatalf("expected negative fee (rebate), got %f", trade.Fee)
+	}
+}
+
+// === Live vs Backtest contract parity (ADR #260 PR #3) ===
+//
+// The same eventengine.AssertPositionsContract helper is invoked from
+// internal/infrastructure/live/real_executor_test.go so any regression
+// in either executor — live or backtest — surfaces as the same failure
+// mode. This is the mechanical guarantee promised in ADR §3.1 rule 6:
+// once SimExecutor.Open accepts and fills a signal, every visible
+// Position must satisfy EntryPrice>0 / PositionID>0 / Side ∈ {BUY,SELL}
+// just like the live executor's Positions() after SyncPositions.
+
+func TestSimExecutor_PositionsContract_AfterFill(t *testing.T) {
+	sim := NewSimExecutor(SimConfig{InitialBalance: 100000})
+	if _, err := sim.Open(7, entity.OrderSideBuy, 100, 1.0, "test", 0); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Translate SimPositions → eventengine.Position the same way the
+	// runner adapter does in production, then run the shared contract
+	// helper.
+	simPositions := sim.Positions()
+	positions := make([]eventengine.Position, 0, len(simPositions))
+	for _, p := range simPositions {
+		positions = append(positions, eventengine.Position{
+			PositionID:     p.PositionID,
+			SymbolID:       p.SymbolID,
+			Side:           p.Side,
+			EntryPrice:     p.EntryPrice,
+			Amount:         p.Amount,
+			EntryTimestamp: p.EntryTimestamp,
+		})
+	}
+	if v := eventengine.AssertPositionsContract(t, positions); v != 0 {
+		t.Fatalf("contract violations: %d", v)
+	}
+}
+
+func TestSimExecutor_PositionsContract_BothSides(t *testing.T) {
+	sim := NewSimExecutor(SimConfig{InitialBalance: 100000})
+	if _, err := sim.Open(7, entity.OrderSideBuy, 100, 1.0, "buy_test", 0); err != nil {
+		t.Fatalf("BUY Open: %v", err)
+	}
+	// reverse: opens SELL after closing BUY
+	if _, err := sim.Open(7, entity.OrderSideSell, 110, 1.0, "sell_test", 1000); err != nil {
+		t.Fatalf("SELL Open: %v", err)
+	}
+	simPositions := sim.Positions()
+	positions := make([]eventengine.Position, 0, len(simPositions))
+	for _, p := range simPositions {
+		positions = append(positions, eventengine.Position{
+			PositionID:     p.PositionID,
+			SymbolID:       p.SymbolID,
+			Side:           p.Side,
+			EntryPrice:     p.EntryPrice,
+			Amount:         p.Amount,
+			EntryTimestamp: p.EntryTimestamp,
+		})
+	}
+	if v := eventengine.AssertPositionsContract(t, positions); v != 0 {
+		t.Fatalf("contract violations after reverse: %d", v)
 	}
 }
