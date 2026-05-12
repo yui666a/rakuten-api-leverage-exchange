@@ -691,3 +691,106 @@ func TestRealExecutor_OpenWithUrgency_NormalRespectsDefaultRouter(t *testing.T) 
 		t.Fatalf("expected 1 venue call, got %d", calls)
 	}
 }
+
+// === resolveFillPrice tests ===
+//
+// Regression coverage for the 2026-05-12 incident: a MARKET BUY filled with
+// venue Order.Price=0 caused EntryPrice to fall back to signalPrice (the
+// previous-bar close), which then poisoned TP/SL distance calculations and
+// led to a spurious "take_profit" close ~18 s later. The fix polls
+// GetOrders to recover the real fill price; these tests pin that behaviour
+// without depending on the higher-level event loop.
+
+// mockOrderClientWithFills extends mockOrderClient with a GetOrders mock so
+// resolveFillPrice's polling path is exercised.
+type mockOrderClientWithFills struct {
+	mockOrderClient
+	getOrdersFn func(ctx context.Context, symbolID int64) ([]entity.Order, error)
+}
+
+func (m *mockOrderClientWithFills) GetOrders(ctx context.Context, symbolID int64) ([]entity.Order, error) {
+	if m.getOrdersFn != nil {
+		return m.getOrdersFn(ctx, symbolID)
+	}
+	return nil, nil
+}
+
+func TestRealExecutor_OpenMarket_FillPriceRecoveredFromPoll(t *testing.T) {
+	// Venue returns the order row with Price=0 on submit (Rakuten's actual
+	// behaviour for fast MARKET fills); GetOrders subsequently exposes the
+	// real avgPrice. Pre-fix this scenario would have stamped EntryPrice =
+	// signalPrice; the executor must now reflect the polled value.
+	mock := &mockOrderClientWithFills{}
+	mock.createOrderFn = func(_ context.Context, req entity.OrderRequest) ([]entity.Order, error) {
+		return []entity.Order{{ID: 999, Price: 0}}, nil
+	}
+	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
+		return []entity.Order{{ID: 999, Price: 9219, RemainingAmount: 0}}, nil
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+	exec.pollInterval = 1 * time.Millisecond // keep the test fast
+
+	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4 /* signalPrice */, 0.3, "test", 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if ev.Price != 9219 {
+		t.Fatalf("ev.Price = %v, want 9219 (resolved from venue poll, not signalPrice)", ev.Price)
+	}
+	positions := exec.Positions()
+	if len(positions) != 1 || positions[0].EntryPrice != 9219 {
+		t.Fatalf("EntryPrice = %v, want 9219 (the actual fill, not the signalPrice 9168.4)",
+			positions[0].EntryPrice)
+	}
+}
+
+func TestRealExecutor_OpenMarket_FillPriceFallsBackWhenVenueSilent(t *testing.T) {
+	// If both submit and GetOrders never expose a price, the executor must
+	// not silently corrupt the position book: we fall back to signalPrice
+	// (the only price we have) and the upstream WARN log makes the bad state
+	// observable. SyncPositions reconciles it on the next venue sync.
+	mock := &mockOrderClientWithFills{}
+	mock.createOrderFn = func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+		return []entity.Order{{ID: 999, Price: 0}}, nil
+	}
+	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
+		return []entity.Order{{ID: 999, Price: 0, RemainingAmount: 0}}, nil
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+	exec.pollInterval = 1 * time.Millisecond
+
+	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4, 0.3, "test", 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if ev.Price != 9168.4 {
+		t.Fatalf("ev.Price = %v, want signalPrice 9168.4 (fallback)", ev.Price)
+	}
+}
+
+func TestRealExecutor_OpenMarket_FillPriceUsesSubmitResponseWhenPopulated(t *testing.T) {
+	// Most happy-path: submit response already carries Price>0. resolveFillPrice
+	// must short-circuit on it without polling GetOrders.
+	getOrdersCalls := 0
+	mock := &mockOrderClientWithFills{}
+	mock.createOrderFn = func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+		return []entity.Order{{ID: 999, Price: 9219}}, nil
+	}
+	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
+		getOrdersCalls++
+		return nil, fmt.Errorf("should not be called")
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+	exec.pollInterval = 1 * time.Millisecond
+
+	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4, 0.3, "test", 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if ev.Price != 9219 {
+		t.Fatalf("ev.Price = %v, want 9219 (from submit response, no polling needed)", ev.Price)
+	}
+	if getOrdersCalls != 0 {
+		t.Fatalf("GetOrders polled %d times; want 0 (submit already had price)", getOrdersCalls)
+	}
+}

@@ -568,7 +568,7 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 		if primaryRejected {
 			return 0, signalPrice, primaryErr
 		}
-		return primaryOrder.ID, fillPriceOf(primaryOrder, signalPrice), nil
+		return primaryOrder.ID, r.resolveFillPrice(ctx, primaryOrder, signalPrice), nil
 	}
 
 	wait := plan.Steps[1]
@@ -588,7 +588,7 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 		if fbErr != nil {
 			return 0, signalPrice, fmt.Errorf("post-only rejected and MARKET fallback failed: %w", fbErr)
 		}
-		return fb.ID, fillPriceOf(fb, signalPrice), nil
+		return fb.ID, r.resolveFillPrice(ctx, fb, signalPrice), nil
 	}
 
 	// Wait for the LIMIT to fill, polling status. The post-only LIMIT can
@@ -611,14 +611,14 @@ func (r *RealExecutor) runPlan(ctx context.Context, plan sor.Plan, signalPrice f
 	// Re-check status after cancel. If the order in fact filled before our
 	// cancel arrived, do not double up by sending a fallback MARKET.
 	if status := r.lookupOrder(ctx, primaryOrder.ID); status != nil && status.RemainingAmount <= 0 {
-		return status.ID, fillPriceOf(*status, signalPrice), nil
+		return status.ID, r.resolveFillPrice(ctx, *status, signalPrice), nil
 	}
 
 	fb, err := r.submit(ctx, wait.FallbackOrder)
 	if err != nil {
 		return 0, signalPrice, fmt.Errorf("escalation MARKET fallback failed: %w", err)
 	}
-	return fb.ID, fillPriceOf(fb, signalPrice), nil
+	return fb.ID, r.resolveFillPrice(ctx, fb, signalPrice), nil
 }
 
 // runIcebergPlan sequentially submits each Submit step in the plan with the
@@ -652,7 +652,7 @@ func (r *RealExecutor) runIcebergPlan(ctx context.Context, plan sor.Plan, signal
 			if firstID == 0 {
 				firstID = ord.ID
 			}
-			price := fillPriceOf(ord, signalPrice)
+			price := r.resolveFillPrice(ctx, ord, signalPrice)
 			costAccum += price * step.Order.OrderData.Amount
 			amtAccum += step.Order.OrderData.Amount
 		case sor.StepKindWaitInterval:
@@ -760,4 +760,59 @@ func fillPriceOf(o entity.Order, fallback float64) float64 {
 		return o.Price
 	}
 	return fallback
+}
+
+// resolveFillPrice attempts to get the actual fill price from the venue.
+//
+// Background: Rakuten Wallet's create-order response does not populate
+// `Order.Price` for MARKET orders that fill immediately. A naive
+// `fillPriceOf(o, signalPrice)` then returns the previous-bar close
+// (signal price) as the EntryPrice, which corrupts TP/SL calculations
+// downstream (positions get exit levels anchored to a phantom price up
+// to several percent away from the true fill). Observed in production
+// on 2026-05-12 08:45 JST: a BUY filled at ~¥9,219 was recorded with
+// EntryPrice=¥9,168.4 (the previous bar's close), causing the TickRisk
+// handler to erroneously fire `take_profit` ~18 s later on a spurious
+// high tick.
+//
+// Resolution strategy:
+//  1. If the submit response already carries a price, trust it.
+//  2. Otherwise poll GetOrders for up to fillPriceMaxAttempts iterations
+//     to catch the venue-side fill record.
+//  3. As a last resort, return signalPrice but emit a WARN so the bad
+//     state is visible in the operational log instead of silently
+//     poisoning the position book.
+func (r *RealExecutor) resolveFillPrice(ctx context.Context, o entity.Order, signalPrice float64) float64 {
+	if o.Price > 0 {
+		return o.Price
+	}
+	if o.ID == 0 {
+		slog.Warn("resolveFillPrice: order has no ID; using signalPrice fallback",
+			"signalPrice", signalPrice,
+		)
+		return signalPrice
+	}
+	const fillPriceMaxAttempts = 3
+	for attempt := 0; attempt < fillPriceMaxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				slog.Warn("resolveFillPrice: context cancelled mid-poll; using signalPrice fallback",
+					"orderID", o.ID, "signalPrice", signalPrice, "attempt", attempt,
+				)
+				return signalPrice
+			case <-time.After(r.pollInterval):
+			}
+		}
+		status := r.lookupOrder(ctx, o.ID)
+		if status != nil && status.Price > 0 {
+			return status.Price
+		}
+	}
+	slog.Warn("resolveFillPrice: venue did not populate fill price; using signalPrice fallback (entry/exit levels may be inaccurate until SyncPositions reconciles)",
+		"orderID", o.ID,
+		"signalPrice", signalPrice,
+		"attempts", fillPriceMaxAttempts,
+	)
+	return signalPrice
 }
