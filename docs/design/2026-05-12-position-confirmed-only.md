@@ -1,6 +1,13 @@
 # 2026-05-12 — Position confirmed-only: Live↔Backtest 共通 Exit/Risk レイヤー
 
-**Status**: Approved (2026-05-12, 設計承認済 / 実装未着手)
+**Status**: **Implemented** (2026-05-12, ADR + 3 stacked PR が main にマージ済)
+- ADR: #260 (merged 2026-05-12)
+- PR 1/3: #261 (merged 2026-05-12) — confirmed-only contract for live
+- PR 2/3: #262 (merged 2026-05-12) — PositionConfirmedEvent 駆動の shadow ExitPlan
+- PR 3/3: #263 (merged 2026-05-12) — Live↔Backtest 共通 Position contract test
+- 残: r=0.5 で 24h paper trading 観察 → r=2.0 戻し (§5.3)
+
+**Status (original)**: Approved (2026-05-12, 設計承認済 / 実装未着手)
 **Author**: Claude Code (3h+1h PDCA セッション後の事故対応設計)
 **Reviewers**: Codex (codex-rescue 経由でレビュー受領、本書に反映済)
 **Scope**: `backend/internal/infrastructure/live/` + `backend/internal/usecase/exitplan/` + `backend/internal/usecase/backtest/` (handler / simulator / executor) の Exit/Risk レイヤー
