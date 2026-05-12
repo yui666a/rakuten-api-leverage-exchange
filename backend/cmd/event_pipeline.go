@@ -924,6 +924,18 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 			if err := executor.SyncPositions(ctx); err != nil {
 				slog.Warn("event-pipeline: periodic position sync failed", "error", err)
 			}
+			// SweepStalePending surfaces submissions that have not
+			// promoted into Positions() within the executor's TTL.
+			// The executor itself only logs; we expose the count so
+			// future telemetry / alerts can react. The sync loop is
+			// the natural cadence: pending TTL (60 s) is comfortably
+			// longer than the burst sync interval, so a stale entry
+			// gets at least one sweep before any operational action.
+			if stale := executor.SweepStalePending(now); len(stale) > 0 {
+				slog.Warn("event-pipeline: stale pending orders observed after sync",
+					"count", len(stale),
+				)
+			}
 			interval := int64(idleIntervalMs)
 			if last := executor.LastOrderAt(); last > 0 && now-last < int64(burstWindowAfterMs) {
 				interval = int64(burstIntervalMs)

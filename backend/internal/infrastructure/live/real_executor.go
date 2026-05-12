@@ -32,6 +32,14 @@ type PositionChangePublisher interface {
 
 // RealExecutor implements eventengine.OrderExecutor by executing real orders
 // via the Rakuten API OrderClient.
+//
+// Contract: Positions() returns only confirmed positions — that is, ones
+// whose EntryPrice has been populated from a venue source (SyncPositions or
+// GetMyTrades). Positions that are still pending venue confirmation must
+// never appear in Positions() and so cannot be observed by downstream Risk /
+// Exit handlers. This is the core invariant introduced by the
+// docs/design/2026-05-12-position-confirmed-only.md ADR after a production
+// incident where a stale signalPrice fallback corrupted TP/SL calculation.
 type RealExecutor struct {
 	orderClient   repository.OrderClient
 	symbolID      int64
@@ -39,6 +47,11 @@ type RealExecutor struct {
 	mu            sync.Mutex
 	spreadPercent float64
 	nextOrderID   int64
+	// pendingOrders tracks venue submissions whose fills have not yet been
+	// observed via SyncPositions or GetMyTrades. Entries are removed when
+	// the venue confirms a Position for the OrderID. Pending entries are
+	// invisible to Positions() and therefore to Risk / Exit handlers.
+	pendingOrders map[int64]pendingOpen
 	// router decides the execution tactic per signal. Always non-nil after
 	// NewRealExecutor (defaults to StrategyMarket).
 	router *sor.Selector
@@ -59,6 +72,22 @@ type RealExecutor struct {
 	// positionPublisher is invoked from SyncPositions when the local view
 	// changes (count or amount), so the dashboard updates immediately.
 	positionPublisher PositionChangePublisher
+	// pendingTTL bounds how long an unconfirmed order may sit in
+	// pendingOrders before SweepStalePending logs it. Defaults to 60 s.
+	pendingTTL time.Duration
+}
+
+// pendingOpen is the executor's bookkeeping for a venue submission whose
+// fill has not yet been confirmed. It is intentionally minimal: anything
+// the Risk / Exit layer needs (price, exact fill amount) must come from
+// SyncPositions or GetMyTrades, never from this struct.
+type pendingOpen struct {
+	OrderID     int64
+	SymbolID    int64
+	Side        entity.OrderSide
+	Amount      float64
+	SubmittedAt int64
+	Reason      string
 }
 
 // RealExecutorOption configures a RealExecutor at construction time.
@@ -107,6 +136,8 @@ func NewRealExecutor(orderClient repository.OrderClient, symbolID int64, spreadP
 		router:                   sor.New(sor.Config{Strategy: sor.StrategyMarket}),
 		pollInterval:             1 * time.Second,
 		rejectionFallbackEnabled: true,
+		pendingOrders:            make(map[int64]pendingOpen),
+		pendingTTL:               60 * time.Second,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -138,6 +169,12 @@ func (r *RealExecutor) OpenWithUrgency(symbolID int64, side entity.OrderSide, si
 // openWithStrategy is the core open routine parameterised by SOR strategy.
 // The default router stays untouched so subsequent Open calls keep using
 // the configured defaults.
+//
+// Per the docs/design/2026-05-12-position-confirmed-only.md ADR, this
+// routine no longer appends to r.positions on submit. The position is only
+// added once the venue confirms the fill (via SyncPositions / GetMyTrades),
+// which closes the window during which Risk handlers could otherwise
+// observe a phantom EntryPrice and misfire TP/SL exits.
 func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64, strat sor.Strategy) (entity.OrderEvent, error) {
 	if amount <= 0 {
 		return entity.OrderEvent{}, fmt.Errorf("amount must be positive")
@@ -146,14 +183,13 @@ func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, s
 		return entity.OrderEvent{}, fmt.Errorf("signal price must be positive")
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	for i := len(r.positions) - 1; i >= 0; i-- {
 		pos := r.positions[i]
 		if pos.SymbolID == symbolID && pos.Side != side {
 			_, _, _ = r.closeLocked(pos.PositionID, signalPrice, "reverse_signal", timestamp)
 		}
 	}
+	r.mu.Unlock()
 
 	tempRouter := sor.New(sor.Config{Strategy: strat})
 	in := sor.SelectInput{SymbolID: symbolID, Side: side, Amount: amount}
@@ -175,19 +211,13 @@ func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, s
 		"amount", amount, "reason", reason, "strategy", plan.Strategy,
 	)
 
-	posID := orderID
-	if posID == 0 {
-		posID = r.nextOrderID
-		r.nextOrderID++
+	r.recordPending(orderID, symbolID, side, amount, reason, timestamp)
+	if err := r.confirmPendingViaSync(context.Background(), orderID); err != nil {
+		slog.Warn("post-open SyncPositions failed; pending will be confirmed by the next sync cycle",
+			"orderID", orderID, "error", err,
+		)
 	}
-	r.positions = append(r.positions, eventengine.Position{
-		PositionID:     posID,
-		SymbolID:       symbolID,
-		Side:           side,
-		EntryPrice:     fillPrice,
-		Amount:         amount,
-		EntryTimestamp: timestamp,
-	})
+
 	return entity.OrderEvent{
 		OrderID:          orderID,
 		SymbolID:         symbolID,
@@ -198,11 +228,16 @@ func (r *RealExecutor) openWithStrategy(symbolID int64, side entity.OrderSide, s
 		Reason:           reason,
 		Timestamp:        timestamp,
 		Trigger:          entity.DecisionTriggerBarClose,
-		OpenedPositionID: posID,
+		OpenedPositionID: orderID,
 	}, nil
 }
 
 // Open creates a real order via the configured SOR plan.
+//
+// Per the docs/design/2026-05-12-position-confirmed-only.md ADR, this no
+// longer pushes a phantom Position onto r.positions at submit time. The
+// fill is registered in pendingOrders and the position only becomes
+// visible to Positions() after the venue confirms it via SyncPositions.
 func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, amount float64, reason string, timestamp int64) (entity.OrderEvent, error) {
 	if amount <= 0 {
 		return entity.OrderEvent{}, fmt.Errorf("amount must be positive")
@@ -212,8 +247,6 @@ func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, 
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	// Reverse signal: close opposite positions first.
 	for i := len(r.positions) - 1; i >= 0; i-- {
 		pos := r.positions[i]
@@ -221,6 +254,7 @@ func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, 
 			_, _, _ = r.closeLocked(pos.PositionID, signalPrice, "reverse_signal", timestamp)
 		}
 	}
+	r.mu.Unlock()
 
 	plan := r.planFor(symbolID, side, amount, nil, timestamp)
 	orderID, fillPrice, err := r.runPlan(context.Background(), plan, signalPrice)
@@ -237,20 +271,12 @@ func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, 
 		"strategy", plan.Strategy,
 	)
 
-	// Track position in-memory. Use API order ID as position ID.
-	posID := orderID
-	if posID == 0 {
-		posID = r.nextOrderID
-		r.nextOrderID++
+	r.recordPending(orderID, symbolID, side, amount, reason, timestamp)
+	if err := r.confirmPendingViaSync(context.Background(), orderID); err != nil {
+		slog.Warn("post-open SyncPositions failed; pending will be confirmed by the next sync cycle",
+			"orderID", orderID, "error", err,
+		)
 	}
-	r.positions = append(r.positions, eventengine.Position{
-		PositionID:     posID,
-		SymbolID:       symbolID,
-		Side:           side,
-		EntryPrice:     fillPrice,
-		Amount:         amount,
-		EntryTimestamp: timestamp,
-	})
 
 	return entity.OrderEvent{
 		OrderID:          orderID,
@@ -262,7 +288,7 @@ func (r *RealExecutor) Open(symbolID int64, side entity.OrderSide, signalPrice, 
 		Reason:           reason,
 		Timestamp:        timestamp,
 		Trigger:          entity.DecisionTriggerBarClose,
-		OpenedPositionID: posID,
+		OpenedPositionID: orderID,
 	}, nil
 }
 
@@ -386,12 +412,133 @@ func (r *RealExecutor) LastOrderAt() int64 {
 }
 
 // Positions returns a copy of tracked positions.
+//
+// Contract (Position confirmed-only, per
+// docs/design/2026-05-12-position-confirmed-only.md):
+//   - Every returned Position has EntryPrice > 0 sourced from the venue
+//     (SyncPositions / GetMyTrades), never from a signalPrice fallback.
+//   - Pending submissions that have not yet been confirmed by the venue
+//     are invisible to this method and so cannot be observed by Risk /
+//     Exit handlers.
+//   - The slice is a defensive copy: callers may iterate or filter without
+//     fearing concurrent SyncPositions mutation. Callers that need a
+//     stable snapshot for the duration of a tick should still capture
+//     this once at the top of their handler.
 func (r *RealExecutor) Positions() []eventengine.Position {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]eventengine.Position, len(r.positions))
 	copy(out, r.positions)
 	return out
+}
+
+// recordPending registers a submitted-but-not-yet-confirmed order so the
+// next sync (or a manual SweepStalePending) can match it against venue
+// positions. The reason / submittedAt fields are kept for operational
+// debugging; Risk / Exit handlers must not consult pendingOrders.
+func (r *RealExecutor) recordPending(orderID, symbolID int64, side entity.OrderSide, amount float64, reason string, timestamp int64) {
+	if orderID == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.pendingOrders[orderID]; exists {
+		// venue-issued OrderIDs are unique, so a duplicate here means we
+		// somehow submitted the same order twice without it being
+		// confirmed. Log loudly: this is an integrity smell, not a normal
+		// state transition.
+		slog.Warn("recordPending: pendingOrders already has this OrderID; overwriting",
+			"orderID", orderID, "symbolID", symbolID,
+		)
+	}
+	r.pendingOrders[orderID] = pendingOpen{
+		OrderID:     orderID,
+		SymbolID:    symbolID,
+		Side:        side,
+		Amount:      amount,
+		SubmittedAt: timestamp,
+		Reason:      reason,
+	}
+}
+
+// confirmPendingViaSync immediately polls the venue's GetPositions for the
+// open we just submitted, so the position becomes visible to downstream
+// handlers without waiting for the periodic SyncPositions tick. Errors
+// are propagated to the caller (which logs and falls back to the periodic
+// sync) — we do not surface them as a hard failure because the venue has
+// already accepted the order.
+//
+// A cancelled context short-circuits without calling the venue: shutdown
+// paths must not block on a sync that has no chance of succeeding.
+func (r *RealExecutor) confirmPendingViaSync(ctx context.Context, orderID int64) error {
+	if orderID == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return r.SyncPositions(ctx)
+}
+
+// PendingOrdersCount returns the number of submissions still awaiting
+// venue confirmation. Intended for tests and operational telemetry; the
+// Risk / Exit layer must continue to consult Positions() only.
+func (r *RealExecutor) PendingOrdersCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.pendingOrders)
+}
+
+// StalePendingEntry summarises a pending order that exceeded its TTL
+// for operational observability. SweepStalePending returns these so the
+// caller can build alerts / metrics without re-implementing the
+// matching logic.
+type StalePendingEntry struct {
+	OrderID     int64
+	SymbolID    int64
+	Side        entity.OrderSide
+	Amount      float64
+	SubmittedAt int64
+	AgeMs       int64
+	Reason      string
+}
+
+// SweepStalePending iterates pendingOrders and logs entries that have
+// exceeded the configured pendingTTL. It does not remove them — that
+// happens during SyncPositions when the venue either reveals a matching
+// Position or implicitly disowns the order. The intent is operational
+// visibility, not garbage collection.
+//
+// Returns each stale entry so the caller can surface IDs / ages in
+// metrics or alerts. An empty slice means everything pending is healthy.
+func (r *RealExecutor) SweepStalePending(nowMillis int64) []StalePendingEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ttl := r.pendingTTL.Milliseconds()
+	var stale []StalePendingEntry
+	for orderID, po := range r.pendingOrders {
+		age := nowMillis - po.SubmittedAt
+		if age > ttl {
+			stale = append(stale, StalePendingEntry{
+				OrderID:     orderID,
+				SymbolID:    po.SymbolID,
+				Side:        po.Side,
+				Amount:      po.Amount,
+				SubmittedAt: po.SubmittedAt,
+				AgeMs:       age,
+				Reason:      po.Reason,
+			})
+			slog.Warn("pending order exceeded TTL; venue may have rejected silently or sync is lagging",
+				"orderID", orderID,
+				"symbolID", po.SymbolID,
+				"side", po.Side,
+				"amount", po.Amount,
+				"submittedAt", po.SubmittedAt,
+				"ageMs", age,
+			)
+		}
+	}
+	return stale
 }
 
 // SelectSLTPExit uses worst-case logic: when both SL and TP are hit in the same bar,
@@ -446,7 +593,22 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 	r.mu.Lock()
 
 	synced := make([]eventengine.Position, 0, len(apiPositions))
+	skippedZeroPrice := 0
 	for _, ap := range apiPositions {
+		// Confirmed-only contract: only positions whose venue Price was
+		// populated may enter our position book. A zero price means the
+		// venue has not finished settling this fill yet; we'll pick it up
+		// on the next sync cycle rather than silently surface a phantom
+		// EntryPrice (the root cause of the 2026-05-12 incident).
+		if ap.Price <= 0 {
+			skippedZeroPrice++
+			slog.Warn("SyncPositions: venue returned position with non-positive price; skipping until confirmed",
+				"positionID", ap.ID,
+				"symbolID", ap.SymbolID,
+				"price", ap.Price,
+			)
+			continue
+		}
 		synced = append(synced, eventengine.Position{
 			PositionID:     ap.ID,
 			SymbolID:       ap.SymbolID,
@@ -456,8 +618,41 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 			EntryTimestamp: ap.CreatedAt,
 		})
 	}
+	// Guard against venue-side races that briefly return all positions
+	// with Price=0 (observed only theoretically — see Codex review on
+	// PR #1). Without this guard the executor would atomically wipe the
+	// position book, dropping every Risk / Exit handler's reference and
+	// re-creating the very race the confirmed-only contract is meant to
+	// close. The next sync cycle will catch up to the venue's real state.
+	if len(apiPositions) > 0 && len(synced) == 0 && len(r.positions) > 0 {
+		slog.Warn("SyncPositions: every venue position had Price<=0; keeping previous snapshot to avoid spurious wipe",
+			"symbolID", r.symbolID,
+			"previousCount", len(r.positions),
+			"skippedZeroPrice", skippedZeroPrice,
+		)
+		r.mu.Unlock()
+		return nil
+	}
 	changed := positionsChanged(r.positions, synced)
 	r.positions = synced
+	// Any pending order whose OrderID now matches a venue-confirmed
+	// position is no longer pending. Rakuten's `Position.OrderID` is the
+	// venue's parent order id — distinct from `Position.ID` (the
+	// position id) — so we must match against the source field that
+	// pendingOrders is keyed by, not against PositionID. This handles
+	// the split-fill case naturally because every child position
+	// inherits the parent OrderID. Pending entries that survive here
+	// get surfaced by SweepStalePending after the TTL.
+	if len(r.pendingOrders) > 0 && len(apiPositions) > 0 {
+		for _, ap := range apiPositions {
+			if ap.OrderID == 0 {
+				continue
+			}
+			if _, ok := r.pendingOrders[ap.OrderID]; ok {
+				delete(r.pendingOrders, ap.OrderID)
+			}
+		}
+	}
 	publisher := r.positionPublisher
 	r.mu.Unlock()
 

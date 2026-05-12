@@ -165,12 +165,27 @@ func TestRealExecutor_SelectSLTPExit_NoHit(t *testing.T) {
 }
 
 func TestRealExecutor_OpenAndPositions(t *testing.T) {
+	// Per the confirmed-only contract, the executor consults
+	// GetPositions immediately after each open. Mock the venue so the
+	// open transitions from pending → confirmed in a single test step;
+	// without this the position would remain pending and Positions()
+	// would correctly return empty.
 	nextID := int64(100)
 	mock := &mockOrderClient{
 		createOrderFn: func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
 			id := nextID
 			nextID++
 			return []entity.Order{{ID: id, Price: 50000}}, nil
+		},
+		getPositionsFn: func(ctx context.Context, symbolID int64) ([]entity.Position, error) {
+			return []entity.Position{{
+				ID:              100,
+				SymbolID:        7,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           50000,
+				RemainingAmount: 0.01,
+				CreatedAt:       1000,
+			}}, nil
 		},
 	}
 	exec := NewRealExecutor(mock, 7, 0.1)
@@ -193,6 +208,9 @@ func TestRealExecutor_OpenAndPositions(t *testing.T) {
 	if positions[0].PositionID != 100 {
 		t.Fatalf("expected positionID=100, got %d", positions[0].PositionID)
 	}
+	if positions[0].EntryPrice <= 0 {
+		t.Fatalf("confirmed-only contract violated: EntryPrice = %v, want > 0", positions[0].EntryPrice)
+	}
 	if positions[0].Side != entity.OrderSideBuy {
 		t.Fatalf("expected BUY, got %s", positions[0].Side)
 	}
@@ -213,6 +231,11 @@ func TestRealExecutor_OpenAndPositions(t *testing.T) {
 func TestRealExecutor_OpenAndClose(t *testing.T) {
 	nextID := int64(200)
 	callCount := 0
+	// venueHasPosition flips false after Close so the post-close sync
+	// drops the confirmed position. This mirrors the real venue lifecycle
+	// (Open visible → Close → venue position disappears) without us
+	// having to track ID-to-index plumbing in the mock.
+	venueHasPosition := true
 	mock := &mockOrderClient{
 		createOrderFn: func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
 			id := nextID
@@ -224,6 +247,19 @@ func TestRealExecutor_OpenAndClose(t *testing.T) {
 				price = 51000.0
 			}
 			return []entity.Order{{ID: id, Price: price}}, nil
+		},
+		getPositionsFn: func(ctx context.Context, symbolID int64) ([]entity.Position, error) {
+			if !venueHasPosition {
+				return nil, nil
+			}
+			return []entity.Position{{
+				ID:              200,
+				SymbolID:        7,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           50000,
+				RemainingAmount: 0.01,
+				CreatedAt:       1000,
+			}}, nil
 		},
 	}
 	exec := NewRealExecutor(mock, 7, 0.1)
@@ -237,6 +273,7 @@ func TestRealExecutor_OpenAndClose(t *testing.T) {
 	if len(positions) != 1 {
 		t.Fatalf("expected 1 position, got %d", len(positions))
 	}
+	venueHasPosition = false // mimic the venue removing the position on close
 
 	orderEv, trade, err := exec.Close(positions[0].PositionID, 51000, "exit", 2000)
 	if err != nil {
@@ -321,12 +358,40 @@ func TestRealExecutor_SyncPositions(t *testing.T) {
 }
 
 func TestRealExecutor_OpenReversesOpposite(t *testing.T) {
+	// Venue state machine: starts with one BUY @ 50000, then after the
+	// reverse-and-open path runs the BUY is gone and a SELL @ 51000
+	// remains. The mock toggles based on createOrderFn call count so
+	// confirmPendingViaSync sees the right snapshot at each step.
 	nextID := int64(300)
+	state := "initial" // "initial" → "after_open" (sell visible)
 	mock := &mockOrderClient{
 		createOrderFn: func(ctx context.Context, req entity.OrderRequest) ([]entity.Order, error) {
 			id := nextID
 			nextID++
 			return []entity.Order{{ID: id, Price: 50000}}, nil
+		},
+		getPositionsFn: func(ctx context.Context, symbolID int64) ([]entity.Position, error) {
+			switch state {
+			case "initial":
+				return []entity.Position{{
+					ID:              300,
+					SymbolID:        7,
+					OrderSide:       entity.OrderSideBuy,
+					Price:           50000,
+					RemainingAmount: 0.01,
+					CreatedAt:       1000,
+				}}, nil
+			case "after_open":
+				return []entity.Position{{
+					ID:              302,
+					SymbolID:        7,
+					OrderSide:       entity.OrderSideSell,
+					Price:           51000,
+					RemainingAmount: 0.01,
+					CreatedAt:       2000,
+				}}, nil
+			}
+			return nil, nil
 		},
 	}
 	exec := NewRealExecutor(mock, 7, 0.1)
@@ -340,6 +405,7 @@ func TestRealExecutor_OpenReversesOpposite(t *testing.T) {
 		t.Fatalf("expected 1 position")
 	}
 
+	state = "after_open"
 	// Open a SELL on the same symbol should close the BUY first.
 	_, err = exec.Open(7, entity.OrderSideSell, 51000, 0.01, "sell_entry", 2000)
 	if err != nil {
@@ -692,105 +758,298 @@ func TestRealExecutor_OpenWithUrgency_NormalRespectsDefaultRouter(t *testing.T) 
 	}
 }
 
-// === resolveFillPrice tests ===
+// === Position confirmed-only contract tests ===
 //
-// Regression coverage for the 2026-05-12 incident: a MARKET BUY filled with
-// venue Order.Price=0 caused EntryPrice to fall back to signalPrice (the
-// previous-bar close), which then poisoned TP/SL distance calculations and
-// led to a spurious "take_profit" close ~18 s later. The fix polls
-// GetOrders to recover the real fill price; these tests pin that behaviour
-// without depending on the higher-level event loop.
+// docs/design/2026-05-12-position-confirmed-only.md pins the executor to
+// only surface Positions sourced from the venue's confirmed snapshot.
+// These regression tests cover the 2026-05-12 incident path: a MARKET BUY
+// whose submit response had Order.Price=0 used to seed positions with a
+// stale signalPrice fallback, which then misled TP/SL exits ~18 s later.
+// Under the new contract that path produces an OrderEvent but no visible
+// Position until the venue confirms the fill.
 
-// mockOrderClientWithFills extends mockOrderClient with a GetOrders mock so
-// resolveFillPrice's polling path is exercised.
-type mockOrderClientWithFills struct {
-	mockOrderClient
-	getOrdersFn func(ctx context.Context, symbolID int64) ([]entity.Order, error)
-}
-
-func (m *mockOrderClientWithFills) GetOrders(ctx context.Context, symbolID int64) ([]entity.Order, error) {
-	if m.getOrdersFn != nil {
-		return m.getOrdersFn(ctx, symbolID)
-	}
-	return nil, nil
-}
-
-func TestRealExecutor_OpenMarket_FillPriceRecoveredFromPoll(t *testing.T) {
-	// Venue returns the order row with Price=0 on submit (Rakuten's actual
-	// behaviour for fast MARKET fills); GetOrders subsequently exposes the
-	// real avgPrice. Pre-fix this scenario would have stamped EntryPrice =
-	// signalPrice; the executor must now reflect the polled value.
-	mock := &mockOrderClientWithFills{}
-	mock.createOrderFn = func(_ context.Context, req entity.OrderRequest) ([]entity.Order, error) {
-		return []entity.Order{{ID: 999, Price: 0}}, nil
-	}
-	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
-		return []entity.Order{{ID: 999, Price: 9219, RemainingAmount: 0}}, nil
+func TestRealExecutor_OpenMarket_PositionAppearsOnlyAfterVenueConfirms(t *testing.T) {
+	// Venue submit returns Price=0 (Rakuten's actual MARKET fast-fill
+	// behaviour) but GetPositions exposes the real fill on the next sync.
+	// The executor must wait for that sync before letting the position
+	// participate in any Risk / Exit decision.
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 999, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return []entity.Position{{
+				ID:              999,
+				SymbolID:        10,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           9219,
+				RemainingAmount: 0.3,
+				CreatedAt:       0,
+			}}, nil
+		},
 	}
 	exec := NewRealExecutor(mock, 10, 0)
-	exec.pollInterval = 1 * time.Millisecond // keep the test fast
 
-	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4 /* signalPrice */, 0.3, "test", 0)
-	if err != nil {
+	if _, err := exec.Open(10, entity.OrderSideBuy, 9168.4 /* signalPrice */, 0.3, "test", 0); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if ev.Price != 9219 {
-		t.Fatalf("ev.Price = %v, want 9219 (resolved from venue poll, not signalPrice)", ev.Price)
+	positions := exec.Positions()
+	if len(positions) != 1 {
+		t.Fatalf("Positions() len = %d, want 1 (post-Open sync should have confirmed the fill)", len(positions))
+	}
+	if positions[0].EntryPrice != 9219 {
+		t.Fatalf("EntryPrice = %v, want 9219 (venue truth, not signalPrice 9168.4)",
+			positions[0].EntryPrice)
+	}
+	if positions[0].EntryPrice <= 0 {
+		t.Fatalf("confirmed-only contract violated: EntryPrice = %v, want > 0", positions[0].EntryPrice)
+	}
+}
+
+func TestRealExecutor_OpenMarket_NoPhantomPositionWhileVenueSilent(t *testing.T) {
+	// If GetPositions does not yet show the fill (slow venue settlement
+	// or a same-tick race with the periodic sync), Positions() must
+	// remain empty. The OrderEvent still carries the submit response
+	// price for observability, but downstream Risk / Exit cannot see
+	// a phantom EntryPrice — which is exactly what corrupted the
+	// 2026-05-12 LTC fill and triggered the spurious take_profit close.
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 999, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return nil, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+
+	if _, err := exec.Open(10, entity.OrderSideBuy, 9168.4, 0.3, "test", 0); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if positions := exec.Positions(); len(positions) != 0 {
+		t.Fatalf("Positions() len = %d, want 0 (venue has not confirmed the fill yet)", len(positions))
+	}
+	// The pending entry must survive — that's how SweepStalePending and
+	// the next periodic sync find the orphan once the venue catches up.
+	if pending := exec.PendingOrdersCount(); pending != 1 {
+		t.Fatalf("PendingOrdersCount = %d, want 1 (pending must survive a silent venue)", pending)
+	}
+}
+
+func TestRealExecutor_SyncPositions_KeepsSnapshotWhenAllRowsZeroPrice(t *testing.T) {
+	// Once a position has been confirmed we must never wipe the book
+	// just because the venue briefly returns the same row with
+	// Price=0 (defence in depth against a venue settlement race).
+	// First sync confirms; second sync returns Price=0 only; the
+	// previous snapshot must survive.
+	visible := true
+	confirmedPrice := 9219.0
+	mock := &mockOrderClient{
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			price := confirmedPrice
+			if !visible {
+				price = 0
+			}
+			return []entity.Position{{
+				ID:              999,
+				SymbolID:        10,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           price,
+				RemainingAmount: 0.3,
+			}}, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("sync 1: %v", err)
+	}
+	if positions := exec.Positions(); len(positions) != 1 {
+		t.Fatalf("first sync should confirm 1 position, got %d", len(positions))
+	}
+
+	// venue regresses to Price=0 — must not drop the confirmed snapshot.
+	visible = false
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("sync 2: %v", err)
+	}
+	positions := exec.Positions()
+	if len(positions) != 1 || positions[0].EntryPrice != confirmedPrice {
+		t.Fatalf("snapshot lost during venue regression: positions = %+v", positions)
+	}
+}
+
+func TestRealExecutor_ConfirmPendingViaSync_RespectsCancelledContext(t *testing.T) {
+	// A cancelled context (shutdown path) must short-circuit before
+	// hitting the venue, otherwise the sync would either block or
+	// surface a stale error.
+	venueCalls := 0
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 4242, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			venueCalls++
+			return nil, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+	exec.recordPending(4242, 10, entity.OrderSideBuy, 0.1, "test", 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := exec.confirmPendingViaSync(ctx, 4242); err == nil {
+		t.Fatalf("confirmPendingViaSync(cancelled) returned nil error")
+	}
+	if venueCalls != 0 {
+		t.Fatalf("venue was polled %d times despite cancelled context", venueCalls)
+	}
+}
+
+func TestRealExecutor_SyncPositions_DropsVenuePositionsWithZeroPrice(t *testing.T) {
+	// Defence in depth: even if the venue returns a position row with
+	// Price=0 (unfinished settlement) we must not surface it. The next
+	// sync will pick it up once Price > 0.
+	visible := false
+	mock := &mockOrderClient{
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			price := 0.0
+			if visible {
+				price = 9219
+			}
+			return []entity.Position{{
+				ID:              999,
+				SymbolID:        10,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           price,
+				RemainingAmount: 0.3,
+			}}, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("sync 1: %v", err)
+	}
+	if positions := exec.Positions(); len(positions) != 0 {
+		t.Fatalf("first sync: Positions() len = %d, want 0 (venue price was 0)", len(positions))
+	}
+
+	visible = true
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("sync 2: %v", err)
 	}
 	positions := exec.Positions()
 	if len(positions) != 1 || positions[0].EntryPrice != 9219 {
-		t.Fatalf("EntryPrice = %v, want 9219 (the actual fill, not the signalPrice 9168.4)",
-			positions[0].EntryPrice)
+		t.Fatalf("second sync: positions = %+v, want one with EntryPrice=9219", positions)
 	}
 }
 
-func TestRealExecutor_OpenMarket_FillPriceFallsBackWhenVenueSilent(t *testing.T) {
-	// If both submit and GetOrders never expose a price, the executor must
-	// not silently corrupt the position book: we fall back to signalPrice
-	// (the only price we have) and the upstream WARN log makes the bad state
-	// observable. SyncPositions reconciles it on the next venue sync.
-	mock := &mockOrderClientWithFills{}
-	mock.createOrderFn = func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
-		return []entity.Order{{ID: 999, Price: 0}}, nil
-	}
-	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
-		return []entity.Order{{ID: 999, Price: 0, RemainingAmount: 0}}, nil
+func TestRealExecutor_SyncPositions_ClearsPendingByOrderIDNotPositionID(t *testing.T) {
+	// Rakuten distinguishes Position.ID (the position record) from
+	// Position.OrderID (the parent venue order). pendingOrders is keyed
+	// by the venue OrderID we got back from CreateOrder; the sync must
+	// match against `ap.OrderID`, not `ap.ID`. A regression that
+	// matched on `ap.ID` would silently leak pending entries every
+	// time the venue's PositionID happened to differ from its OrderID
+	// (which is the normal case for Rakuten Wallet).
+	venueOrderID := int64(7777)
+	venuePositionID := int64(880811) // intentionally != OrderID
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: venueOrderID, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return []entity.Position{{
+				ID:              venuePositionID,
+				OrderID:         venueOrderID,
+				SymbolID:        10,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           9219,
+				RemainingAmount: 0.1,
+			}}, nil
+		},
 	}
 	exec := NewRealExecutor(mock, 10, 0)
-	exec.pollInterval = 1 * time.Millisecond
 
-	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4, 0.3, "test", 0)
-	if err != nil {
+	if _, err := exec.Open(10, entity.OrderSideBuy, 9168, 0.1, "test", 0); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if ev.Price != 9168.4 {
-		t.Fatalf("ev.Price = %v, want signalPrice 9168.4 (fallback)", ev.Price)
+	if pending := exec.PendingOrdersCount(); pending != 0 {
+		t.Fatalf("PendingOrdersCount = %d, want 0 (venue confirmed the OrderID even though PositionID differs)", pending)
 	}
 }
 
-func TestRealExecutor_OpenMarket_FillPriceUsesSubmitResponseWhenPopulated(t *testing.T) {
-	// Most happy-path: submit response already carries Price>0. resolveFillPrice
-	// must short-circuit on it without polling GetOrders.
-	getOrdersCalls := 0
-	mock := &mockOrderClientWithFills{}
-	mock.createOrderFn = func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
-		return []entity.Order{{ID: 999, Price: 9219}}, nil
-	}
-	mock.getOrdersFn = func(_ context.Context, _ int64) ([]entity.Order, error) {
-		getOrdersCalls++
-		return nil, fmt.Errorf("should not be called")
+func TestRealExecutor_SyncPositions_ClearsPendingForSplitFills(t *testing.T) {
+	// One submitted OrderID can yield multiple confirmed Positions when
+	// the venue fills the order in slices. Every child Position carries
+	// the same parent OrderID, so a single pending entry must clear and
+	// all positions must be visible to Risk / Exit handlers.
+	parentOrderID := int64(4242)
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: parentOrderID, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return []entity.Position{
+				{ID: 100001, OrderID: parentOrderID, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9212, RemainingAmount: 0.4},
+				{ID: 100002, OrderID: parentOrderID, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9218, RemainingAmount: 0.2},
+				{ID: 100003, OrderID: parentOrderID, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9219, RemainingAmount: 0.3},
+			}, nil
+		},
 	}
 	exec := NewRealExecutor(mock, 10, 0)
-	exec.pollInterval = 1 * time.Millisecond
 
-	ev, err := exec.Open(10, entity.OrderSideBuy, 9168.4, 0.3, "test", 0)
-	if err != nil {
+	if _, err := exec.Open(10, entity.OrderSideBuy, 9168, 0.9, "test", 0); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	if ev.Price != 9219 {
-		t.Fatalf("ev.Price = %v, want 9219 (from submit response, no polling needed)", ev.Price)
+	if pending := exec.PendingOrdersCount(); pending != 0 {
+		t.Fatalf("split fill should clear the single pending entry: PendingOrdersCount = %d, want 0", pending)
 	}
-	if getOrdersCalls != 0 {
-		t.Fatalf("GetOrders polled %d times; want 0 (submit already had price)", getOrdersCalls)
+	positions := exec.Positions()
+	if len(positions) != 3 {
+		t.Fatalf("split fill should produce 3 positions, got %d", len(positions))
+	}
+	for _, p := range positions {
+		if p.EntryPrice <= 0 {
+			t.Fatalf("confirmed-only contract violated for split fill: position %+v", p)
+		}
+	}
+}
+
+func TestRealExecutor_SweepStalePending_LogsAgedEntries(t *testing.T) {
+	// Pending entries that survive past the TTL must be visible to the
+	// operator. SweepStalePending only logs (no GC): the next venue
+	// sync is still responsible for removing the entry when the venue
+	// confirms or disowns it.
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 7777, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return nil, nil // venue is silent → pending survives
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+	exec.pendingTTL = 10 * time.Millisecond
+
+	if _, err := exec.Open(10, entity.OrderSideBuy, 100, 0.1, "test", 0); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Inside TTL: no sweep yet.
+	if stale := exec.SweepStalePending(5); len(stale) != 0 {
+		t.Fatalf("inside TTL: stale = %v, want empty", stale)
+	}
+	// Past TTL: one stale entry observed with its identifying details.
+	stale := exec.SweepStalePending(1_000)
+	if len(stale) != 1 {
+		t.Fatalf("past TTL: len(stale) = %d, want 1", len(stale))
+	}
+	if stale[0].OrderID != 7777 {
+		t.Fatalf("stale[0].OrderID = %d, want 7777", stale[0].OrderID)
+	}
+	if stale[0].AgeMs <= 0 {
+		t.Fatalf("stale[0].AgeMs = %d, want > 0", stale[0].AgeMs)
 	}
 }
