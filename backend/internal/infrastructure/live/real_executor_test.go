@@ -1165,3 +1165,37 @@ func TestRealExecutor_SweepStalePending_LogsAgedEntries(t *testing.T) {
 		t.Fatalf("stale[0].AgeMs = %d, want > 0", stale[0].AgeMs)
 	}
 }
+
+// === Live vs Backtest contract parity (ADR #260 PR #3) ===
+//
+// The same AssertPositionsContract helper is invoked from
+// internal/infrastructure/backtest/simulator_test.go so any regression in
+// either executor — live or backtest — surfaces as the same failure
+// mode. This is the mechanical guarantee promised in ADR §3.1 rule 6.
+
+func TestRealExecutor_PositionsContract_AfterVenueConfirmedOpen(t *testing.T) {
+	mock := &mockOrderClient{
+		createOrderFn: func(_ context.Context, _ entity.OrderRequest) ([]entity.Order, error) {
+			return []entity.Order{{ID: 999, Price: 0}}, nil
+		},
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return []entity.Position{{
+				ID:              999,
+				OrderID:         999,
+				SymbolID:        10,
+				OrderSide:       entity.OrderSideBuy,
+				Price:           9219,
+				RemainingAmount: 0.1,
+				CreatedAt:       0,
+			}}, nil
+		},
+	}
+	exec := NewRealExecutor(mock, 10, 0)
+
+	if _, err := exec.Open(10, entity.OrderSideBuy, 9168, 0.1, "test", 0); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if v := eventengine.AssertPositionsContract(t, exec.Positions()); v != 0 {
+		t.Fatalf("contract violations: %d", v)
+	}
+}
