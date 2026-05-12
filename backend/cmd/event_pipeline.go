@@ -793,15 +793,18 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	bus.Register(entity.EventTypeDecision, 30, riskHandler)
 	bus.Register(entity.EventTypeOrder, 50, riskHandler)
 
-	// ExitPlan shadow (priority 60): OrderEvent をシャドウで listen して
-	// ExitPlan の作成・close だけ行う。発注パスには干渉しない。Phase 2b で
-	// 出口判定本体を Exit レイヤに移管したらこの shadow は退役する。
+	// ExitPlan shadow (priority 60): 新規 plan は PositionConfirmedEvent から
+	// venue 真値の EntryPrice で作成 (ADR #260 PR #2)。close は引き続き
+	// OrderEvent.ClosedPositionID で行う (close 価格は SL/TP 判定に使われない)。
+	// 発注パスには干渉しない。Phase 2b で出口判定本体を Exit レイヤに移管
+	// したらこの shadow は退役する。
 	if p.exitPlanRepo != nil {
 		shadow := usecaseexitplan.NewShadowHandler(usecaseexitplan.ShadowHandlerConfig{
 			Repo:   p.exitPlanRepo,
 			Policy: snap.riskPolicy,
 		})
 		bus.Register(entity.EventTypeOrder, 60, shadow)
+		bus.Register(entity.EventTypePositionConfirmed, 60, shadow)
 
 		// ATRSource (priority 26): IndicatorEvent から ATR を吸い上げて
 		// ExitPlan の動的計算に使う in-memory 値を保持する。indicatorEventTap
@@ -858,6 +861,21 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 	}
 
 	engine := eventengine.NewEventEngine(bus)
+
+	// Connect the executor's PositionConfirmedSink to the engine so that
+	// each newly confirmed venue position dispatches through the bus.
+	// SyncPositions now emits PositionConfirmedEvent in its post-unlock
+	// phase, and the ExitPlan shadow handler (registered on this bus)
+	// listens for those events to create plans from the real fill price
+	// — replacing the old OrderEvent.Price path that was vulnerable to
+	// the signalPrice fallback bug.
+	//
+	// The dispatcher inherits the pipeline ctx so that an in-flight
+	// dispatch is cancelled when the pipeline is stopped. Without this
+	// linkage SyncPositions could otherwise fire events into a
+	// dispatcher whose lifecycle has already ended (Codex review on
+	// PR #2 flagged this as a blocker).
+	executor.SetPositionConfirmedSink(&positionConfirmedDispatcher{engine: engine, ctx: ctx})
 
 	// Subscribe to real-time ticker stream.
 	tickerCh := p.marketDataSvc.SubscribeTicker()
@@ -1215,4 +1233,39 @@ func (p *positionUpdatePublisher) PublishPositionUpdate(symbolID int64, position
 	if err := p.hub.PublishData("position_update", symbolID, positions); err != nil {
 		slog.Warn("event-pipeline: position_update publish failed", "error", err)
 	}
+}
+
+// positionConfirmedDispatcher forwards a PositionConfirmedEvent through
+// the event engine so registered handlers (e.g. ExitPlan shadow) receive
+// it. The dispatcher carries the pipeline's ctx so a shutdown short-
+// circuits any in-flight dispatch, and runs each event in its own
+// goroutine so a slow handler does not block the sync loop.
+type positionConfirmedDispatcher struct {
+	engine *eventengine.EventEngine
+	ctx    context.Context
+}
+
+func (d *positionConfirmedDispatcher) PublishPositionConfirmed(ev entity.PositionConfirmedEvent) {
+	if d == nil || d.engine == nil {
+		return
+	}
+	ctx := d.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		// Pipeline already shutting down. Drop the event rather than
+		// scheduling a goroutine that would race against teardown.
+		slog.Debug("event-pipeline: position_confirmed dropped, pipeline ctx already done",
+			"positionID", ev.PositionID, "err", err,
+		)
+		return
+	}
+	go func() {
+		if err := d.engine.Run(ctx, []entity.Event{ev}); err != nil {
+			slog.Warn("event-pipeline: position_confirmed dispatch failed",
+				"err", err, "positionID", ev.PositionID,
+			)
+		}
+	}()
 }

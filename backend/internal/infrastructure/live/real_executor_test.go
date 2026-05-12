@@ -879,6 +879,118 @@ func TestRealExecutor_SyncPositions_KeepsSnapshotWhenAllRowsZeroPrice(t *testing
 	}
 }
 
+// captureSink records each PositionConfirmedEvent the executor emits.
+type captureSink struct {
+	mu     sync.Mutex
+	events []entity.PositionConfirmedEvent
+}
+
+func (c *captureSink) PublishPositionConfirmed(ev entity.PositionConfirmedEvent) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, ev)
+}
+
+func (c *captureSink) snapshot() []entity.PositionConfirmedEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]entity.PositionConfirmedEvent, len(c.events))
+	copy(out, c.events)
+	return out
+}
+
+func TestRealExecutor_SyncPositions_EmitsPositionConfirmedForNewFill(t *testing.T) {
+	// ADR #260 PR #2: SyncPositions must emit one PositionConfirmedEvent
+	// per newly-observed PositionID so the ExitPlan shadow (and any
+	// future Position-driven Risk layer) can act on the real venue
+	// fill price. Existing positions must NOT re-emit on subsequent
+	// syncs — that would cause duplicate plans.
+	state := "fresh"
+	mock := &mockOrderClient{
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			switch state {
+			case "fresh":
+				return []entity.Position{
+					{ID: 1001, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9219, RemainingAmount: 0.1},
+					{ID: 1002, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9220, RemainingAmount: 0.2},
+				}, nil
+			case "stable":
+				// same two positions — must NOT re-emit.
+				return []entity.Position{
+					{ID: 1001, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9219, RemainingAmount: 0.1},
+					{ID: 1002, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9220, RemainingAmount: 0.2},
+				}, nil
+			case "added":
+				// a third confirmed position — only that one should emit.
+				return []entity.Position{
+					{ID: 1001, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9219, RemainingAmount: 0.1},
+					{ID: 1002, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 9220, RemainingAmount: 0.2},
+					{ID: 1003, OrderID: 777, SymbolID: 10, OrderSide: entity.OrderSideSell, Price: 9300, RemainingAmount: 0.5},
+				}, nil
+			}
+			return nil, nil
+		},
+	}
+	sink := &captureSink{}
+	exec := NewRealExecutor(mock, 10, 0, WithPositionConfirmedSink(sink))
+
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("fresh sync: %v", err)
+	}
+	if got := sink.snapshot(); len(got) != 2 {
+		t.Fatalf("fresh sync: emitted %d events, want 2", len(got))
+	}
+	for _, ev := range sink.snapshot() {
+		if ev.EntryPrice <= 0 || ev.OrderID == 0 || ev.PositionID == 0 {
+			t.Errorf("emitted event missing required fields: %+v", ev)
+		}
+	}
+
+	state = "stable"
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("stable sync: %v", err)
+	}
+	if got := sink.snapshot(); len(got) != 2 {
+		t.Fatalf("stable sync re-emitted; cumulative = %d, want still 2", len(got))
+	}
+
+	state = "added"
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("added sync: %v", err)
+	}
+	got := sink.snapshot()
+	if len(got) != 3 {
+		t.Fatalf("added sync: cumulative emissions = %d, want 3 (only the new PositionID)", len(got))
+	}
+	last := got[len(got)-1]
+	if last.PositionID != 1003 || last.OrderID != 777 || last.Side != entity.OrderSideSell {
+		t.Errorf("added sync: third event identifies wrong position: %+v", last)
+	}
+}
+
+func TestRealExecutor_SyncPositions_DoesNotEmitForSkippedZeroPriceRows(t *testing.T) {
+	// Price<=0 rows are filtered out for the snapshot; they must also
+	// not generate PositionConfirmedEvent. Otherwise the ExitPlan
+	// shadow would receive an invalid event and either reject it (best
+	// case, log spam) or persist a degenerate plan.
+	mock := &mockOrderClient{
+		getPositionsFn: func(_ context.Context, _ int64) ([]entity.Position, error) {
+			return []entity.Position{
+				{ID: 1001, OrderID: 555, SymbolID: 10, OrderSide: entity.OrderSideBuy, Price: 0, RemainingAmount: 0.1},
+			}, nil
+		},
+	}
+	sink := &captureSink{}
+	exec := NewRealExecutor(mock, 10, 0, WithPositionConfirmedSink(sink))
+
+	if err := exec.SyncPositions(context.Background()); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got := sink.snapshot(); len(got) != 0 {
+		t.Fatalf("zero-price row should not emit confirmation; got %d events: %+v", len(got), got)
+	}
+}
+
 func TestRealExecutor_ConfirmPendingViaSync_RespectsCancelledContext(t *testing.T) {
 	// A cancelled context (shutdown path) must short-circuit before
 	// hitting the venue, otherwise the sync would either block or

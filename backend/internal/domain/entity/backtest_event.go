@@ -1,15 +1,16 @@
 package entity
 
 const (
-	EventTypeCandle       = "candle"
-	EventTypeIndicator    = "indicator"
-	EventTypeTick         = "tick"
-	EventTypeSignal       = "signal"
-	EventTypeMarketSignal = "market_signal"
-	EventTypeDecision     = "decision"
-	EventTypeApproved     = "approved_signal"
-	EventTypeRejected     = "rejected_signal"
-	EventTypeOrder        = "order"
+	EventTypeCandle            = "candle"
+	EventTypeIndicator         = "indicator"
+	EventTypeTick              = "tick"
+	EventTypeSignal            = "signal"
+	EventTypeMarketSignal      = "market_signal"
+	EventTypeDecision          = "decision"
+	EventTypeApproved          = "approved_signal"
+	EventTypeRejected          = "rejected_signal"
+	EventTypeOrder             = "order"
+	EventTypePositionConfirmed = "position_confirmed"
 )
 
 // Event is a minimal contract used by the backtest event bus.
@@ -112,3 +113,30 @@ type OrderEvent struct {
 
 func (e OrderEvent) EventType() string     { return EventTypeOrder }
 func (e OrderEvent) EventTimestamp() int64 { return e.Timestamp }
+
+// PositionConfirmedEvent is emitted when the executor observes that the
+// venue has confirmed a fill — i.e. a new Position has appeared in
+// Positions() with EntryPrice > 0. This is the authoritative trigger for
+// downstream handlers (Risk, Exit, ExitPlan shadow) that need the real
+// fill price, not the submit-time signalPrice.
+//
+// Per docs/design/2026-05-12-position-confirmed-only.md, the OrderEvent
+// path remains for logging / dashboard purposes, but anything that
+// depends on EntryPrice for correctness (TP / SL anchoring) must consume
+// this event instead.
+//
+// One submitted order may produce multiple PositionConfirmedEvent payloads
+// when the venue splits the fill across several PositionIDs.
+type PositionConfirmedEvent struct {
+	PositionID     int64
+	OrderID        int64
+	SymbolID       int64
+	Side           OrderSide
+	EntryPrice     float64
+	Amount         float64
+	EntryTimestamp int64
+	Timestamp      int64
+}
+
+func (e PositionConfirmedEvent) EventType() string     { return EventTypePositionConfirmed }
+func (e PositionConfirmedEvent) EventTimestamp() int64 { return e.Timestamp }

@@ -30,6 +30,21 @@ type PositionChangePublisher interface {
 	PublishPositionUpdate(symbolID int64, positions []eventengine.Position)
 }
 
+// PositionConfirmedSink receives one PositionConfirmedEvent per newly
+// confirmed position discovered during SyncPositions. It is the
+// authoritative hook for downstream handlers (ExitPlan shadow, Risk
+// scaffolding) that need to act on the real venue fill price rather than
+// the submit-time signalPrice. See
+// docs/design/2026-05-12-position-confirmed-only.md.
+//
+// Implementations must be non-blocking — the executor calls them while
+// holding no lock, but a slow sink would delay the next SyncPositions
+// invocation. A typical implementation hands the event off to the
+// event bus and returns.
+type PositionConfirmedSink interface {
+	PublishPositionConfirmed(ev entity.PositionConfirmedEvent)
+}
+
 // RealExecutor implements eventengine.OrderExecutor by executing real orders
 // via the Rakuten API OrderClient.
 //
@@ -72,6 +87,12 @@ type RealExecutor struct {
 	// positionPublisher is invoked from SyncPositions when the local view
 	// changes (count or amount), so the dashboard updates immediately.
 	positionPublisher PositionChangePublisher
+	// positionConfirmedSink receives a PositionConfirmedEvent for each
+	// newly confirmed position observed during SyncPositions. Optional
+	// (nil = no event-bus integration); when set, downstream handlers
+	// like the ExitPlan shadow can stop relying on OrderEvent.Price and
+	// act on the real venue fill instead.
+	positionConfirmedSink PositionConfirmedSink
 	// pendingTTL bounds how long an unconfirmed order may sit in
 	// pendingOrders before SweepStalePending logs it. Defaults to 60 s.
 	pendingTTL time.Duration
@@ -125,6 +146,24 @@ func WithPollInterval(d time.Duration) RealExecutorOption {
 // push immediate updates to the realtime hub when the venue state changes.
 func WithPositionPublisher(p PositionChangePublisher) RealExecutorOption {
 	return func(r *RealExecutor) { r.positionPublisher = p }
+}
+
+// WithPositionConfirmedSink wires a sink that receives one
+// PositionConfirmedEvent per newly confirmed position. This is the
+// integration point for the ExitPlan shadow / Risk scaffolding to react
+// on real venue fills rather than submit-time OrderEvent prices.
+func WithPositionConfirmedSink(sink PositionConfirmedSink) RealExecutorOption {
+	return func(r *RealExecutor) { r.positionConfirmedSink = sink }
+}
+
+// SetPositionConfirmedSink installs (or replaces) the sink at runtime.
+// The pipeline constructs the EventEngine after the executor, so this
+// setter lets the wiring connect the two without forcing a constructor
+// dependency cycle. Passing nil clears the sink.
+func (r *RealExecutor) SetPositionConfirmedSink(sink PositionConfirmedSink) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.positionConfirmedSink = sink
 }
 
 func NewRealExecutor(orderClient repository.OrderClient, symbolID int64, spreadPercent float64, opts ...RealExecutorOption) *RealExecutor {
@@ -633,6 +672,15 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 		r.mu.Unlock()
 		return nil
 	}
+	// Compute newly-confirmed positions so we can emit one
+	// PositionConfirmedEvent per new fill. We snapshot the previous IDs
+	// before swapping the slice, then walk apiPositions so the emitted
+	// event carries the parent OrderID directly (synced is the local
+	// projection and does not preserve OrderID).
+	previousIDs := make(map[int64]struct{}, len(r.positions))
+	for _, p := range r.positions {
+		previousIDs[p.PositionID] = struct{}{}
+	}
 	changed := positionsChanged(r.positions, synced)
 	r.positions = synced
 	// Any pending order whose OrderID now matches a venue-confirmed
@@ -654,7 +702,36 @@ func (r *RealExecutor) SyncPositions(ctx context.Context) error {
 		}
 	}
 	publisher := r.positionPublisher
+	confirmedSink := r.positionConfirmedSink
+	// Build the list of confirmed events while still under the lock so
+	// the snapshot we hand off is consistent. We deliberately emit
+	// after Unlock so a slow sink cannot block subsequent syncs.
+	var confirmedEvents []entity.PositionConfirmedEvent
+	if confirmedSink != nil {
+		for _, ap := range apiPositions {
+			if ap.Price <= 0 {
+				continue
+			}
+			if _, existed := previousIDs[ap.ID]; existed {
+				continue
+			}
+			confirmedEvents = append(confirmedEvents, entity.PositionConfirmedEvent{
+				PositionID:     ap.ID,
+				OrderID:        ap.OrderID,
+				SymbolID:       ap.SymbolID,
+				Side:           ap.OrderSide,
+				EntryPrice:     ap.Price,
+				Amount:         ap.RemainingAmount,
+				EntryTimestamp: ap.CreatedAt,
+				Timestamp:      time.Now().UnixMilli(),
+			})
+		}
+	}
 	r.mu.Unlock()
+
+	for _, ev := range confirmedEvents {
+		confirmedSink.PublishPositionConfirmed(ev)
+	}
 
 	slog.Info("positions synced from API",
 		"symbolID", r.symbolID,
