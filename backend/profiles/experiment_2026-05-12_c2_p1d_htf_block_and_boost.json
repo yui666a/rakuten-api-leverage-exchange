@@ -1,6 +1,6 @@
 {
-  "name": "production",
-  "description": "Promoted on 2026-05-12 as v9 — supersedes v8 (LTC/JPY × PT15M @ ¥60k). Source: experiment_2026-05-12_p5b_tp22_r200 (cycle 2026-05-12_aggressive, stage5). Differences vs v8 (production.json.bak.20260512): take_profit_percent 4→2.2 (faster scalp, allows ~24 trades/月 vs ~10), stop_loss_percent 14→10 (tighter loss cap), trailing_atr_multiplier 2.5→2.0 (cosmetic — has known bug in handler.go:946 trailingDistance where percentDist always wins at LTC scale), risk_per_trade_pct 0.75→2.00 (leverage exploit DD headroom). 5-period verification (initialBalance=60,000 JPY, as-of 2026-05-12): 1m +0.2%/DD 1.8%, 3m +8.9%/DD 2.6%, 6m +20.4%/DD 4.4%, 1y +26.0%/DD 7.0%, 2y +67.7%/DD 8.0%. All 5 windows positive, all 5 windows MaxDD ≤ 25%. PF 2y=1.39, win rate 86%, biweekly win rate 76%. Walk-forward 6 windows (IS=6m/OOS=3m): geomMean +1.2%/3m窓, worstReturn -5.4%, worstDD 10.2%, allPositive=false → forward 期待値は年率 10-20% (overfit補正後). Known limitations: ¥60k equity-scale specific (r=2.0 ≈ ¥1,200/trade risk); trailing_atr is dead config due to handler bug; signal_source タグ未実装 (内訳が unknown 一括); current OOS window 2026-02→05 is unfavorable regime (-1.1%/PF 0.73). See docs/pdca/2026-05-12_aggressive_search.md. Previous v8 saved as production.json.bak.20260512.",
+  "name": "experiment_2026-05-12_c2_p1d_htf_block_and_boost",
+  "description": "p5a + block_counter_trend=true + alignment_boost 0.3 (両刀)",
   "indicators": {
     "sma_short": 20,
     "sma_long": 50,
@@ -52,7 +52,7 @@
     "entry_cooldown_sec": 1800,
     "position_sizing": {
       "mode": "risk_pct",
-      "risk_per_trade_pct": 2.00,
+      "risk_per_trade_pct": 1.50,
       "max_position_pct_of_equity": 20,
       "min_lot": 0.1,
       "lot_step": 0.1,
@@ -66,7 +66,7 @@
   },
   "htf_filter": {
     "enabled": true,
-    "block_counter_trend": false,
-    "alignment_boost": 0.1
+    "block_counter_trend": true,
+    "alignment_boost": 0.3
   }
 }
