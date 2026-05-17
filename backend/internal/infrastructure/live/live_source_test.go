@@ -355,6 +355,102 @@ func TestLiveSource_SeedFromMinuteCandles_FoldsCurrentPeriodOnly(t *testing.T) {
 	}
 }
 
+// TestLiveSource_HandleTick_BarRangeFromCurrentCandle_NotTicker24h は
+// Issue #266 の回帰テスト。楽天 ticker.High/Low は 24h ローリングレンジで、
+// これを TickEvent.BarHigh/BarLow に渡すと SL/TP 即発火事故 (2026-05-12,
+// 2026-05-17) を招いた。BarHigh/BarLow は現在進行中バー (CandleBuilder の
+// currentCandle) 由来でなければならない。
+func TestLiveSource_HandleTick_BarRangeFromCurrentCandle_NotTicker24h(t *testing.T) {
+	src := NewLiveSource(7, "PT15M")
+	base := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
+
+	// 24h ticker high/low は意図的に Last から大きく離す。バグがあると
+	// この値が BarHigh/BarLow に漏れて、即 TP/SL を踏む。
+	const ticker24hHigh = 99999.0
+	const ticker24hLow = 1.0
+
+	// Tick 1: 単独 tick → BarHigh == BarLow == Last (8884.5).
+	t1 := entity.Ticker{
+		SymbolID:  7,
+		Last:      8884.5,
+		High:      ticker24hHigh,
+		Low:       ticker24hLow,
+		Volume:    100,
+		Timestamp: base.UnixMilli(),
+	}
+	events := src.HandleTick(t1)
+	tickEv := events[0].(entity.TickEvent)
+	if tickEv.BarHigh != 8884.5 || tickEv.BarLow != 8884.5 {
+		t.Fatalf("tick1: expected BarHigh=BarLow=8884.5 (single-tick bar), got high=%f low=%f", tickEv.BarHigh, tickEv.BarLow)
+	}
+	if tickEv.BarHigh == ticker24hHigh || tickEv.BarLow == ticker24hLow {
+		t.Fatalf("tick1: BarHigh/BarLow leaked from 24h ticker (high=%f low=%f) — regression of Issue #266", tickEv.BarHigh, tickEv.BarLow)
+	}
+
+	// Tick 2: 同じバー内で上昇 → BarHigh 更新、BarLow は据え置き。
+	t2 := entity.Ticker{
+		SymbolID:  7,
+		Last:      8890.0,
+		High:      ticker24hHigh,
+		Low:       ticker24hLow,
+		Volume:    100,
+		Timestamp: base.Add(1 * time.Minute).UnixMilli(),
+	}
+	events = src.HandleTick(t2)
+	tickEv = events[0].(entity.TickEvent)
+	if tickEv.BarHigh != 8890.0 {
+		t.Fatalf("tick2: expected BarHigh=8890.0 (updated by this tick), got %f", tickEv.BarHigh)
+	}
+	if tickEv.BarLow != 8884.5 {
+		t.Fatalf("tick2: expected BarLow=8884.5 (unchanged from tick1), got %f", tickEv.BarLow)
+	}
+
+	// Tick 3: 下落 → BarLow 更新、BarHigh は据え置き。
+	t3 := entity.Ticker{
+		SymbolID:  7,
+		Last:      8830.0,
+		High:      ticker24hHigh,
+		Low:       ticker24hLow,
+		Volume:    100,
+		Timestamp: base.Add(2 * time.Minute).UnixMilli(),
+	}
+	events = src.HandleTick(t3)
+	tickEv = events[0].(entity.TickEvent)
+	if tickEv.BarHigh != 8890.0 {
+		t.Fatalf("tick3: expected BarHigh=8890.0 (unchanged), got %f", tickEv.BarHigh)
+	}
+	if tickEv.BarLow != 8830.0 {
+		t.Fatalf("tick3: expected BarLow=8830.0 (updated by this tick), got %f", tickEv.BarLow)
+	}
+
+	// 重要: TP=Last*1.022=9079.95 を 24h high=99999 が常に超えるが、
+	// BarHigh は 8890 で止まっており TP は発火しない、というのが本修正の要点。
+	tpPrice := 8884.5 * 1.022
+	if tickEv.BarHigh >= tpPrice {
+		t.Fatalf("tick3 BarHigh=%f would falsely trigger TP at %f — Issue #266 regression", tickEv.BarHigh, tpPrice)
+	}
+}
+
+// TestLiveSource_HandleTick_BarRangeResetOnPeriodBoundary はバー跨ぎで
+// BarHigh/BarLow が新バーから取り直されることを確認する。前バーの High/Low
+// が次バー初回 tick に持ち越されると、新規エントリ直後の SL/TP 判定が
+// 歪むため、このリセット挙動は契約として固定する。
+func TestLiveSource_HandleTick_BarRangeResetOnPeriodBoundary(t *testing.T) {
+	src := NewLiveSource(7, "PT15M")
+	base := time.Date(2026, 4, 15, 10, 0, 0, 0, time.UTC)
+
+	// Bar 1: 100 → 200 まで触る。
+	_ = src.HandleTick(entity.Ticker{SymbolID: 7, Last: 100, Timestamp: base.UnixMilli()})
+	_ = src.HandleTick(entity.Ticker{SymbolID: 7, Last: 200, Timestamp: base.Add(1 * time.Minute).UnixMilli()})
+
+	// Bar 2 の最初の tick (バー跨ぎ) → BarHigh=BarLow=Last (50)。
+	events := src.HandleTick(entity.Ticker{SymbolID: 7, Last: 50, Timestamp: base.Add(15 * time.Minute).UnixMilli()})
+	tickEv := events[0].(entity.TickEvent)
+	if tickEv.BarHigh != 50 || tickEv.BarLow != 50 {
+		t.Fatalf("first tick of new bar: expected BarHigh=BarLow=50, got high=%f low=%f (prev bar leak?)", tickEv.BarHigh, tickEv.BarLow)
+	}
+}
+
 func TestLiveSource_SeedFromMinuteCandles_NoCandlesIsNoOp(t *testing.T) {
 	src := NewLiveSource(7, "PT15M")
 	now := time.Date(2026, 4, 27, 10, 23, 0, 0, time.UTC)
