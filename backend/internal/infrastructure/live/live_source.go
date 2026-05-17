@@ -82,8 +82,22 @@ func (s *LiveSource) SeedFromMinuteCandles(now time.Time, minuteCandles []entity
 
 // HandleTick processes a real-time ticker and returns events to feed into EventEngine.
 // Every ticker produces a TickEvent. When a candle period closes, a CandleEvent is also emitted.
+//
+// TickEvent.BarHigh/BarLow は **現在進行中の primary 足 (CandleBuilder の
+// currentCandle)** から取得する。楽天 ticker.High/Low は 24h ローリングレンジで、
+// エントリー直後でも TP/SL 距離を即 over するため SL/TP 即発火事故を招く
+// (Issue #266 / 2026-05-12, 2026-05-17 本番事故)。CandleBuilder.AddTickAndSnapshot
+// は AddTick と High/Low スナップショット取得を 1 ロック内で行うので、tick
+// 反映と TickEvent への詰め込みの間に他 tick が割り込んで snapshot が後ろに
+// ズレることはない。
 func (s *LiveSource) HandleTick(ticker entity.Ticker) []entity.Event {
 	var events []entity.Event
+
+	// Feed into candle builder atomically with snapshot retrieval; the
+	// snapshot reflects this tick already applied (so the very first tick
+	// of a bar still yields BarHigh == BarLow == ticker.Last, matching
+	// backtest semantics for a single-tick bar).
+	candleEvent, barHigh, barLow := s.candleBuilder.AddTickAndSnapshot(ticker)
 
 	// Always emit a TickEvent for SL/TP checking.
 	tickEvent := entity.TickEvent{
@@ -92,13 +106,12 @@ func (s *LiveSource) HandleTick(ticker entity.Ticker) []entity.Event {
 		Price:     ticker.Last,
 		Timestamp: ticker.Timestamp,
 		TickType:  "live",
-		BarLow:    ticker.Low,
-		BarHigh:   ticker.High,
+		BarLow:    barLow,
+		BarHigh:   barHigh,
 	}
 	events = append(events, tickEvent)
 
-	// Feed into candle builder; may produce a CandleEvent on period boundary.
-	if candleEvent := s.candleBuilder.AddTick(ticker); candleEvent != nil {
+	if candleEvent != nil {
 		candleEvent.Interval = s.primaryInterval
 		events = append(events, *candleEvent)
 	}
@@ -141,6 +154,18 @@ func (b *CandleBuilder) SeedPartial(periodStart time.Time, candle entity.Candle)
 
 // AddTick ingests a ticker. Returns a CandleEvent if the current period has closed, nil otherwise.
 func (b *CandleBuilder) AddTick(ticker entity.Ticker) *entity.CandleEvent {
+	ev, _, _ := b.AddTickAndSnapshot(ticker)
+	return ev
+}
+
+// AddTickAndSnapshot is AddTick plus an atomic snapshot of the now-active
+// bar's High/Low after this tick is applied. Both values come from the same
+// lock acquisition so callers can build a TickEvent whose BarHigh/BarLow
+// truly reflect the in-progress bar that includes this tick. When the tick
+// crosses a period boundary, the returned snapshot describes the freshly
+// opened bar (single-tick, High == Low == ticker.Last), matching backtest
+// semantics for a single-tick bar.
+func (b *CandleBuilder) AddTickAndSnapshot(ticker entity.Ticker) (*entity.CandleEvent, float64, float64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -160,13 +185,13 @@ func (b *CandleBuilder) AddTick(ticker entity.Ticker) *entity.CandleEvent {
 			Volume: ticker.Volume,
 			Time:   periodStart.UnixMilli(),
 		}
-		return nil
+		return nil, b.currentCandle.High, b.currentCandle.Low
 	}
 
 	// If the tick is in the same period, update OHLCV.
 	if periodStart.Equal(b.currentStart) {
 		b.updateCandle(price, ticker.Volume)
-		return nil
+		return nil, b.currentCandle.High, b.currentCandle.Low
 	}
 
 	// Period boundary crossed: finalize current candle and emit event.
@@ -190,7 +215,7 @@ func (b *CandleBuilder) AddTick(ticker entity.Ticker) *entity.CandleEvent {
 		Interval:  "", // filled by LiveSource
 		Candle:    completed,
 		Timestamp: closedTimestamp,
-	}
+	}, b.currentCandle.High, b.currentCandle.Low
 }
 
 // periodStart returns the start of the period that contains the given time.
