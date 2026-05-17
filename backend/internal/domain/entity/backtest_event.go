@@ -43,7 +43,34 @@ type IndicatorEvent struct {
 func (e IndicatorEvent) EventType() string     { return EventTypeIndicator }
 func (e IndicatorEvent) EventTimestamp() int64 { return e.Timestamp }
 
-// TickEvent represents synthetic in-bar ticks for SL/TP simulation.
+// TickEvent represents in-bar ticks for SL/TP evaluation. Both backtest
+// (synthetic) and live (real WS) sources emit this event.
+//
+// BarHigh/BarLow contract (consumed by backtest.TickRiskHandler via
+// SelectSLTPExit: TP triggers when BarHigh >= takeProfitPrice for longs,
+// SL when BarLow <= stopLossPrice — and mirrored for shorts):
+//
+//   - **Backtest source** (backtest.handler emits synthetic ticks per bar):
+//     BarHigh/BarLow carry the **confirmed full-bar OHLC** of the candle
+//     this tick belongs to. The tick effectively replays a closed bar so
+//     SL/TP can be evaluated against the worst-case intra-bar extremes.
+//
+//   - **Live source** (infrastructure/live.LiveSource.HandleTick):
+//     BarHigh/BarLow carry the **in-progress current-bar OHLC** snapshot
+//     of CandleBuilder.currentCandle *after this tick is applied*. The
+//     range therefore grows monotonically within a bar and resets to
+//     High=Low=Last on the first tick of a new bar.
+//
+// The two semantics are asymmetric (backtest = confirmed final extremes /
+// live = monotonic in-progress extremes) but both satisfy the worst-case
+// SL/TP contract: any price the position has actually been exposed to
+// while the bar was active is included in the range, so the handler can
+// fire when it must. The live form is *strictly* safer than the backtest
+// form because the range is always a subset of the eventual confirmed
+// bar (no future ticks are pre-revealed).
+//
+// Live MUST NOT use 24h ticker.High/Low here — that caused Issue #266
+// (2026-05-12 and 2026-05-17 instant-TP incidents).
 type TickEvent struct {
 	SymbolID   int64
 	Interval   string

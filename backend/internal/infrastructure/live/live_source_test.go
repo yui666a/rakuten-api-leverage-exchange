@@ -451,6 +451,71 @@ func TestLiveSource_HandleTick_BarRangeResetOnPeriodBoundary(t *testing.T) {
 	}
 }
 
+// TestLiveSource_HandleTick_BarRangeAfterSeed は SeedFromMinuteCandles で
+// 前 14 分の OHLC を流し込んだ後、最初の live tick が seed 由来の High/Low
+// を引き継ぎ、24h ticker.High/Low に汚染されないことを固定する。再起動直後の
+// SL/TP 判定が seed 範囲のみで行われ、24h レンジが混入しないという契約。
+// Codex review (PR #267) で seed 経路に専用テストがないと指摘された。
+func TestLiveSource_HandleTick_BarRangeAfterSeed(t *testing.T) {
+	src := NewLiveSource(7, "PT15M")
+	now := time.Date(2026, 4, 27, 10, 23, 0, 0, time.UTC)
+
+	// Seed: 10:15-10:30 の現在進行中バーに 3 本の minute candle を畳む。
+	// 期待される seeded current bar: Open=200, High=220, Low=190, Close=192.
+	minutes := []entity.Candle{
+		{Open: 200, High: 210, Low: 195, Close: 205, Volume: 2, Time: time.Date(2026, 4, 27, 10, 15, 0, 0, time.UTC).UnixMilli()},
+		{Open: 205, High: 220, Low: 200, Close: 215, Volume: 3, Time: time.Date(2026, 4, 27, 10, 16, 0, 0, time.UTC).UnixMilli()},
+		{Open: 215, High: 218, Low: 190, Close: 192, Volume: 4, Time: time.Date(2026, 4, 27, 10, 17, 0, 0, time.UTC).UnixMilli()},
+	}
+	if folded := src.SeedFromMinuteCandles(now, minutes); folded != 3 {
+		t.Fatalf("folded count = %d, want 3", folded)
+	}
+
+	// 最初の live tick は seed 範囲の内側 (193)。BarHigh は seed の 220、
+	// BarLow は seed の 190 を引き継ぐべき。24h ticker.High/Low (99999/1) は
+	// 一切混入してはならない。
+	const ticker24hHigh = 99999.0
+	const ticker24hLow = 1.0
+	tick := entity.Ticker{
+		SymbolID:  7,
+		Last:      193,
+		High:      ticker24hHigh,
+		Low:       ticker24hLow,
+		Volume:    5,
+		Timestamp: time.Date(2026, 4, 27, 10, 24, 0, 0, time.UTC).UnixMilli(),
+	}
+	events := src.HandleTick(tick)
+	tickEv := events[0].(entity.TickEvent)
+
+	if tickEv.BarHigh != 220 {
+		t.Fatalf("post-seed first tick: BarHigh=%f, want 220 (seeded high)", tickEv.BarHigh)
+	}
+	if tickEv.BarLow != 190 {
+		t.Fatalf("post-seed first tick: BarLow=%f, want 190 (seeded low)", tickEv.BarLow)
+	}
+	if tickEv.BarHigh == ticker24hHigh || tickEv.BarLow == ticker24hLow {
+		t.Fatalf("post-seed first tick: 24h ticker range leaked (high=%f low=%f) — Issue #266 regression", tickEv.BarHigh, tickEv.BarLow)
+	}
+
+	// 続く live tick が seed 範囲外 (上抜け 225) → BarHigh のみ更新。
+	tick2 := entity.Ticker{
+		SymbolID:  7,
+		Last:      225,
+		High:      ticker24hHigh,
+		Low:       ticker24hLow,
+		Volume:    6,
+		Timestamp: time.Date(2026, 4, 27, 10, 25, 0, 0, time.UTC).UnixMilli(),
+	}
+	events = src.HandleTick(tick2)
+	tickEv = events[0].(entity.TickEvent)
+	if tickEv.BarHigh != 225 {
+		t.Fatalf("second post-seed tick: BarHigh=%f, want 225 (updated by this tick above seeded 220)", tickEv.BarHigh)
+	}
+	if tickEv.BarLow != 190 {
+		t.Fatalf("second post-seed tick: BarLow=%f, want 190 (seeded low unchanged)", tickEv.BarLow)
+	}
+}
+
 func TestLiveSource_SeedFromMinuteCandles_NoCandlesIsNoOp(t *testing.T) {
 	src := NewLiveSource(7, "PT15M")
 	now := time.Date(2026, 4, 27, 10, 23, 0, 0, time.UTC)
