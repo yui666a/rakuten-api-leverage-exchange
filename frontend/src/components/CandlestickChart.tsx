@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { createChart, CandlestickSeries, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer } from 'lightweight-charts'
+import { createChart, CandlestickSeries, LineSeries, TickMarkType, type IChartApi, type ISeriesApi, type CandlestickData, type LineData, type Time, type SeriesType, type ISeriesPrimitive, type SeriesAttachedParameter, type IPrimitivePaneView, type IPrimitivePaneRenderer, type IPanePrimitive, type IPanePrimitivePaneView, type PaneAttachedParameter } from 'lightweight-charts'
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
+import { useTradeHistory } from '../hooks/useTradeHistory'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
 import { ChartSyncGroup } from '../lib/chartSync'
 import { IndicatorSubPanels } from './IndicatorSubPanels'
@@ -376,6 +377,108 @@ class KumoFillPrimitive implements ISeriesPrimitive<Time> {
   }
 }
 
+type TradeLine = { time: Time; hasBuy: boolean; hasSell: boolean }
+
+const TRADE_BUY_COLOR = 'rgba(0, 212, 170, 0.95)'
+const TRADE_SELL_COLOR = 'rgba(255, 71, 87, 0.95)'
+const TRADE_LINE_WIDTH = 2
+
+class TradeMarkerRenderer implements IPrimitivePaneRenderer {
+  private _data: TradeLine[] = []
+  private _chart: IChartApi | null = null
+
+  update(data: TradeLine[], chart: IChartApi) {
+    this._data = data
+    this._chart = chart
+  }
+
+  draw(target: CanvasRenderingTarget2D): void {
+    const chart = this._chart
+    if (!chart || this._data.length === 0) return
+
+    target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+      const timeScale = chart.timeScale()
+      ctx.lineWidth = TRADE_LINE_WIDTH
+      const halfY = mediaSize.height / 2
+      for (const d of this._data) {
+        const x = timeScale.timeToCoordinate(d.time)
+        if (x === null) continue
+        const px = Math.round(x) + 0.5
+        // BUY = top half (green), SELL = bottom half (red). When only one side
+        // exists, fill the entire line with that color.
+        const buyTop = 0
+        const buyBottom = d.hasBuy && d.hasSell ? halfY : mediaSize.height
+        const sellTop = d.hasBuy && d.hasSell ? halfY : 0
+        const sellBottom = mediaSize.height
+
+        if (d.hasBuy) {
+          ctx.strokeStyle = TRADE_BUY_COLOR
+          ctx.beginPath()
+          ctx.moveTo(px, buyTop)
+          ctx.lineTo(px, buyBottom)
+          ctx.stroke()
+        }
+        if (d.hasSell) {
+          ctx.strokeStyle = TRADE_SELL_COLOR
+          ctx.beginPath()
+          ctx.moveTo(px, sellTop)
+          ctx.lineTo(px, sellBottom)
+          ctx.stroke()
+        }
+      }
+    })
+  }
+}
+
+class TradeMarkerPrimitive implements IPanePrimitive<Time> {
+  private _renderer = new TradeMarkerRenderer()
+  private _data: TradeLine[] = []
+  private _chart: IChartApi | null = null
+  private _requestUpdate: (() => void) | null = null
+  private _paneViews: IPanePrimitivePaneView[]
+
+  constructor() {
+    const renderer = this._renderer
+    this._paneViews = [{
+      // Draw on top so vertical lines stay visible above candles/indicators.
+      zOrder: () => 'top' as const,
+      renderer: () => renderer,
+    }]
+  }
+
+  setData(data: TradeLine[]) {
+    this._data = data
+    this._updateRenderer()
+    this._requestUpdate?.()
+  }
+
+  attached(param: PaneAttachedParameter<Time>) {
+    this._chart = param.chart as IChartApi
+    this._requestUpdate = param.requestUpdate
+    this._updateRenderer()
+    this._requestUpdate?.()
+  }
+
+  detached() {
+    this._chart = null
+    this._requestUpdate = null
+  }
+
+  updateAllViews() {
+    this._updateRenderer()
+  }
+
+  paneViews(): readonly IPanePrimitivePaneView[] {
+    return this._paneViews
+  }
+
+  private _updateRenderer() {
+    if (this._chart) {
+      this._renderer.update(this._data, this._chart)
+    }
+  }
+}
+
 export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -385,12 +488,15 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const bbFillRefs = useRef<Partial<Record<BBKey, BollingerBandFillPrimitive>>>({})
   const ichimokuSeriesRefs = useRef<Partial<Record<IchimokuLineKey, ISeriesApi<'Line'>>>>({})
   const kumoFillRef = useRef<KumoFillPrimitive | null>(null)
+  const tradeMarkerRef = useRef<TradeMarkerPrimitive | null>(null)
   const prevCandleCountRef = useRef(0)
   // Sync group shared with the indicator sub-panels so all charts pan/zoom together.
   const syncGroupRef = useRef<ChartSyncGroup>(new ChartSyncGroup())
 
   const [interval, setInterval] = useState<CandleInterval>('PT15M')
   const { data, isFetching, hasNextPage, fetchNextPage, isFetchingNextPage } = useCandles(symbolId, interval)
+  const { data: trades } = useTradeHistory(symbolId)
+  const [tradeLinesVisible, setTradeLinesVisible] = useState(true)
 
   // Flatten all pages into a single sorted (oldest→newest) candle array
   const candles = useMemo(() => {
@@ -489,6 +595,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       bbFillRefs.current = {}
       ichimokuSeriesRefs.current = {}
       kumoFillRef.current = null
+      tradeMarkerRef.current = null
       prevCandleCountRef.current = 0
       chart.remove()
     }
@@ -780,6 +887,63 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
     }
   }, [ichimokuVisible, candles])
 
+  // Render vertical lines at production trade times (BUY=green, SELL=red).
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const pane = chart.panes()[0]
+    if (!pane) return
+
+    if (tradeLinesVisible && trades && trades.length > 0 && candles.length > 0) {
+      // Snap each trade timestamp to the bar that contains it. lightweight-charts'
+      // timeToCoordinate only resolves times that exist on the series; arbitrary
+      // intra-bar times return null. Map to the nearest bar start ≤ trade time.
+      const barTimesSec = candles.map((c) => Math.floor(c.time / 1000))
+      const lastBar = barTimesSec[barTimesSec.length - 1]
+      const intervalSec = barTimesSec.length > 1
+        ? barTimesSec[barTimesSec.length - 1] - barTimesSec[barTimesSec.length - 2]
+        : 900
+      const snap = (sec: number): number => {
+        if (sec >= lastBar) return lastBar
+        const firstBar = barTimesSec[0]
+        if (sec <= firstBar) return firstBar
+        const offset = Math.floor((sec - firstBar) / intervalSec)
+        return firstBar + offset * intervalSec
+      }
+
+      // Aggregate trades that snap to the same bar so BUY and SELL on the same
+      // 15m bar render as a half-and-half (top green / bottom red) line instead
+      // of one side overwriting the other.
+      const byBar = new Map<number, { hasBuy: boolean; hasSell: boolean }>()
+      for (const t of trades) {
+        const snapped = snap(Math.floor(t.createdAt / 1000))
+        const entry = byBar.get(snapped) ?? { hasBuy: false, hasSell: false }
+        if (t.orderSide === 'BUY') entry.hasBuy = true
+        else entry.hasSell = true
+        byBar.set(snapped, entry)
+      }
+      const lines: TradeLine[] = Array.from(byBar, ([sec, sides]) => ({
+        time: sec as Time,
+        hasBuy: sides.hasBuy,
+        hasSell: sides.hasSell,
+      }))
+
+      let prim = tradeMarkerRef.current
+      if (!prim) {
+        prim = new TradeMarkerPrimitive()
+        pane.attachPrimitive(prim)
+        tradeMarkerRef.current = prim
+      }
+      prim.setData(lines)
+    } else {
+      const prim = tradeMarkerRef.current
+      if (prim) {
+        pane.detachPrimitive(prim)
+        tradeMarkerRef.current = null
+      }
+    }
+  }, [trades, tradeLinesVisible, candles])
+
   const toggle = useCallback((key: MALineKey) => {
     setVisible((prev) => ({ ...prev, [key]: !prev[key] }))
   }, [])
@@ -865,6 +1029,20 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
               {BB_CONFIG[key].label}
             </button>
           ))}
+          <span className="mx-0.5 self-center text-[10px] text-white/20">|</span>
+          <button
+            type="button"
+            onClick={() => setTradeLinesVisible((v) => !v)}
+            className="rounded-full px-2.5 py-0.5 text-[11px] font-medium transition"
+            style={{
+              backgroundColor: tradeLinesVisible ? 'rgba(148, 163, 184, 0.18)' : 'rgba(255,255,255,0.06)',
+              color: tradeLinesVisible ? '#e0e0e0' : '#94a3b8',
+              border: `1px solid ${tradeLinesVisible ? 'rgba(148, 163, 184, 0.45)' : 'rgba(255,255,255,0.1)'}`,
+            }}
+            title="本番環境の約定タイミングを縦線で表示 (緑=BUY, 赤=SELL)"
+          >
+            約定線
+          </button>
         </div>
       </div>
       <div ref={containerRef} />
