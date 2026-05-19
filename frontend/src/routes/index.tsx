@@ -129,7 +129,7 @@ function Dashboard() {
             connectionState={connectionState}
             currencyPair={currentSymbol?.currencyPair?.replace("_", "/")}
           />
-          <CandlestickChart symbolId={symbolId} />
+          <CandlestickChart symbolId={symbolId} positions={positions} />
         </section>
 
         <aside className="space-y-4">
