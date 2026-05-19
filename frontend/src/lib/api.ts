@@ -71,6 +71,7 @@ export type Candle = {
 export type Position = {
   id: number
   symbolId: number
+  positionStatus: 'OPEN' | 'CLOSED'
   orderSide: 'BUY' | 'SELL'
   price: number
   remainingAmount: number

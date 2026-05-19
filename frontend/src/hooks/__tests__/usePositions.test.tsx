@@ -20,6 +20,7 @@ const mockPositions: Position[] = [
   {
     id: 1,
     symbolId: 3,
+    positionStatus: 'OPEN',
     orderSide: 'BUY',
     price: 150.5,
     remainingAmount: 10,
@@ -28,6 +29,7 @@ const mockPositions: Position[] = [
   {
     id: 2,
     symbolId: 3,
+    positionStatus: 'OPEN',
     orderSide: 'SELL',
     price: 155.0,
     remainingAmount: 5,
