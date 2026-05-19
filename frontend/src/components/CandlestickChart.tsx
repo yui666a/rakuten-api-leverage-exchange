@@ -3,12 +3,14 @@ import { createChart, CandlestickSeries, LineSeries, TickMarkType, type IChartAp
 import type { CanvasRenderingTarget2D } from 'fancy-canvas'
 import { useCandles, type CandleInterval } from '../hooks/useCandles'
 import { useTradeHistory } from '../hooks/useTradeHistory'
+import type { Position } from '../lib/api'
 import { formatChartTickJst, formatChartTimeJst } from '../lib/format'
 import { ChartSyncGroup } from '../lib/chartSync'
 import { IndicatorSubPanels } from './IndicatorSubPanels'
 
 type CandlestickChartProps = {
   symbolId: number
+  positions?: Position[]
 }
 
 type MALineKey = 'sma20' | 'sma50' | 'sma100' | 'sma200' | 'ema12' | 'ema26'
@@ -479,7 +481,118 @@ class TradeMarkerPrimitive implements IPanePrimitive<Time> {
   }
 }
 
-export function CandlestickChart({ symbolId }: CandlestickChartProps) {
+type PositionPriceLine = { price: number; side: 'BUY' | 'SELL'; amount: number }
+
+const POSITION_BUY_COLOR = 'rgba(0, 212, 170, 0.85)'
+const POSITION_SELL_COLOR = 'rgba(255, 71, 87, 0.85)'
+const POSITION_LINE_WIDTH = 1
+const POSITION_DASH = [6, 4] as const
+const POSITION_LABEL_FONT = '11px ui-monospace, SFMono-Regular, Menlo, monospace'
+const POSITION_LABEL_BG = 'rgba(0, 0, 0, 0.65)'
+const POSITION_LABEL_PADDING_X = 5
+const POSITION_LABEL_PADDING_Y = 2
+const POSITION_LABEL_GAP = 6
+
+class PositionPriceLineRenderer implements IPrimitivePaneRenderer {
+  private _data: PositionPriceLine[] = []
+  private _series: ISeriesApi<'Candlestick'> | null = null
+
+  update(data: PositionPriceLine[], series: ISeriesApi<'Candlestick'>) {
+    this._data = data
+    this._series = series
+  }
+
+  draw(target: CanvasRenderingTarget2D): void {
+    const series = this._series
+    if (!series || this._data.length === 0) return
+
+    target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+      ctx.save()
+      ctx.lineWidth = POSITION_LINE_WIDTH
+      ctx.font = POSITION_LABEL_FONT
+      ctx.textBaseline = 'middle'
+
+      for (const d of this._data) {
+        const y = series.priceToCoordinate(d.price)
+        if (y === null) continue
+        const py = Math.round(y) + 0.5
+        const color = d.side === 'BUY' ? POSITION_BUY_COLOR : POSITION_SELL_COLOR
+
+        // Dashed horizontal line across the full pane width.
+        ctx.strokeStyle = color
+        ctx.setLineDash([...POSITION_DASH])
+        ctx.beginPath()
+        ctx.moveTo(0, py)
+        ctx.lineTo(mediaSize.width, py)
+        ctx.stroke()
+        ctx.setLineDash([])
+
+        // Right-aligned label chip.
+        const text = `${d.price.toFixed(1)} ${d.side} ${d.amount}`
+        const metrics = ctx.measureText(text)
+        const textW = metrics.width
+        const textH = 12
+        const boxW = textW + POSITION_LABEL_PADDING_X * 2
+        const boxH = textH + POSITION_LABEL_PADDING_Y * 2
+        const boxX = mediaSize.width - boxW - POSITION_LABEL_GAP
+        const boxY = py - boxH / 2
+
+        ctx.fillStyle = POSITION_LABEL_BG
+        ctx.fillRect(boxX, boxY, boxW, boxH)
+        ctx.fillStyle = color
+        ctx.fillText(text, boxX + POSITION_LABEL_PADDING_X, py)
+      }
+      ctx.restore()
+    })
+  }
+}
+
+class PositionPriceLinePrimitive implements IPanePrimitive<Time> {
+  private _renderer = new PositionPriceLineRenderer()
+  private _data: PositionPriceLine[] = []
+  private _series: ISeriesApi<'Candlestick'>
+  private _requestUpdate: (() => void) | null = null
+  private _paneViews: IPanePrimitivePaneView[]
+
+  constructor(series: ISeriesApi<'Candlestick'>) {
+    this._series = series
+    const renderer = this._renderer
+    this._paneViews = [{
+      zOrder: () => 'top' as const,
+      renderer: () => renderer,
+    }]
+  }
+
+  setData(data: PositionPriceLine[]) {
+    this._data = data
+    this._updateRenderer()
+    this._requestUpdate?.()
+  }
+
+  attached(param: PaneAttachedParameter<Time>) {
+    this._requestUpdate = param.requestUpdate
+    this._updateRenderer()
+    this._requestUpdate?.()
+  }
+
+  detached() {
+    this._requestUpdate = null
+  }
+
+  updateAllViews() {
+    this._updateRenderer()
+  }
+
+  paneViews(): readonly IPanePrimitivePaneView[] {
+    return this._paneViews
+  }
+
+  private _updateRenderer() {
+    this._renderer.update(this._data, this._series)
+  }
+}
+
+export function CandlestickChart({ symbolId, positions }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
@@ -489,6 +602,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
   const ichimokuSeriesRefs = useRef<Partial<Record<IchimokuLineKey, ISeriesApi<'Line'>>>>({})
   const kumoFillRef = useRef<KumoFillPrimitive | null>(null)
   const tradeMarkerRef = useRef<TradeMarkerPrimitive | null>(null)
+  const positionPriceLineRef = useRef<PositionPriceLinePrimitive | null>(null)
   const prevCandleCountRef = useRef(0)
   // Sync group shared with the indicator sub-panels so all charts pan/zoom together.
   const syncGroupRef = useRef<ChartSyncGroup>(new ChartSyncGroup())
@@ -596,6 +710,7 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       ichimokuSeriesRefs.current = {}
       kumoFillRef.current = null
       tradeMarkerRef.current = null
+      positionPriceLineRef.current = null
       prevCandleCountRef.current = 0
       chart.remove()
     }
@@ -943,6 +1058,42 @@ export function CandlestickChart({ symbolId }: CandlestickChartProps) {
       }
     }
   }, [trades, tradeLinesVisible, candles])
+
+  // Render horizontal price lines for each OPEN position (BUY=green, SELL=red).
+  // Independent from the trade-marker overlay above: held positions matter even
+  // when the venue's /cfd/trade window has expired and `trades` is empty.
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    const pane = chart.panes()[0]
+    if (!pane) return
+    const series = seriesRef.current
+    if (!series) return
+
+    const openPositions = (positions ?? []).filter(
+      (p) => p.positionStatus === 'OPEN' && p.remainingAmount > 0,
+    )
+
+    if (openPositions.length > 0) {
+      let prim = positionPriceLineRef.current
+      if (!prim) {
+        prim = new PositionPriceLinePrimitive(series)
+        pane.attachPrimitive(prim)
+        positionPriceLineRef.current = prim
+      }
+      prim.setData(openPositions.map((p) => ({
+        price: p.price,
+        side: p.orderSide,
+        amount: p.remainingAmount,
+      })))
+    } else {
+      const prim = positionPriceLineRef.current
+      if (prim) {
+        pane.detachPrimitive(prim)
+        positionPriceLineRef.current = null
+      }
+    }
+  }, [positions])
 
   const toggle = useCallback((key: MALineKey) => {
     setVisible((prev) => ({ ...prev, [key]: !prev[key] }))
