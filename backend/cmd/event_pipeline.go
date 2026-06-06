@@ -294,6 +294,25 @@ func policyView(p risk.RiskPolicy) backtest.PolicyView {
 	}
 }
 
+// registerTickRiskHandler subscribes the TickRiskHandler to BOTH event types,
+// mirroring the backtest runner (runner.go) one-to-one:
+//
+//   - EventTypeIndicator (priority 12): feeds the freshest ATR into the
+//     handler via UpdateATR. This is the ONLY path that updates currentATR.
+//     Placed before the strategy (priority 20) so the value is in place by
+//     the time the next TickEvent runs the risk loop.
+//   - EventTypeTick (priority 15): runs the per-tick SL/TP + trailing check.
+//
+// Omitting the Indicator registration was the live-only ATR feed bug: the
+// handler kept currentATR=0 forever, silently collapsing ATR-based SL and
+// ATR trailing to the percent fallback and diverging live behaviour from the
+// backtests it was tuned against.
+// 参照: docs/investigation/2026-06-06-tick-sltp-atr-feed-bug.md
+func registerTickRiskHandler(bus *eventengine.EventBus, h *backtest.TickRiskHandler) {
+	bus.Register(entity.EventTypeIndicator, 12, h)
+	bus.Register(entity.EventTypeTick, 15, h)
+}
+
 // primaryIntervalOrDefault returns the configured primary interval, falling
 // back to the legacy LTC PT15M default when the field is left empty so
 // callers that have not yet plumbed a profile-driven value through stay
@@ -704,7 +723,7 @@ func (p *EventDrivenPipeline) runEventLoop(ctx context.Context, snap eventSnapsh
 		executor,
 		policyView(snap.riskPolicy),
 	)
-	bus.Register(entity.EventTypeTick, 15, tickRiskHandler)
+	registerTickRiskHandler(bus, tickRiskHandler)
 
 	// IndicatorHandler: calculates technical indicators on candle close (priority 10).
 	indicatorHandler := backtest.NewIndicatorHandler(p.primaryInterval, p.higherTFInterval, 500)

@@ -1,11 +1,35 @@
 package main
 
 import (
+	"context"
 	"testing"
 
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/risk"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/backtest"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/eventengine"
 )
+
+// atrWiringExecutor is a minimal TickRiskExecutor stub for the wiring test:
+// it serves one long position and records Close calls so the test can assert
+// at which tick the trailing stop fired (which encodes the trailing distance,
+// which in turn proves whether ATR reached the handler).
+type atrWiringExecutor struct {
+	positions []eventengine.Position
+	closes    []string // reasons, in order
+}
+
+func (e *atrWiringExecutor) Positions() []eventengine.Position { return e.positions }
+
+func (e *atrWiringExecutor) SelectSLTPExit(_ entity.OrderSide, _, _, _, _ float64) (float64, string, bool) {
+	// Never hit SL/TP in this test so only the trailing branch can close.
+	return 0, "", false
+}
+
+func (e *atrWiringExecutor) Close(_ int64, _ float64, reason string, _ int64) (entity.OrderEvent, *entity.BacktestTradeRecord, error) {
+	e.closes = append(e.closes, reason)
+	return entity.OrderEvent{}, &entity.BacktestTradeRecord{}, nil
+}
 
 // TestNewEventDrivenPipeline_PropagatesRiskPolicy locks in the wiring:
 // EventDrivenPipelineConfig.RiskPolicy must reach the pipeline's
@@ -110,5 +134,89 @@ func TestPolicyView_MapsTrailingMode(t *testing.T) {
 				t.Errorf("policyView() = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRegisterTickRiskHandler_FeedsATRFromIndicatorEvent is the regression
+// guard for the live-only ATR feed bug
+// (docs/investigation/2026-06-06-tick-sltp-atr-feed-bug.md): the live
+// pipeline used to register the TickRiskHandler on EventTypeTick only, so
+// UpdateATR was never called, currentATR stayed 0, and ATR trailing silently
+// collapsed to the percent fallback — diverging live from backtest.
+//
+// This test exercises the REAL production wiring helper (registerTickRiskHandler)
+// and the REAL handler constructor (NewTickRiskHandlerWithPolicy + policyView)
+// through a real EventBus. An IndicatorEvent carrying ATR=400 is dispatched
+// first; then a sequence of TickEvents whose pullback (700) sits between the
+// percent distance (500) and the ATR distance (800). The position must survive
+// — which is only possible if the ATR reached the handler via the Indicator
+// registration. Drop the EventTypeIndicator line from registerTickRiskHandler
+// and this test fails (the trailing stop fires early at the percent distance).
+func TestRegisterTickRiskHandler_FeedsATRFromIndicatorEvent(t *testing.T) {
+	exec := &atrWiringExecutor{
+		positions: []eventengine.Position{{
+			PositionID: 1, SymbolID: 1,
+			Side:       entity.OrderSideBuy,
+			EntryPrice: 10_000,
+			Amount:     0.1,
+		}},
+	}
+	policy := risk.RiskPolicy{
+		StopLoss:   risk.StopLossSpec{Percent: 5}, // percent trailing distance = 500
+		TakeProfit: risk.TakeProfitSpec{Percent: 10},
+		Trailing:   risk.TrailingSpec{Mode: risk.TrailingModeATR, ATRMultiplier: 2.0},
+	}
+	h := backtest.NewTickRiskHandlerWithPolicy("PT15M", exec, policyView(policy))
+
+	bus := eventengine.NewEventBus()
+	registerTickRiskHandler(bus, h)
+
+	ctx := context.Background()
+
+	// Feed ATR=400 via IndicatorEvent → ATR trailing distance becomes 800.
+	atr := 400.0
+	if err := bus.Dispatch(ctx, []entity.Event{entity.IndicatorEvent{
+		SymbolID:  1,
+		Interval:  "PT15M",
+		Timestamp: 1,
+		Primary:   entity.IndicatorSet{ATR: &atr},
+	}}); err != nil {
+		t.Fatalf("dispatch indicator: %v", err)
+	}
+
+	// Bar range kept wide so SL/TP never fires; only trailing can close.
+	barLow, barHigh := 9_600.0, 10_999.0
+
+	// Tick 1: push the high-water mark up to 10_900.
+	if err := bus.Dispatch(ctx, []entity.Event{entity.TickEvent{
+		SymbolID: 1, Interval: "PT15M", Timestamp: 100,
+		Price: 10_900, BarLow: barLow, BarHigh: barHigh,
+	}}); err != nil {
+		t.Fatalf("dispatch tick1: %v", err)
+	}
+
+	// Tick 2: pull back to 10_200 → drop = 700. This is > percent distance
+	// (500) but < ATR distance (800). With ATR fed, the position SURVIVES.
+	// Without the Indicator registration, currentATR=0 collapses trailing to
+	// the percent distance (500) and this tick closes the position.
+	if err := bus.Dispatch(ctx, []entity.Event{entity.TickEvent{
+		SymbolID: 1, Interval: "PT15M", Timestamp: 200,
+		Price: 10_200, BarLow: barLow, BarHigh: barHigh,
+	}}); err != nil {
+		t.Fatalf("dispatch tick2: %v", err)
+	}
+	if len(exec.closes) != 0 {
+		t.Fatalf("trailing fired at drop=700 (< ATR distance 800): ATR was NOT fed to the handler — Indicator registration missing. closes=%v", exec.closes)
+	}
+
+	// Tick 3: drop to 10_050 → drop = 850 >= 800, ATR trailing fires.
+	if err := bus.Dispatch(ctx, []entity.Event{entity.TickEvent{
+		SymbolID: 1, Interval: "PT15M", Timestamp: 300,
+		Price: 10_050, BarLow: barLow, BarHigh: barHigh,
+	}}); err != nil {
+		t.Fatalf("dispatch tick3: %v", err)
+	}
+	if len(exec.closes) != 1 || exec.closes[0] != "trailing_stop" {
+		t.Fatalf("expected one trailing_stop close at ATR distance, got %v", exec.closes)
 	}
 }
