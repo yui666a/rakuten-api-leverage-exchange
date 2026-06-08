@@ -1,0 +1,5 @@
+# pnpm 10.x は package.json の "pnpm.onlyBuiltDependencies" を読むが、
+# pnpm 11+ はこのファイルに移行した。両対応のため双方に定義を置く。
+onlyBuiltDependencies:
+  - esbuild
+  - lightningcss
