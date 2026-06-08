@@ -26,16 +26,16 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    environment:
-      VITE_API_HOST: localhost:38080
+      args:
+        # VITE_API_HOST is baked into the client bundle at build time. The page
+        # is served on the Raspberry Pi and opened from the Pi's own browser,
+        # so the API host resolves to localhost:38080.
+        VITE_API_HOST: localhost:38080
     depends_on:
       backend:
         condition: service_healthy
     ports:
       - "33000:3000"
-    volumes:
-      - ./frontend:/app/frontend
-      - /app/frontend/node_modules
     restart: unless-stopped
 
   csv-updater:
