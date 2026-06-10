@@ -79,16 +79,19 @@ confidence scaling の式（`0.5 + 0.5*(conf-min)/(1-min)`）は現在 **2 箇�
 type PositionSizingConfig struct {
     // ... 既存フィールド ...
 
-    // ConfidenceFloor is the lower bound of the confidence-based lot scale,
-    // in [0, 1]. The scale maps [min_confidence, 1.0] → [ConfidenceFloor, 1.0]
-    // linearly. 1.0 disables scaling entirely (lot is never reduced by
-    // confidence). 0 falls back to the legacy default 0.5 so existing
-    // profiles stay bit-identical.
+    // ConfidenceFloor is the lower bound of the confidence-based lot scale.
+    // Effective range is (0, 1]; the scale maps [min_confidence, 1.0] →
+    // [ConfidenceFloor, 1.0] linearly. 1.0 disables scaling entirely (lot is
+    // never reduced by confidence). 0 is the "unset" sentinel — because
+    // omitempty cannot tell an explicit 0 from a missing field, 0 always
+    // falls back to the legacy default 0.5 so existing profiles stay
+    // bit-identical. To minimise the floor explicitly, set a small positive
+    // value (e.g. 0.01), not 0.
     ConfidenceFloor float64 `json:"confidence_floor,omitempty"`
 }
 ```
 
-- `Validate()` に範囲チェックを追加: `ConfidenceFloor` は `[0, 1]` の範囲（既存の risk_per_trade_pct チェックと同じ箇所、`strategy_config.go:641` 付近）。
+- `Validate()` に範囲チェックを追加: `ConfidenceFloor` は `[0, 1]`（負値・1 超を拒否、`0` は unset として許容）。既存の risk_per_trade_pct チェックと同じ箇所（`strategy_config.go:641` 付近）。
 - ゼロ値（未設定）は sizer 側で 0.5 にフォールバック → 既存 profile は完全等価。
 
 #### 2. `ConfidenceScale` 関数を sizer パッケージに新設（**公開関数**）
@@ -161,7 +164,7 @@ out.AppliedConf = confScale
 EventDrivenPipeline (cmd/event_pipeline.go)
   └ backtest.RiskHandler.handleNewEntry (handler.go:597-)
         │ synthSignal.Confidence (= decision.Strength)
-        │ h.MinConfidence (= profile.MinConfidence, 既定 0.3)
+        │ h.MinConfidence (= cfg.Trading.MinConfidence, 環境変数 TRADE_MIN_CONFIDENCE, 既定 0.3)
         ▼
      Sizer.Sized → Sizer.Compute (sizer.go)
         ├ base = equity × risk_pct / (entry × sl%)        ← ベース・リスク予算
@@ -176,9 +179,10 @@ EventDrivenPipeline (cmd/event_pipeline.go)
 
 ### エラー処理・境界条件
 
+- **`MinConfidence` の出所と役割**: `MinConfidence` は **profile ではなく** `cfg.Trading.MinConfidence`（環境変数 `TRADE_MIN_CONFIDENCE`、既定 0.3、`config.go:127-132`）由来。live は `main.go:189-190` → `event_pipeline.go:762-767`、backtest は `RunInput.MinConfidence`（後述「既知の差異⑤」）経由で sizer に渡る。役割は **2 つ**: (a) **rejection gate** — `Confidence < MinConfidence` のシグナルは `NEW_ENTRY` 前に HOLD で弾く（`pipeline.go:375` 相当）。(b) **scaling anchor** — 通過したシグナルの `[MinConfidence, 1.0]` を `[floor, 1.0]` に写像する起点。`ConfidenceScale` が使うのは (b) の意味。
 - `ConfidenceScale` は副作用なしの純粋関数。範囲外入力（負値、NaN を生む 0 除算）は分岐で吸収し、必ず `[floor, 1.0]` または 1.0 を返す。
 - `min_confidence` が `(0,1)` の範囲外（0 や 1.0）のとき: scaling は無効（1.0 を返す）。現状コードの `in.MinConfidence > 0 && in.MinConfidence < 1` ガードと同じ意味を関数内に内包する。
-- `ConfidenceFloor` 未設定（0）→ 0.5 フォールバックで既存等価。`Validate()` で `[0,1]` 外を拒否。
+- **`ConfidenceFloor` の有効範囲は `(0,1]`、`0 = 未設定` センチネル**: `json:"confidence_floor,omitempty"` では「明示的な 0」と「未指定」を JSON 上区別できないため、**floor=0 を有効な設定値とはしない**（floor=0 は「確信度ゼロでロットゼロ」を意味し実用上無意味）。`0` は常に「未設定 → legacy default 0.5 にフォールバック」と解釈する。`Validate()` は `[0,1]` 外（負値・1 超）を拒否し、`0` は許容（=unset 扱い）。floor を明示的に最小化したい場合は `0` ではなく小さな正値（例 0.01）を設定する。
 - profile JSON に `confidence_floor` が無い既存 production.json は、ゼロ値 → 0.5 フォールバックで**完全に従来挙動**。マイグレーション不要。
 
 ### テスト戦略
@@ -199,7 +203,7 @@ TDD で進める。`ConfidenceScale` 関数を新設するので、まずその�
 
 ### ドキュメント更新
 
-- `sizer.go` 冒頭のパッケージコメント（"Signal confidence ... compose multiplicatively"）を、新しい意味論（risk_pct = 上限、confidence は floor までの線形減衰、floor は設定）に合わせて更新。
+- `sizer.go` 冒頭のパッケージコメント（"Signal confidence ... compose multiplicatively"）を、新しい意味論（risk_pct = per-trade ベース・リスク予算、confidence は floor までの線形減衰、floor は設定）に合わせて更新。実装コメントに「上限 / ceiling」の語を持ち込まない（ATR/DD が後段で乗算され base を上回り得るため）。
 - `backend/.env.example` / profile スキーマ説明に `confidence_floor` を追記（該当する README / docs があれば）。
 - 本設計書を `docs/superpowers/specs/` にコミット。
 
