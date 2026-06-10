@@ -323,6 +323,7 @@ func main() {
 		ClientOrderRepo:     clientOrderRepo,
 		BacktestRunner:        backtestRunner,
 		BacktestResultRepo:    backtestResultRepo,
+		BacktestMinConfidence: cfg.Trading.MinConfidence,
 		MultiPeriodResultRepo: multiPeriodRepo,
 		WalkForwardResultRepo: walkForwardRepo,
 		OnSymbolSwitch:        onSymbolSwitch,

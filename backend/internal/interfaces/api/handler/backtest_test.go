@@ -52,6 +52,13 @@ func (m *mockBacktestResultRepo) DeleteOlderThan(_ context.Context, _ int64) (in
 	return 0, nil
 }
 
+func TestBacktestHandler_MinConfidenceWired(t *testing.T) {
+	h := NewBacktestHandler(nil, nil, WithMinConfidence(0.3))
+	if h.minConfidence != 0.3 {
+		t.Fatalf("WithMinConfidence should set minConfidence=0.3, got %v", h.minConfidence)
+	}
+}
+
 func TestBacktestHandler_ListResults_OK(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &mockBacktestResultRepo{

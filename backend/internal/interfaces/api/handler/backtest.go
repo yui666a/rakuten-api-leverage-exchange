@@ -64,6 +64,11 @@ type BacktestHandler struct {
 	// snapshot lands in backtest_decision_log scoped to the run id. The
 	// list/delete endpoints become available too.
 	decisionLogRepo repository.BacktestDecisionLogRepository
+
+	// minConfidence mirrors cfg.Trading.MinConfidence (TRADE_MIN_CONFIDENCE,
+	// default 0.3) so the sizer's confidence scaling in backtest matches the
+	// live pipeline. 0 leaves scaling disabled (legacy backtest behaviour).
+	minConfidence float64
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -115,6 +120,15 @@ func WithMarketDataService(svc *usecase.MarketDataService) BacktestHandlerOption
 func WithDecisionLogRepo(repo repository.BacktestDecisionLogRepository) BacktestHandlerOption {
 	return func(h *BacktestHandler) {
 		h.decisionLogRepo = repo
+	}
+}
+
+// WithMinConfidence wires the live min-confidence threshold so backtest runs
+// apply the same confidence scaling as the live pipeline. Without it, backtest
+// runs leave MinConfidence at 0 and confidence scaling is disabled.
+func WithMinConfidence(min float64) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.minConfidence = min
 	}
 }
 
@@ -375,6 +389,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		IndicatorPeriods:  indicatorPeriods,
 		PositionSizing:    positionSizing,
 		ExitOnSignal:      exitOnSignal,
+		MinConfidence:     h.minConfidence,
 		FillPriceSource:   fillSource,
 		BookSource:        bookSource,
 		ResultID:          preallocatedRunID,

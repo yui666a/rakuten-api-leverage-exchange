@@ -268,6 +268,7 @@ func (h *BacktestHandler) RunWalkForward(c *gin.Context) {
 				IndicatorPeriods:  profile.Indicators,
 				PositionSizing:    profile.Risk.PositionSizing,
 				ExitOnSignal:      profile.Risk.ExitOnSignal,
+				MinConfidence:     h.minConfidence,
 				FillPriceSource:   fillSrc,
 				BookSource:        bookSrc,
 				RiskConfig:        risk,

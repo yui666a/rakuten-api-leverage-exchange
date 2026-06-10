@@ -723,11 +723,13 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		riskConfig.MaxBookSidePct = profile.Risk.MaxBookSidePct
 		riskConfig.EntryCooldownSec = profile.Risk.EntryCooldownSec
 	}
+	minConfidence := config.Load().Trading.MinConfidence
 	in := bt.RunInput{
 		Config:         cfg,
 		TradeAmount:    f.TradeAmount,
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
+		MinConfidence:  minConfidence,
 		RiskConfig:     riskConfig,
 	}
 	if profile != nil {

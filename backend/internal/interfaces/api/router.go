@@ -61,6 +61,10 @@ type Dependencies struct {
 	// persists per-cycle decisions and the GET/DELETE
 	// /backtest/results/:id/decisions endpoints become available.
 	BacktestDecisionLogRepo repository.BacktestDecisionLogRepository
+
+	// BacktestMinConfidence mirrors cfg.Trading.MinConfidence so backtest
+	// runs apply the same confidence scaling as the live pipeline.
+	BacktestMinConfidence float64
 }
 
 func NewRouter(deps Dependencies) *gin.Engine {
@@ -189,6 +193,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.BacktestDecisionLogRepo != nil {
 			opts = append(opts, handler.WithDecisionLogRepo(deps.BacktestDecisionLogRepo))
 		}
+		opts = append(opts, handler.WithMinConfidence(deps.BacktestMinConfidence))
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		// PR-12: profile discovery endpoints used by the FE backtest picker.
 		// The same profilesBaseDir default is used so /profiles and

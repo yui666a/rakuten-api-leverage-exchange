@@ -234,6 +234,7 @@ func (h *BacktestHandler) RunMulti(c *gin.Context) {
 				IndicatorPeriods:  indicatorPeriods,
 				PositionSizing:    positionSizing,
 				ExitOnSignal:      exitOnSignal,
+				MinConfidence:     h.minConfidence,
 				FillPriceSource:   fillSrc,
 				BookSource:        bookSrc,
 				RiskConfig: entity.RiskConfig{
