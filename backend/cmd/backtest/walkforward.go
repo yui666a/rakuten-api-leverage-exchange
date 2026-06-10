@@ -170,13 +170,13 @@ func walkForwardCommand(args []string) error {
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
 			return windowRunner.Run(ctx, bt.RunInput{
 				Config:            cfg,
+				RiskConfig:        risk,
 				TradeAmount:       *tradeAmount,
 				PrimaryCandles:    primary.Candles,
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: riskProfile.StanceRules.BBSqueezeLookback,
 				PositionSizing:    riskProfile.Risk.PositionSizing,
 				MinConfidence:     wfMinConfidence,
-				RiskConfig:        risk,
 			})
 		},
 	}

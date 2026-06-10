@@ -209,7 +209,7 @@ func TestBuildRunInput_ProfileRisk_Overrides(t *testing.T) {
 			TakeProfit:     10,
 			Set:            map[string]bool{},
 		}
-		in, err := buildRunInput(f, profile)
+		in, err := buildRunInput(f, profile, 0)
 		if err != nil {
 			t.Fatalf("buildRunInput: %v", err)
 		}
@@ -238,7 +238,7 @@ func TestBuildRunInput_ProfileRisk_Overrides(t *testing.T) {
 			TakeProfit:     10,
 			Set:            map[string]bool{"stop-loss": true},
 		}
-		in, err := buildRunInput(f, profile)
+		in, err := buildRunInput(f, profile, 0)
 		if err != nil {
 			t.Fatalf("buildRunInput: %v", err)
 		}
@@ -263,7 +263,7 @@ func TestBuildRunInput_ProfileRisk_Overrides(t *testing.T) {
 			TakeProfit:     10,
 			Set:            map[string]bool{},
 		}
-		in, err := buildRunInput(f, nil)
+		in, err := buildRunInput(f, nil, 0)
 		if err != nil {
 			t.Fatalf("buildRunInput: %v", err)
 		}

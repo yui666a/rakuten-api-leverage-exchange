@@ -142,7 +142,8 @@ func runCommand(args []string) error {
 		return err
 	}
 
-	input, err := buildRunInput(f, resolveRiskProfile(profile, profilesBaseDir))
+	minConfidence := config.Load().Trading.MinConfidence
+	input, err := buildRunInput(f, resolveRiskProfile(profile, profilesBaseDir), minConfidence)
 	if err != nil {
 		return err
 	}
@@ -278,7 +279,8 @@ func optimizeCommand(args []string) error {
 		return err
 	}
 
-	baseInput, err := buildRunInput(f, profile)
+	minConfidence := config.Load().Trading.MinConfidence
+	baseInput, err := buildRunInput(f, profile, minConfidence)
 	if err != nil {
 		return err
 	}
@@ -373,7 +375,8 @@ func refineCommand(args []string) error {
 		return err
 	}
 
-	baseInput, err := buildRunInput(f, profile)
+	minConfidence := config.Load().Trading.MinConfidence
+	baseInput, err := buildRunInput(f, profile, minConfidence)
 	if err != nil {
 		return err
 	}
@@ -621,7 +624,7 @@ func mergeCandles(existing, incoming []entity.Candle) []entity.Candle {
 // the user *explicitly* set on the command line overrides that base. This
 // implements the precedence rule in spec §8.2: profile first, then overlays
 // from explicit flags.
-func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, error) {
+func buildRunInput(f runFlags, profile *entity.StrategyProfile, minConfidence float64) (bt.RunInput, error) {
 	primary, err := csvinfra.LoadCandles(f.DataPath)
 	if err != nil {
 		return bt.RunInput{}, fmt.Errorf("load primary csv: %w", err)
@@ -723,14 +726,13 @@ func buildRunInput(f runFlags, profile *entity.StrategyProfile) (bt.RunInput, er
 		riskConfig.MaxBookSidePct = profile.Risk.MaxBookSidePct
 		riskConfig.EntryCooldownSec = profile.Risk.EntryCooldownSec
 	}
-	minConfidence := config.Load().Trading.MinConfidence
 	in := bt.RunInput{
 		Config:         cfg,
+		RiskConfig:     riskConfig,
 		TradeAmount:    f.TradeAmount,
 		PrimaryCandles: primary.Candles,
 		HigherCandles:  higherCandles,
 		MinConfidence:  minConfidence,
-		RiskConfig:     riskConfig,
 	}
 	if profile != nil {
 		in.BBSqueezeLookback = profile.StanceRules.BBSqueezeLookback

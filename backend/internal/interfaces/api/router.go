@@ -193,6 +193,7 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		if deps.BacktestDecisionLogRepo != nil {
 			opts = append(opts, handler.WithDecisionLogRepo(deps.BacktestDecisionLogRepo))
 		}
+		// Always wire MinConfidence; 0 is the intentional "disabled" sentinel.
 		opts = append(opts, handler.WithMinConfidence(deps.BacktestMinConfidence))
 		backtestHandler := handler.NewBacktestHandler(deps.BacktestRunner, deps.BacktestResultRepo, opts...)
 		// PR-12: profile discovery endpoints used by the FE backtest picker.
