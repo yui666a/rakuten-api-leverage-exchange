@@ -34,6 +34,9 @@ func TestConfidenceScale(t *testing.T) {
 		{"conf<min clamps to floor", 0.1, 0.3, 0.5, 0.5},
 		{"min<=0 disables (no anchor)", 0.6, 0.0, 0.5, 1.0},
 		{"min>=1 disables (no range)", 0.6, 1.0, 0.5, 1.0},
+		{"NaN confidence fails closed to floor", math.NaN(), 0.3, 0.5, 0.5},
+		{"NaN with unset floor fails closed to 0.5", math.NaN(), 0.3, 0.0, 0.5},
+		{"-Inf confidence fails closed to floor", math.Inf(-1), 0.3, 0.5, 0.5},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
