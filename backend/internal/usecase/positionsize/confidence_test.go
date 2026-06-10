@@ -37,6 +37,7 @@ func TestConfidenceScale(t *testing.T) {
 		{"NaN confidence fails closed to floor", math.NaN(), 0.3, 0.5, 0.5},
 		{"NaN with unset floor fails closed to 0.5", math.NaN(), 0.3, 0.0, 0.5},
 		{"-Inf confidence fails closed to floor", math.Inf(-1), 0.3, 0.5, 0.5},
+		{"+Inf confidence is full size", math.Inf(1), 0.3, 0.5, 1.0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -265,6 +265,8 @@ func TestSizer_ConfidenceFloorDisablesScaling(t *testing.T) {
 	if !almostEqual(got.AppliedConf, 1.0, 1e-9) {
 		t.Fatalf("floor=1.0 should yield AppliedConf=1.0, got %v", got.AppliedConf)
 	}
+	// With no ATRAdjust / DDScaleDown / cap in this cfg, the only multiplier
+	// is confidence; floor=1.0 makes it 1.0, so Amount must equal BaseAmount.
 	if !almostEqual(got.Amount, got.BaseAmount, 1e-9) {
 		t.Fatalf("floor=1.0 should leave base lot unscaled; base=%v amount=%v", got.BaseAmount, got.Amount)
 	}
