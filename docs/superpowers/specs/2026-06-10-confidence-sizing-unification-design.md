@@ -1,6 +1,6 @@
 # confidence sizing の一元化と意味論の再定義
 
-- **Status:** Proposed
+- **Status:** Proposed (Codex レビュー反映済み 2026-06-10)
 - **Date:** 2026-06-10
 - **Related:**
   - PR #154 (ca7c3ad) — 動的ポジションサイジング (entity + 純粋 Sizer)
@@ -41,18 +41,25 @@ confidence scaling の式（`0.5 + 0.5*(conf-min)/(1-min)`）は現在 **2 箇�
 
 ### 意味論の再定義
 
-> `risk_per_trade_pct` = **確信度が最大 (1.0) のときに賭けるリスク上限**
+> `risk_per_trade_pct` = **確信度が最大 (1.0) のときに賭ける per-trade ベース・リスク予算**
 >
-> 実効リスク = `risk_per_trade_pct × confidenceScale(confidence)`
+> 実効リスク = `risk_per_trade_pct × ConfidenceScale(confidence)`（さらに ATR 調整・DD scaling が後段で乗る）
 >
-> `confidenceScale` = `[min_confidence, 1.0]` → `[confidence_floor, 1.0]` の線形写像
+> `ConfidenceScale` = `[min_confidence, 1.0]` → `[confidence_floor, 1.0]` の線形写像
 
 この定義により:
 
-- **設定が嘘をつかない**: 「2%」は「フル確信時に賭けるリスク上限」という明確な意味を持つ。実効 1% は「確信度が低いので上限の半分」と設計上説明がつく。
-- **責務が一本化**: リスク予算の計算は sizer の 1 式に集約。
+- **設定が嘘をつかない**: 「2%」は「フル確信時に賭ける per-trade ベース・リスク予算」という明確な意味を持つ。実効 1% は「確信度が低いのでベース予算の半分」と設計上説明がつく。
+- **責務が一本化**: confidence によるリスク予算の減衰計算は sizer の 1 式に集約。
 - **floor が明示設定になる**: 現状ハードコードの `0.5` を `confidence_floor` にし、`floor=1.0` で scaling を実質 OFF にできる。ON/OFF が連続的に表現でき、特別扱いが不要。
 - **バックテスト実績を壊さない**: `confidence_floor` のデフォルトを 0.5 にすれば現状の振る舞いと数学的に等価。production の promote 実績がそのまま生きる。
+
+> **⚠️ 「上限 (ceiling)」ではなく「ベース予算 (base budget)」である点に注意**（Codex レビュー指摘1）。
+> `risk_per_trade_pct` で求めた base lot には、後段で `ATRAdjust`（最大 ×2.0、`sizer.go:156-179`）や DD scaling が**乗算**され得る。
+> また `risk.go` の per-trade リスクは hard ceiling として検証されていない（名目額/残高比チェックのみ）。
+> したがって実現リスクが `risk_per_trade_pct` を**上回る**ケースが構造的に存在する。
+> 本タスクは confidence scaling の一元化に集中し、per-trade リスクの hard ceiling 化は**スコープ外**（別タスク。後述「既知の差異・未解決事項」参照）。
+> production.json は現状 `atr_adjust` 未設定（ATR 係数 = 常に 1.0）のため、この乖離は現時点では顕在化していない。
 
 ## 非目的（明示的に「やらない」）
 
@@ -84,22 +91,28 @@ type PositionSizingConfig struct {
 - `Validate()` に範囲チェックを追加: `ConfidenceFloor` は `[0, 1]` の範囲（既存の risk_per_trade_pct チェックと同じ箇所、`strategy_config.go:641` 付近）。
 - ゼロ値（未設定）は sizer 側で 0.5 にフォールバック → 既存 profile は完全等価。
 
-#### 2. `confidenceScale` 関数を sizer パッケージに新設
+#### 2. `ConfidenceScale` 関数を sizer パッケージに新設（**公開関数**）
 
-`internal/usecase/positionsize/` に名前付き関数として抽出（パッケージ内のファイル。sizer.go 末尾 or 新規 `confidence.go`）。
+`internal/usecase/positionsize/` に名前付き関数として抽出（パッケージ内のファイル。新規 `confidence.go`）。
+
+> **⚠️ 公開関数 (`ConfidenceScale`、大文字始まり) にする**（Codex レビュー指摘5）。
+> `cmd/pipeline.go`（`main` パッケージ）から `positionsize.ConfidenceScale(...)` として呼ぶため、
+> Go の可視性ルール上、非公開 (`confidenceScale`) では別パッケージから参照できない。
+> 「パッケージ内に閉じる」という当初案は実装不能。export が必須。
 
 ```go
-// confidenceScale maps confidence in [minConfidence, 1.0] to a lot multiplier
+// ConfidenceScale maps confidence in [minConfidence, 1.0] to a lot multiplier
 // in [floor, 1.0] linearly. It is the single source of truth for how signal
-// confidence shrinks the per-trade lot; both the risk_pct path and any legacy
-// caller route through here so the formula can never drift between sites.
+// confidence shrinks the per-trade lot; both the risk_pct path (Sizer.Compute)
+// and the legacy fixed-amount caller (cmd/pipeline.go) route through here so
+// the formula can never drift between sites.
 //
 //   - confidence >= 1.0           → 1.0  (full size)
 //   - minConfidence not in (0,1)  → 1.0  (scaling disabled; nothing to map)
 //   - floor <= 0                  → 0.5  (legacy default)
 //   - floor >= 1.0                → 1.0  (scaling disabled by config)
 //   - otherwise → floor + (1-floor) * (confidence-minConfidence)/(1-minConfidence)
-func confidenceScale(confidence, minConfidence, floor float64) float64
+func ConfidenceScale(confidence, minConfidence, floor float64) float64
 ```
 
 - 旧 `0.5 + 0.5*...`（floor 固定 0.5）の挙動は `floor=0.5` を渡せば数学的に等価。
@@ -125,8 +138,8 @@ if in.MinConfidence > 0 && in.MinConfidence < 1 {
 を、関数呼び出しに置換:
 
 ```go
-floor := s.cfg.ConfidenceFloor // 0 のときは confidenceScale 内で 0.5 にフォールバック
-confScale := confidenceScale(in.Confidence, in.MinConfidence, floor)
+floor := s.cfg.ConfidenceFloor // 0 のときは ConfidenceScale 内で 0.5 にフォールバック
+confScale := ConfidenceScale(in.Confidence, in.MinConfidence, floor)
 amount *= confScale
 out.AppliedConf = confScale
 ```
@@ -138,9 +151,9 @@ out.AppliedConf = confScale
 - `cmd/pipeline.go:709` の `func scaleByConfidence` を削除。
 - 同ファイル内の呼び出し（`pipeline.go:415`, `:428`）を確認:
   - **line 415**: risk_pct モードの `baseline`（= RequestedAmount）算出時に掛けている。risk_pct モードでは sizer が base を再計算するため `baseline` は無視される → **scaleByConfidence 掛けは無意味な死んだ計算**。除去（`baseline := snap.tradeAmount / price` に簡素化）。
-  - **line 428**: sizer が nil の fixed フォールバック経路（`snap.sizer == nil`）。ここは固定 JPY × scaling という導入当初の正しい構造なので、`positionsize.confidenceScale(..., 0.5)`（legacy floor）に置換して挙動を維持。
-- これにより confidence scaling の式は `positionsize.confidenceScale` 1 箇所に集約され、`cmd` パッケージから式のコピーが消える。
-- `scaleByConfidence` に言及している既存コメント（`pipeline.go:60`, `:114`）も、`positionsize.confidenceScale` を参照する形に更新する。
+  - **line 428**: sizer が nil の fixed フォールバック経路（`snap.sizer == nil`）。ここは固定 JPY × scaling という導入当初の正しい構造なので、`positionsize.ConfidenceScale(..., 0.5)`（legacy floor）に置換して挙動を維持。
+- これにより confidence scaling の式は `positionsize.ConfidenceScale` 1 箇所に集約され、`cmd` パッケージから式のコピーが消える。
+- `scaleByConfidence` に言及している既存コメント（`pipeline.go:60`, `:114`）も、`positionsize.ConfidenceScale` を参照する形に更新する。
 
 ### データフロー（ライブ経路）
 
@@ -151,28 +164,28 @@ EventDrivenPipeline (cmd/event_pipeline.go)
         │ h.MinConfidence (= profile.MinConfidence, 既定 0.3)
         ▼
      Sizer.Sized → Sizer.Compute (sizer.go)
-        ├ base = equity × risk_pct / (entry × sl%)        ← リスク上限
-        ├ × ATR scale (任意)
-        ├ × confidenceScale(conf, min, floor)  ◀── 新: 1 関数に集約、floor 設定化
+        ├ base = equity × risk_pct / (entry × sl%)        ← ベース・リスク予算
+        ├ × ATR scale (任意, 最大 ×2.0 — base を上回り得る)
+        ├ × ConfidenceScale(conf, min, floor)  ◀── 新: 1 関数に集約、floor 設定化
         ├ × DD tier scale (任意)
         ├ cap: max_position_pct_of_equity
         └ lot_step 丸め → min_lot ゲート
 ```
 
-バックテスト経路（`internal/usecase/backtest/runner.go` → 同じ `Sizer.Compute`）も同一関数を通るため、live/backtest の bit-identical 性が維持される（sizer.go 冒頭の設計目標どおり）。
+`Sizer.Compute` 自体は live/backtest で同一関数のため、**confidence scaling 計算に関しては** bit-identical（sizer.go 冒頭の設計目標どおり）。ただし sizer の**入力**（MinConfidence の配線、DD scaling の peak equity 初期化、後段の BookGate / ATR ストップ距離）には live/backtest 間で既存の差異が存在する。これらは本タスクのスコープ外だが、「bit-identical」の限界として「既知の差異・未解決事項」に明記する。
 
 ### エラー処理・境界条件
 
-- `confidenceScale` は副作用なしの純粋関数。範囲外入力（負値、NaN を生む 0 除算）は分岐で吸収し、必ず `[floor, 1.0]` または 1.0 を返す。
+- `ConfidenceScale` は副作用なしの純粋関数。範囲外入力（負値、NaN を生む 0 除算）は分岐で吸収し、必ず `[floor, 1.0]` または 1.0 を返す。
 - `min_confidence` が `(0,1)` の範囲外（0 や 1.0）のとき: scaling は無効（1.0 を返す）。現状コードの `in.MinConfidence > 0 && in.MinConfidence < 1` ガードと同じ意味を関数内に内包する。
 - `ConfidenceFloor` 未設定（0）→ 0.5 フォールバックで既存等価。`Validate()` で `[0,1]` 外を拒否。
 - profile JSON に `confidence_floor` が無い既存 production.json は、ゼロ値 → 0.5 フォールバックで**完全に従来挙動**。マイグレーション不要。
 
 ### テスト戦略
 
-TDD で進める。`confidenceScale` 関数を新設するので、まずその単体テストから書く。
+TDD で進める。`ConfidenceScale` 関数を新設するので、まずその単体テストから書く。
 
-1. **`confidenceScale` 単体テスト**（新規 `confidence_test.go`）
+1. **`ConfidenceScale` 単体テスト**（新規 `confidence_test.go`）
    - `floor=0.5` で旧式と数学的に等価（複数の (conf, min) 点で旧 `0.5+0.5*...` と一致）。← 等価性の要
    - `floor=1.0` → 常に 1.0（scaling 無効）。
    - `floor=0`（未設定相当）→ 0.5 フォールバック。
@@ -181,7 +194,7 @@ TDD で進める。`confidenceScale` 関数を新設するので、まずその�
    - `ConfidenceFloor` 未指定で従来通りパスすること（回帰）。
    - `ConfidenceFloor=1.0` を渡すと confidence による減衰が消え、base がそのまま出ること（新仕様）。
 3. **`entity.Validate` テスト**: `confidence_floor` が `[0,1]` 外でエラーになること。
-4. **pipeline.go の死んだ scaleByConfidence 除去**: 既存の pipeline 系テストが緑のままであること（挙動不変の確認）。fixed フォールバック経路のテストがあれば `confidenceScale` 経由でも同値であること。
+4. **pipeline.go の死んだ scaleByConfidence 除去**: 既存の pipeline 系テストが緑のままであること（挙動不変の確認）。fixed フォールバック経路のテストがあれば `ConfidenceScale` 経由でも同値であること。
 5. **全体回帰**: `cd backend && go test ./... -race -count=1`。
 
 ### ドキュメント更新
@@ -190,14 +203,33 @@ TDD で進める。`confidenceScale` 関数を新設するので、まずその�
 - `backend/.env.example` / profile スキーマ説明に `confidence_floor` を追記（該当する README / docs があれば）。
 - 本設計書を `docs/superpowers/specs/` にコミット。
 
+## 既知の差異・未解決事項（本タスク非スコープ）
+
+Codex レビューで、設計書の「live/backtest bit-identical」「risk_pct = リスク上限」という主張が、confidence sizing **とは別の既存要因**で既に成立していないことが判明した。いずれも本タスクが新たに壊すものではなく、confidence scaling 一元化の前後で挙動は変わらない。本タスクのスコープ外として記録し、必要なら別タスクで扱う。
+
+1. **per-trade リスクの hard ceiling が無い**（指摘1, 重要度: 中）
+   `risk_per_trade_pct` で求めた base lot に ATRAdjust（最大 ×2.0）/ DD scaling が乗算され、`risk.go:157-195` は名目額/残高比のみ検証し per-trade ストップリスクを上限として強制しない。実現リスクが `risk_per_trade_pct` を超え得る。→ 本設計書では意味論を「ベース予算」に改めて乖離を正直に記述した。hard ceiling 化は別タスク。production は `atr_adjust` 未設定のため現状は顕在化しない。
+
+2. **Sizer の想定ストップ距離と TickRiskHandler の実ストップ距離が乖離**（指摘2, 重要度: 中）
+   `Sizer.Compute` はリスク予算を `Input.StopLossPercent` だけで計算するが、`TickRiskHandler.stopLossDistance`（`backtest/handler.go:925-938`）は `max(entry × stopLossPercent, currentATR × stopLossATRMultiplier)` を使う。ATR が広い局面では実決済距離がサイザー想定を超え、実現リスクが設計値を超過する。→ サイザーとリスク監視のストップ距離整合は別タスク。production は `stop_loss_atr_multiplier: 0` のため percent のみで一致し、現状は顕在化しない。
+
+3. **BookGate のフラグが live/backtest で非対称**（指摘3, 重要度: 低）
+   `AllowOnMissingBook` がバックテスト `false` / ライブ `true`（`runner.go` vs `event_pipeline.go`）。板スナップショット欠損時の通過可否が分岐し、同一パスでも結果が異なり得る。これは confidence sizing と無関係の既存差異。→ [[project_bookgate_disabled]] とあわせて別途整理。
+
+4. **DD scaling の peak equity 初期化が live/backtest で異なる**（指摘4, 重要度: 低）
+   バックテストは `PeakTracker(InitialBalance)`、ライブは `rm.LocalBalance()` 由来かつ `initialBalance > 0` のときだけ Peak 設定。同一パラメータでも DD scaling が diverge し得る。→ peak equity 計算の統一は別タスク。
+
+5. **backtest 経路で `MinConfidence` がほぼ未配線**（Codex 中間調査 + 自前裏取り, 重要度: 中）
+   `RunInput.MinConfidence` は runner/handler で受け取る配線はあるが、API/CLI ハンドラ側で `MinConfidence:` をセットする箇所が見当たらず、backtest 実行時は `MinConfidence=0` になりやすい。すると sizer の confidence scaling が `min ∈ (0,1)` ガードで無効化され、**ライブ（min=0.3 で有効）と backtest（無効）で confidence scaling の効き方が食い違う**。→ 本タスクで `ConfidenceScale` に一元化しても、入力の MinConfidence が 0 なら scaling は無効のまま。backtest への MinConfidence 配線は、本タスクと地続きだが独立した修正として**フォローアップ候補**（実装計画で要否を判断する）。
+
 ## 将来の発展（本実装のスコープ外）
 
-confidence の解釈が将来複雑化（非線形、複数指標の加重、regime 依存など）した場合、`confidenceScale` の計算を Decision レイヤ（`decision` パッケージ）へ移し、sizer は事前計算済みの係数のみを受け取る形（当初検討の「案2」）へ発展させられる。本実装で scaling を 1 関数に集約しておくことが、その移設の踏み台になる。
+confidence の解釈が将来複雑化（非線形、複数指標の加重、regime 依存など）した場合、`ConfidenceScale` の計算を Decision レイヤ（`decision` パッケージ）へ移し、sizer は事前計算済みの係数のみを受け取る形（当初検討の「案2」）へ発展させられる。本実装で scaling を 1 関数に集約しておくことが、その移設の踏み台になる。
 
 ## 受け入れ基準
 
 - [ ] `confidence_floor` 未設定の既存 production.json で、ロット計算が従来と bit-identical。
-- [ ] `confidence_floor=1.0` を設定すると、low-confidence シグナルでもロットが base（risk_pct 上限）どおりになる。
-- [ ] confidence scaling の式が `positionsize.confidenceScale` の 1 箇所のみに存在する（`cmd/pipeline.go` から式が消える）。
+- [ ] `confidence_floor=1.0` を設定すると、low-confidence シグナルでもロットが base（risk_pct ベース予算）どおりになる。
+- [ ] confidence scaling の式が `positionsize.ConfidenceScale` の 1 箇所のみに存在する（`cmd/pipeline.go` から式が消える）。
 - [ ] `go test ./... -race -count=1` が緑。
 - [ ] `reverse_signal` / `ExitOnSignal` 経路は無変更。
