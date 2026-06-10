@@ -251,6 +251,38 @@ func TestSizer_ConfidenceScales(t *testing.T) {
 	}
 }
 
+func TestSizer_ConfidenceFloorDisablesScaling(t *testing.T) {
+	t.Parallel()
+	// floor=1.0 → low-confidence signal still gets full base lot.
+	cfg := &entity.PositionSizingConfig{
+		Mode:            "risk_pct",
+		RiskPerTradePct: 1.0,
+		ConfidenceFloor: 1.0,
+	}
+	s := New(cfg, fineDefaults())
+	in := Input{EntryPrice: 12000, StopLossPercent: 14, Equity: 100000, Confidence: 0.3, MinConfidence: 0.3}
+	got := s.Compute(in)
+	if !almostEqual(got.AppliedConf, 1.0, 1e-9) {
+		t.Fatalf("floor=1.0 should yield AppliedConf=1.0, got %v", got.AppliedConf)
+	}
+	if !almostEqual(got.Amount, got.BaseAmount, 1e-9) {
+		t.Fatalf("floor=1.0 should leave base lot unscaled; base=%v amount=%v", got.BaseAmount, got.Amount)
+	}
+}
+
+func TestSizer_ConfidenceFloorUnsetIsLegacy(t *testing.T) {
+	t.Parallel()
+	// floor unset (0) must match the legacy 0.5-floored behaviour exactly.
+	cfg := &entity.PositionSizingConfig{Mode: "risk_pct", RiskPerTradePct: 1.0}
+	s := New(cfg, fineDefaults())
+	in := Input{EntryPrice: 12000, StopLossPercent: 14, Equity: 100000, Confidence: 0.6, MinConfidence: 0.3}
+	got := s.Compute(in)
+	wantConf := 0.5 + 0.5*(0.6-0.3)/(1.0-0.3) // legacy formula
+	if !almostEqual(got.AppliedConf, wantConf, 1e-9) {
+		t.Fatalf("unset floor should reproduce legacy 0.5 floor; got AppliedConf=%v want %v", got.AppliedConf, wantConf)
+	}
+}
+
 func TestSizer_ZeroEquityReturnsZero(t *testing.T) {
 	t.Parallel()
 	cfg := &entity.PositionSizingConfig{Mode: "risk_pct", RiskPerTradePct: 1.0}
