@@ -420,6 +420,15 @@ type PositionSizingConfig struct {
 	// corresponding tier.
 	DDScaleDown DrawdownScaleConfig `json:"drawdown_scale_down,omitzero"`
 
+	// ConfidenceFloor is the lower bound of the confidence-based lot scale.
+	// Effective range is (0, 1]; the scale maps [min_confidence, 1.0] →
+	// [ConfidenceFloor, 1.0] linearly. 1.0 disables scaling entirely. 0 is
+	// the "unset" sentinel — because omitempty cannot tell an explicit 0 from
+	// a missing field, 0 always falls back to the legacy default 0.5 so
+	// existing profiles stay bit-identical. To minimise the floor explicitly,
+	// set a small positive value (e.g. 0.01), not 0.
+	ConfidenceFloor float64 `json:"confidence_floor,omitempty"`
+
 	// MinLot / LotStep control venue-side rounding. 0 disables and falls
 	// back to the executor's defaults.
 	MinLot  float64 `json:"min_lot,omitempty"`
@@ -640,6 +649,9 @@ func (p StrategyProfile) Validate() error {
 		}
 		if ps.RiskPerTradePct < 0 || ps.RiskPerTradePct > 10 {
 			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.risk_per_trade_pct must be in [0, 10] (got %v)", ps.RiskPerTradePct))
+		}
+		if ps.ConfidenceFloor < 0 || ps.ConfidenceFloor > 1 {
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.confidence_floor must be in [0, 1] (0 = unset) (got %v)", ps.ConfidenceFloor))
 		}
 		if ps.MaxPositionPctOfEquity < 0 || ps.MaxPositionPctOfEquity > 100 {
 			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.max_position_pct_of_equity must be in [0, 100] (got %v)", ps.MaxPositionPctOfEquity))

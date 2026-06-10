@@ -261,6 +261,37 @@ func TestStrategyProfile_Validate(t *testing.T) {
 	}
 }
 
+func TestValidate_ConfidenceFloorRange(t *testing.T) {
+	// Start from the known-good profile so Validate() only fails (or passes)
+	// on account of confidence_floor, not unrelated indicator/stance fields.
+	base := func(floor float64) StrategyProfile {
+		p := validProfile()
+		p.Name = "t"
+		p.Risk.PositionSizing = &PositionSizingConfig{
+			Mode:            "risk_pct",
+			RiskPerTradePct: 2.0,
+			ConfidenceFloor: floor,
+		}
+		return p
+	}
+	// 0 is the unset sentinel → allowed.
+	if err := base(0).Validate(); err != nil {
+		t.Fatalf("floor=0 (unset) should be valid, got %v", err)
+	}
+	if err := base(0.5).Validate(); err != nil {
+		t.Fatalf("floor=0.5 should be valid, got %v", err)
+	}
+	if err := base(1.0).Validate(); err != nil {
+		t.Fatalf("floor=1.0 should be valid, got %v", err)
+	}
+	if err := base(-0.1).Validate(); err == nil {
+		t.Fatalf("floor=-0.1 should be rejected")
+	}
+	if err := base(1.5).Validate(); err == nil {
+		t.Fatalf("floor=1.5 should be rejected")
+	}
+}
+
 // TestStrategyProfile_JSONRoundTrip confirms JSON tag correctness by
 // marshaling the spec §3.2 example, comparing against the spec-literal JSON,
 // then unmarshaling and checking the struct round-trips. The fixture is
