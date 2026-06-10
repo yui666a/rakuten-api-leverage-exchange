@@ -262,33 +262,32 @@ func TestStrategyProfile_Validate(t *testing.T) {
 }
 
 func TestValidate_ConfidenceFloorRange(t *testing.T) {
-	// Start from the known-good profile so Validate() only fails (or passes)
-	// on account of confidence_floor, not unrelated indicator/stance fields.
-	base := func(floor float64) StrategyProfile {
-		p := validProfile()
-		p.Name = "t"
-		p.Risk.PositionSizing = &PositionSizingConfig{
-			Mode:            "risk_pct",
-			RiskPerTradePct: 2.0,
-			ConfidenceFloor: floor,
-		}
-		return p
+	tests := []struct {
+		name    string
+		floor   float64
+		wantErr bool
+	}{
+		{"unset sentinel 0", 0.0, false},
+		{"mid-range 0.5", 0.5, false},
+		{"upper boundary 1", 1.0, false},
+		{"below zero -0.1", -0.1, true},
+		{"above one 1.5", 1.5, true},
 	}
-	// 0 is the unset sentinel → allowed.
-	if err := base(0).Validate(); err != nil {
-		t.Fatalf("floor=0 (unset) should be valid, got %v", err)
-	}
-	if err := base(0.5).Validate(); err != nil {
-		t.Fatalf("floor=0.5 should be valid, got %v", err)
-	}
-	if err := base(1.0).Validate(); err != nil {
-		t.Fatalf("floor=1.0 should be valid, got %v", err)
-	}
-	if err := base(-0.1).Validate(); err == nil {
-		t.Fatalf("floor=-0.1 should be rejected")
-	}
-	if err := base(1.5).Validate(); err == nil {
-		t.Fatalf("floor=1.5 should be rejected")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := validProfile()
+			p.Risk.PositionSizing = &PositionSizingConfig{
+				Mode: "risk_pct", RiskPerTradePct: 2.0, ConfidenceFloor: tc.floor,
+			}
+			err := p.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("floor=%v should be rejected, got nil", tc.floor)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("floor=%v should be valid, got %v", tc.floor, err)
+			}
+		})
 	}
 }
 

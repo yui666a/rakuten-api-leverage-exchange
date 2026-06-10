@@ -650,8 +650,9 @@ func (p StrategyProfile) Validate() error {
 		if ps.RiskPerTradePct < 0 || ps.RiskPerTradePct > 10 {
 			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.risk_per_trade_pct must be in [0, 10] (got %v)", ps.RiskPerTradePct))
 		}
+		// 0 is the "unset" sentinel (see field doc); only reject out-of-range.
 		if ps.ConfidenceFloor < 0 || ps.ConfidenceFloor > 1 {
-			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.confidence_floor must be in [0, 1] (0 = unset) (got %v)", ps.ConfidenceFloor))
+			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.confidence_floor must be in [0, 1] (got %v)", ps.ConfidenceFloor))
 		}
 		if ps.MaxPositionPctOfEquity < 0 || ps.MaxPositionPctOfEquity > 100 {
 			errs = append(errs, fmt.Errorf("strategy_risk.position_sizing.max_position_pct_of_equity must be in [0, 100] (got %v)", ps.MaxPositionPctOfEquity))
