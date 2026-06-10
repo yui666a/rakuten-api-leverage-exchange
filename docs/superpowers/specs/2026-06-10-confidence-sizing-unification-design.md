@@ -1,6 +1,6 @@
 # confidence sizing の一元化と意味論の再定義
 
-- **Status:** Proposed (Codex レビュー反映済み 2026-06-10)
+- **Status:** Implemented (2026-06-11)
 - **Date:** 2026-06-10
 - **Related:**
   - PR #154 (ca7c3ad) — 動的ポジションサイジング (entity + 純粋 Sizer)
