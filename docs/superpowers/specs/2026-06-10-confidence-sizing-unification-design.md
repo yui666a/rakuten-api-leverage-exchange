@@ -158,6 +158,20 @@ out.AppliedConf = confScale
 - これにより confidence scaling の式は `positionsize.ConfidenceScale` 1 箇所に集約され、`cmd` パッケージから式のコピーが消える。
 - `scaleByConfidence` に言及している既存コメント（`pipeline.go:60`, `:114`）も、`positionsize.ConfidenceScale` を参照する形に更新する。
 
+#### 5. backtest 経路に `MinConfidence` を配線する
+
+**問題**: `RunInput.MinConfidence` は runner が受け取り sizer に渡す配線（`runner.go:255`）はあるが、API/CLI ハンドラ側で `MinConfidence:` をセットする箇所が存在せず、backtest では実質 `MinConfidence=0` で走る。すると `ConfidenceScale` の `min ∈ (0,1)` ガードで scaling が**無効化**され、ライブ（`min=0.3` で有効）と backtest で confidence scaling の効きが食い違う。これを直さないと、`ConfidenceScale` に一元化しても「live/backtest で confidence scaling 同値」は達成できない。
+
+**方針**: backtest の `RunInput.MinConfidence` を、ライブと同じ既定値 `0.3`（`TRADE_MIN_CONFIDENCE` 既定）に揃える。配線元は次のいずれか — 実装計画で確定する:
+
+- **(a) 環境変数から**: backtest 実行時も `cfg.Trading.MinConfidence`（`config.go:127-132`）を読み、`RunInput.MinConfidence` に設定する。ライブと完全同一ソース。CLI/API 両経路で共通の config を参照できる場合に最もシンプル。
+- **(b) profile から**: profile に `min_confidence` を持たせ、backtest はそこから読む。ただし現状 profile に `MinConfidence` フィールドは無く（`strategy_config.go`）、新設が必要。ライブも将来 profile 由来に寄せるなら一貫するが、本タスクの範囲が広がる。
+- **(c) リクエストパラメータ**: backtest API/CLI に `min_confidence` を明示パラメータとして追加し、未指定時は 0.3 にフォールバック。
+
+**推奨は (a)**: ライブと同一ソース（環境変数）を使い、最小の新規概念で live/backtest 同値を達成できる。profile スキーマ変更（b）は「confidence を Decision/profile へ寄せる」将来の発展と一緒にやるべきで、本タスクでは過剰。
+
+**影響の注意**: この配線により backtest の振る舞いが変わる（これまで scaling 無効だった backtest が有効になる）。promote 済みプロファイルの実績値（production.json のコメントにある 5 期間検証など）は **scaling 無効の backtest で測られていた可能性**があり、配線後は再検証が必要になり得る。実装計画で「配線前後の backtest 結果差分を確認」するステップを必ず置く。
+
 ### データフロー（ライブ経路）
 
 ```
@@ -175,7 +189,7 @@ EventDrivenPipeline (cmd/event_pipeline.go)
         └ lot_step 丸め → min_lot ゲート
 ```
 
-`Sizer.Compute` 自体は live/backtest で同一関数のため、**confidence scaling 計算に関しては** bit-identical（sizer.go 冒頭の設計目標どおり）。ただし sizer の**入力**（MinConfidence の配線、DD scaling の peak equity 初期化、後段の BookGate / ATR ストップ距離）には live/backtest 間で既存の差異が存在する。これらは本タスクのスコープ外だが、「bit-identical」の限界として「既知の差異・未解決事項」に明記する。
+`Sizer.Compute` 自体は live/backtest で同一関数のため、**confidence scaling 計算に関しては** bit-identical（sizer.go 冒頭の設計目標どおり）。sizer の**入力**のうち、**MinConfidence の配線差異は本タスクのスコープ内で解消する**（設計 #5）。残る入力差異（DD scaling の peak equity 初期化、後段の BookGate / ATR ストップ距離）は本タスクのスコープ外で、「bit-identical」の限界として「既知の差異・未解決事項」に明記する。
 
 ### エラー処理・境界条件
 
@@ -199,7 +213,9 @@ TDD で進める。`ConfidenceScale` 関数を新設するので、まずその�
    - `ConfidenceFloor=1.0` を渡すと confidence による減衰が消え、base がそのまま出ること（新仕様）。
 3. **`entity.Validate` テスト**: `confidence_floor` が `[0,1]` 外でエラーになること。
 4. **pipeline.go の死んだ scaleByConfidence 除去**: 既存の pipeline 系テストが緑のままであること（挙動不変の確認）。fixed フォールバック経路のテストがあれば `ConfidenceScale` 経由でも同値であること。
-5. **全体回帰**: `cd backend && go test ./... -race -count=1`。
+5. **backtest MinConfidence 配線テスト**: backtest 実行で `RunInput.MinConfidence` が 0.3（ライブ既定）に設定され、sizer の confidence scaling が有効になること。配線前は scaling 無効（係数 1.0）、配線後は `min=0.3` 基準で減衰がかかることを、同一シグナル列で比較するテスト。
+6. **配線前後の backtest 結果差分の記録**: production.json のプロファイルで、MinConfidence 配線の前後でバックテスト結果（リターン/MaxDD/トレード数）がどう変わるかを実測し、設計書 or PDCA ノートに記録（promote 実績の再検証要否を判断するため）。
+7. **全体回帰**: `cd backend && go test ./... -race -count=1`。
 
 ### ドキュメント更新
 
@@ -223,8 +239,7 @@ Codex レビューで、設計書の「live/backtest bit-identical」「risk_pct
 4. **DD scaling の peak equity 初期化が live/backtest で異なる**（指摘4, 重要度: 低）
    バックテストは `PeakTracker(InitialBalance)`、ライブは `rm.LocalBalance()` 由来かつ `initialBalance > 0` のときだけ Peak 設定。同一パラメータでも DD scaling が diverge し得る。→ peak equity 計算の統一は別タスク。
 
-5. **backtest 経路で `MinConfidence` がほぼ未配線**（Codex 中間調査 + 自前裏取り, 重要度: 中）
-   `RunInput.MinConfidence` は runner/handler で受け取る配線はあるが、API/CLI ハンドラ側で `MinConfidence:` をセットする箇所が見当たらず、backtest 実行時は `MinConfidence=0` になりやすい。すると sizer の confidence scaling が `min ∈ (0,1)` ガードで無効化され、**ライブ（min=0.3 で有効）と backtest（無効）で confidence scaling の効き方が食い違う**。→ 本タスクで `ConfidenceScale` に一元化しても、入力の MinConfidence が 0 なら scaling は無効のまま。backtest への MinConfidence 配線は、本タスクと地続きだが独立した修正として**フォローアップ候補**（実装計画で要否を判断する）。
+> **補足**: かつてここに挙げていた「backtest 経路で `MinConfidence` がほぼ未配線」の項目は、本タスクの**スコープ内**に格上げした（後述「設計 #5」）。confidence scaling の一元化と地続きで、これを直さないと backtest で scaling が無効のままライブと食い違うため。
 
 ## 将来の発展（本実装のスコープ外）
 
@@ -235,5 +250,7 @@ confidence の解釈が将来複雑化（非線形、複数指標の加重、reg
 - [ ] `confidence_floor` 未設定の既存 production.json で、ロット計算が従来と bit-identical。
 - [ ] `confidence_floor=1.0` を設定すると、low-confidence シグナルでもロットが base（risk_pct ベース予算）どおりになる。
 - [ ] confidence scaling の式が `positionsize.ConfidenceScale` の 1 箇所のみに存在する（`cmd/pipeline.go` から式が消える）。
+- [ ] backtest 実行で `RunInput.MinConfidence` がライブ既定（0.3）に配線され、live/backtest で confidence scaling が同値で効く。
+- [ ] MinConfidence 配線前後の backtest 結果差分を実測・記録し、promote 実績の再検証要否を判断した。
 - [ ] `go test ./... -race -count=1` が緑。
 - [ ] `reverse_signal` / `ExitOnSignal` 経路は無変更。
