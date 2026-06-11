@@ -64,6 +64,11 @@ type BacktestHandler struct {
 	// snapshot lands in backtest_decision_log scoped to the run id. The
 	// list/delete endpoints become available too.
 	decisionLogRepo repository.BacktestDecisionLogRepository
+
+	// minConfidence mirrors cfg.Trading.MinConfidence (TRADE_MIN_CONFIDENCE,
+	// default 0.3) so the sizer's confidence scaling in backtest matches the
+	// live pipeline. 0 leaves scaling disabled (legacy backtest behaviour).
+	minConfidence float64
 }
 
 // BacktestHandlerOption configures optional aspects of a BacktestHandler at
@@ -118,6 +123,15 @@ func WithDecisionLogRepo(repo repository.BacktestDecisionLogRepository) Backtest
 	}
 }
 
+// WithMinConfidence wires the live min-confidence threshold so backtest runs
+// apply the same confidence scaling as the live pipeline. Without it, backtest
+// runs leave MinConfidence at 0 and confidence scaling is disabled.
+func WithMinConfidence(min float64) BacktestHandlerOption {
+	return func(h *BacktestHandler) {
+		h.minConfidence = min
+	}
+}
+
 func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResultRepository, opts ...BacktestHandlerOption) *BacktestHandler {
 	h := &BacktestHandler{
 		runner:          runner,
@@ -133,14 +147,14 @@ func NewBacktestHandler(runner *bt.BacktestRunner, repo repository.BacktestResul
 }
 
 type runBacktestRequest struct {
-	DataPath              string  `json:"data" binding:"required"`
-	DataHTFPath           string  `json:"dataHtf"`
-	From                  string  `json:"from"`
-	To                    string  `json:"to"`
-	InitialBalance        float64 `json:"initialBalance"`
-	Spread                float64 `json:"spread"`
-	CarryingCost          float64 `json:"carryingCost"`
-	Slippage              float64 `json:"slippage"`
+	DataPath       string  `json:"data" binding:"required"`
+	DataHTFPath    string  `json:"dataHtf"`
+	From           string  `json:"from"`
+	To             string  `json:"to"`
+	InitialBalance float64 `json:"initialBalance"`
+	Spread         float64 `json:"spread"`
+	CarryingCost   float64 `json:"carryingCost"`
+	Slippage       float64 `json:"slippage"`
 	// SlippageModel: "" / "percent" → legacy %-based adjustment.
 	// "orderbook"            → load persisted L2 snapshots for the run window
 	//                          and compute VWAP fills against them.
@@ -156,7 +170,7 @@ type runBacktestRequest struct {
 	TakerFeeRate float64 `json:"takerFeeRate,omitempty"`
 	// LatencyMs shifts the fill-time orderbook lookup forward (Phase H).
 	// 0 = no latency model. 200 = a 200 ms signal-to-fill gap.
-	LatencyMs int64 `json:"latencyMs,omitempty"`
+	LatencyMs             int64   `json:"latencyMs,omitempty"`
 	TradeAmount           float64 `json:"tradeAmount"`
 	StopLossPercent       float64 `json:"stopLossPercent"`
 	StopLossATRMultiplier float64 `json:"stopLossAtrMultiplier"` // PR-12
@@ -282,13 +296,13 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 	}
 
 	cfg := entity.BacktestConfig{
-		Symbol:           primary.Symbol,
-		SymbolID:         primary.SymbolID,
-		PrimaryInterval:  primary.Interval,
-		HigherTFInterval: "PT1H",
-		FromTimestamp:    fromTs,
-		ToTimestamp:      toTs,
-		InitialBalance:   req.InitialBalance,
+		Symbol:               primary.Symbol,
+		SymbolID:             primary.SymbolID,
+		PrimaryInterval:      primary.Interval,
+		HigherTFInterval:     "PT1H",
+		FromTimestamp:        fromTs,
+		ToTimestamp:          toTs,
+		InitialBalance:       req.InitialBalance,
 		SpreadPercent:        req.Spread,
 		DailyCarryCost:       req.CarryingCost,
 		SlippagePercent:      req.Slippage,
@@ -375,6 +389,7 @@ func (h *BacktestHandler) Run(c *gin.Context) {
 		IndicatorPeriods:  indicatorPeriods,
 		PositionSizing:    positionSizing,
 		ExitOnSignal:      exitOnSignal,
+		MinConfidence:     h.minConfidence,
 		FillPriceSource:   fillSource,
 		BookSource:        bookSource,
 		ResultID:          preallocatedRunID,

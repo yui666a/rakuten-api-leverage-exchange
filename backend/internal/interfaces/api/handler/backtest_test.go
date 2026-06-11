@@ -52,6 +52,13 @@ func (m *mockBacktestResultRepo) DeleteOlderThan(_ context.Context, _ int64) (in
 	return 0, nil
 }
 
+func TestBacktestHandler_MinConfidenceWired(t *testing.T) {
+	h := NewBacktestHandler(nil, nil, WithMinConfidence(0.3))
+	if h.minConfidence != 0.3 {
+		t.Fatalf("WithMinConfidence should set minConfidence=0.3, got %v", h.minConfidence)
+	}
+}
+
 func TestBacktestHandler_ListResults_OK(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &mockBacktestResultRepo{
@@ -289,6 +296,53 @@ func TestBacktestHandler_Integration_RunListGet(t *testing.T) {
 	}
 	if getResult.Summary.TotalReturn != runResult.Summary.TotalReturn {
 		t.Fatalf("Get: TotalReturn mismatch: %v != %v", getResult.Summary.TotalReturn, runResult.Summary.TotalReturn)
+	}
+}
+
+// TestBacktestHandler_Integration_RunWithMinConfidence verifies the
+// WithMinConfidence option is wired end-to-end: a handler built with a
+// non-zero MinConfidence still completes a Run with 200 OK (the confidence
+// value flows into bt.RunInput without panicking or short-circuiting). This
+// guards the router-side `WithMinConfidence(deps.BacktestMinConfidence)`
+// wiring, not just the setter (covered by MinConfidenceWired above).
+func TestBacktestHandler_Integration_RunWithMinConfidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupIntegrationDB(t)
+	repo := btinfra.NewResultRepository(db)
+	runner := bt.NewBacktestRunner()
+	h := NewBacktestHandler(runner, repo, WithMinConfidence(0.5))
+	if h.minConfidence != 0.5 {
+		t.Fatalf("WithMinConfidence should set minConfidence=0.5, got %v", h.minConfidence)
+	}
+
+	tmpDir := t.TempDir()
+	candles := generateTestCandles(100)
+	csvPath := writeTempCSV(t, tmpDir, csvinfra.CandleFile{
+		Symbol:   "BTC_JPY",
+		SymbolID: 7,
+		Interval: "PT15M",
+		Candles:  candles,
+	})
+
+	router := gin.New()
+	router.POST("/api/v1/backtest/run", h.Run)
+
+	body := `{"data":"` + csvPath + `","initialBalance":100000}`
+	runReq := httptest.NewRequest(http.MethodPost, "/api/v1/backtest/run", strings.NewReader(body))
+	runReq.Header.Set("Content-Type", "application/json")
+	runW := httptest.NewRecorder()
+	router.ServeHTTP(runW, runReq)
+
+	if runW.Code != http.StatusOK {
+		t.Fatalf("Run with MinConfidence=0.5: expected 200, got %d: %s", runW.Code, runW.Body.String())
+	}
+
+	var runResult entity.BacktestResult
+	if err := json.Unmarshal(runW.Body.Bytes(), &runResult); err != nil {
+		t.Fatalf("unmarshal run result: %v", err)
+	}
+	if runResult.ID == "" {
+		t.Fatal("Run with MinConfidence: expected non-empty result ID")
 	}
 }
 

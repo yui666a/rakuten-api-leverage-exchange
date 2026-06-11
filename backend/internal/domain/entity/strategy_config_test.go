@@ -261,6 +261,36 @@ func TestStrategyProfile_Validate(t *testing.T) {
 	}
 }
 
+func TestValidate_ConfidenceFloorRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		floor   float64
+		wantErr bool
+	}{
+		{"unset sentinel 0", 0.0, false},
+		{"mid-range 0.5", 0.5, false},
+		{"upper boundary 1", 1.0, false},
+		{"below zero -0.1", -0.1, true},
+		{"above one 1.5", 1.5, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := validProfile()
+			p.Risk.PositionSizing = &PositionSizingConfig{
+				Mode: "risk_pct", RiskPerTradePct: 2.0, ConfidenceFloor: tc.floor,
+			}
+			err := p.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("floor=%v should be rejected, got nil", tc.floor)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("floor=%v should be valid, got %v", tc.floor, err)
+			}
+		})
+	}
+}
+
 // TestStrategyProfile_JSONRoundTrip confirms JSON tag correctness by
 // marshaling the spec §3.2 example, comparing against the spec-literal JSON,
 // then unmarshaling and checking the struct round-trips. The fixture is

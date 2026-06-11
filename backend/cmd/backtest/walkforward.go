@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/config"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/entity"
 	csvinfra "github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/csv"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/infrastructure/strategyprofile"
@@ -117,6 +118,8 @@ func walkForwardCommand(args []string) error {
 		higherCandles = htf.Candles
 	}
 
+	wfMinConfidence := config.Load().Trading.MinConfidence
+
 	runner := bt.NewWalkForwardRunner()
 	in := bt.WalkForwardInput{
 		BaseProfile:  *profile,
@@ -167,12 +170,13 @@ func walkForwardCommand(args []string) error {
 			windowRunner := bt.NewBacktestRunner(bt.WithStrategy(strat))
 			return windowRunner.Run(ctx, bt.RunInput{
 				Config:            cfg,
+				RiskConfig:        risk,
 				TradeAmount:       *tradeAmount,
 				PrimaryCandles:    primary.Candles,
 				HigherCandles:     higherCandles,
 				BBSqueezeLookback: riskProfile.StanceRules.BBSqueezeLookback,
 				PositionSizing:    riskProfile.Risk.PositionSizing,
-				RiskConfig:        risk,
+				MinConfidence:     wfMinConfidence,
 			})
 		},
 	}

@@ -8,9 +8,11 @@
 //
 // Design goals:
 //   - nil config or Mode="" / "fixed" → legacy pass-through (amount unchanged).
-//   - risk_pct mode = equity * risk_pct / (entry_price * stop_loss_percent).
-//   - Signal confidence, current ATR, and running drawdown all compose
-//     multiplicatively on top of the base lot.
+//   - risk_pct mode = equity * risk_pct / (entry_price * stop_loss_percent),
+//     which is the per-trade BASE risk budget (not a hard ceiling — ATR and
+//     drawdown multipliers compose on top and can push realised risk above it).
+//   - Signal confidence (via ConfidenceScale), current ATR, and running
+//     drawdown all compose multiplicatively on top of the base lot.
 //   - Venue lot-step rounding is applied last; lot below MinLot rejects the
 //     trade with a human-readable SkipReason.
 package positionsize
@@ -180,19 +182,12 @@ func (s *Sizer) Compute(in Input) Output {
 		}
 	}
 
-	// Confidence scaling: when min_conf is set, map [min, 1] → [0.5, 1.0].
-	if in.MinConfidence > 0 && in.MinConfidence < 1 {
-		conf := in.Confidence
-		if conf < in.MinConfidence {
-			conf = in.MinConfidence
-		}
-		if conf > 1 {
-			conf = 1
-		}
-		confScale := 0.5 + 0.5*(conf-in.MinConfidence)/(1.0-in.MinConfidence)
-		amount *= confScale
-		out.AppliedConf = confScale
-	}
+	// Confidence scaling: shrink the lot toward ConfidenceFloor as confidence
+	// approaches MinConfidence. ConfidenceScale is the single source of truth
+	// (shared with cmd/pipeline.go). floor=0 falls back to the legacy 0.5.
+	confScale := ConfidenceScale(in.Confidence, in.MinConfidence, s.cfg.ConfidenceFloor)
+	amount *= confScale
+	out.AppliedConf = confScale
 
 	// Drawdown tier-based scaling.
 	if dd := in.CurrentDrawdownPct; dd > 0 {

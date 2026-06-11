@@ -15,6 +15,7 @@ import (
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/port"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/domain/repository"
 	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase"
+	"github.com/yui666a/rakuten-api-leverage-exchange/backend/internal/usecase/positionsize"
 )
 
 // newAgentClientOrderID は pipeline (自動売買エージェント) からの注文に使う
@@ -57,8 +58,8 @@ type TradingPipeline struct {
 	// sizer is the optional dynamic position sizer. nil keeps the legacy
 	// JPY→amount / confidence-scaled behaviour. When non-nil, the sizer's
 	// output replaces the computed amount and also supersedes
-	// scaleByConfidence so confidence handling is identical to the
-	// backtest path.
+	// positionsize.ConfidenceScale so confidence handling is identical to
+	// the backtest path.
 	sizer           PositionSizer
 	stopLossPercent float64 // Passed to the sizer for risk_pct SL distance.
 
@@ -111,7 +112,7 @@ type PositionSizer interface {
 
 // SetPositionSizer attaches a dynamic sizer and the profile's stop-loss
 // percent. Must be called before Start (or during SwitchSymbol). Passing nil
-// restores the legacy scaleByConfidence behaviour.
+// restores the legacy positionsize.ConfidenceScale behaviour (floor 0.5).
 func (p *TradingPipeline) SetPositionSizer(s PositionSizer, stopLossPct float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -412,7 +413,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		// backtest runs in production. RequestedAmount is the JPY-based
 		// legacy baseline converted to the asset unit so "fixed" mode
 		// inside the sizer stays bit-identical with the pre-sizer path.
-		baseline := (snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)) / price
+		baseline := snap.tradeAmount / price
 		equity := p.riskMgr.GetStatus().Balance
 		var atr float64
 		if indicators != nil && indicators.ATR != nil {
@@ -425,7 +426,7 @@ func (p *TradingPipeline) evaluate(ctx context.Context) {
 		}
 		amount = sized
 	} else {
-		scaledTradeAmount := snap.tradeAmount * scaleByConfidence(signal.Confidence, snap.minConfidence)
+		scaledTradeAmount := snap.tradeAmount * positionsize.ConfidenceScale(signal.Confidence, snap.minConfidence, 0.5)
 		amount = scaledTradeAmount / price
 	}
 	// シンボルの baseStepAmount に合わせて切り捨て丸め
@@ -702,18 +703,6 @@ func restoreRiskState(ctx context.Context, repo repository.RiskStateRepository, 
 		riskMgr.RecordLoss(state.DailyLoss)
 	}
 	slog.Info("risk state restored", "balance", state.Balance, "dailyLoss", state.DailyLoss)
-}
-
-// scaleByConfidence は信頼度に基づいて注文金額のスケール係数を返す。
-// [minConfidence, 1.0] → [0.5, 1.0] の線形マッピング。
-func scaleByConfidence(confidence, minConfidence float64) float64 {
-	if confidence >= 1.0 {
-		return 1.0
-	}
-	if minConfidence >= 1.0 {
-		return 1.0
-	}
-	return 0.5 + 0.5*(confidence-minConfidence)/(1.0-minConfidence)
 }
 
 // roundDownToStep は amount を step の整数倍に切り捨てる。
